@@ -83,9 +83,10 @@ and a production web build. Dependency resolution is committed in `Cargo.lock`
 and `web/package-lock.json`; Rust validation uses `--locked` and web installs
 use `npm ci`.
 
-These routine checks are not product E2E evidence. The first implementation card
-establishes the E2E runner and repeatable artifact bundle; it is not implemented
-yet. Complex features require E2E acceptance, and every E2E run must retain a
+These routine checks are not product E2E evidence. `make e2e` exercises the real
+API/web scaffold through HTTP and Chromium; `make e2e-gate` requires clean source.
+See [the E2E guide](e2e/README.md) for prerequisites, scenarios and the deliberate
+failure command. Complex features require E2E acceptance, and every run retains a
 verifiable report, manifest, checksums and rerun instructions. Never write unit
 tests after implementation. Any necessary isolation check starts with a written
 failure inventory and failing cases before code, as specified in

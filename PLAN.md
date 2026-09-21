@@ -286,7 +286,8 @@ machine assertions, exact commit/environment/fixtures and rerun command, relevan
 sanitized outputs, checksums and cleanup results. Gates require verified evidence
 and a clean repeat run before the agent hands off and stops. Current `make check`
 and legacy tests are routine scaffold checks, not E2E milestone evidence. The
-runner and milestone artifacts remain future implementation work.
+scaffold runner is documented in [e2e/README.md](e2e/README.md); each foundation
+and later milestone still requires its own running-system evidence and gate.
 
 Use a 20-account paid pilot as the planning target after M5 and expand toward 30
 only after observing support and capacity. Measure unaided activation, time to

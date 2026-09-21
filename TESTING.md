@@ -57,9 +57,11 @@ assertions, assertions that only inspect fixtures, or an assertion that can
 never fail. Keep setup, seed data and test-mode switches explicit so that a
 green run demonstrates the product path rather than a test harness shortcut.
 
-The first E2E harness work will define the exact invocation and prerequisite
-services. This policy does not invent that command or claim that the current
-scaffold has an E2E harness.
+The scaffold harness runs with `make e2e`; `make e2e-gate` requires a clean
+source tree and `make e2e-failure` deliberately fails one assertion to verify
+failed-run evidence. See [e2e/README.md](e2e/README.md) for prerequisites and
+scenario coverage. Foundation scenarios extend this runner as their behavior
+is implemented; a passing scaffold run alone does not complete M1.
 
 ## Run artifact contract
 
@@ -81,7 +83,7 @@ Each run contains a minimal readable `REPORT.md` and machine-readable
 - toolchain versions, image digests and fixture digests;
 - deterministic seed and non-secret configuration;
 - prerequisites and their observed versions or health;
-- the exact rerun command (provided by the future E2E harness task);
+- the exact rerun command and all non-secret inputs;
 - each machine-checkable assertion and its pass/fail result;
 - redacted logs and browser traces or video only when they help diagnose a
   result;
@@ -105,9 +107,8 @@ artifact.
 A milestone gate requires a clean rerun from the recorded inputs, a verified
 external `SHA256SUMS` receipt, and a linked handoff that records the receipt's
 own SHA-256 hash. A failed run remains useful evidence and must be retained, but
-it cannot satisfy the gate. The artifact contract is a future harness
-deliverable; this document and the current planning files are documentation
-evidence only.
+it cannot satisfy the gate. This document and the planning files remain
+documentation evidence only; actual runner artifacts establish observed results.
 
 ## Routine checks and milestone stops
 

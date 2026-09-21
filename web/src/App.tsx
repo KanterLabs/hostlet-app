@@ -56,6 +56,9 @@ async function fetchJsonWithTimeout(
 
   try {
     const response = await fetch(input, { ...init, signal: requestController.signal });
+    if (response.status === 502 || response.status === 504) {
+      throw new TypeError("Control API gateway is unavailable");
+    }
     const payload = await readJson(response);
     return { response, payload };
   } catch (error) {

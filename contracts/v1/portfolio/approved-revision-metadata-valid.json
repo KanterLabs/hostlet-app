@@ -1,0 +1,17 @@
+{
+  "revision_id": "portfolio-revision-4",
+  "draft_id": "portfolio-draft-avery",
+  "draft_version": 7,
+  "owner_id": "account-avery",
+  "content_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "approved_at": "2026-09-21T18:10:00Z",
+  "previous_revision_id": "portfolio-revision-3",
+  "audit": {
+    "event_id": "audit-revision-4-approved",
+    "kind": "revision_approved",
+    "actor_id": "account-avery",
+    "occurred_at": "2026-09-21T18:10:00Z",
+    "reason": "Owner approved the complete public field manifest.",
+    "correlation_id": "request-portfolio-approve-4"
+  }
+}

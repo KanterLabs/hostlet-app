@@ -1,0 +1,135 @@
+{
+  "contract_version": "v1",
+  "profile": {
+    "display_name": "Avery Chen",
+    "headline": "Full-stack developer building dependable tools",
+    "introduction": "I build small web products with clear interfaces and durable data.",
+    "target_role": "Early-career full-stack software engineer"
+  },
+  "skills": ["TypeScript", "Rust", "PostgreSQL"],
+  "resume": {
+    "id": "resume-main",
+    "label": "Resume",
+    "url": "https://portfolio.example.test/avery/resume.pdf"
+  },
+  "contacts": [
+    {
+      "id": "contact-email",
+      "kind": "email",
+      "label": "Email",
+      "url": "mailto:avery@example.test"
+    },
+    {
+      "id": "contact-profile",
+      "kind": "social",
+      "label": "Professional profile",
+      "url": "https://social.example.test/avery"
+    }
+  ],
+  "projects": [
+    {
+      "project_reference_id": "project-ref-atlas",
+      "kind": {
+        "type": "hosted_project",
+        "project_id": "project-atlas"
+      },
+      "order": 0,
+      "visibility": "shown",
+      "title": "Atlas Study Planner",
+      "purpose": "Helps students turn deadlines into a manageable weekly plan.",
+      "contribution": "Designed the data model and implemented the API, interface, and deployment configuration.",
+      "technical_decisions": [
+        {
+          "id": "decision-schedule",
+          "summary": "Represented schedule changes as immutable events.",
+          "rationale": "This preserves a reviewable history while allowing the current plan to be rebuilt deterministically."
+        }
+      ],
+      "links": [
+        {
+          "kind": "demo",
+          "link": {
+            "id": "link-atlas-demo",
+            "label": "Live demo",
+            "url": "https://atlas.example.test/"
+          }
+        },
+        {
+          "kind": "source",
+          "link": {
+            "id": "link-atlas-source",
+            "label": "Source",
+            "url": "https://code.example.test/avery/atlas"
+          }
+        }
+      ],
+      "evidence": [
+        {
+          "id": "evidence-atlas-dashboard",
+          "kind": "screenshot",
+          "title": "Weekly planning dashboard",
+          "url": "https://assets.example.test/atlas/dashboard.webp",
+          "caption": "A synthetic example schedule used for the public demo.",
+          "alt_text": "A weekly calendar with three study sessions and two assignment deadlines."
+        }
+      ],
+      "authorized_deployment_facts_id": "facts-atlas-release-7",
+      "displayed_status": {
+        "deployment_timestamp": true,
+        "availability": true,
+        "release_identifier": true,
+        "source_commit": false,
+        "demo_readiness": true
+      },
+      "demo_readiness": {
+        "state": "ready_to_share",
+        "attestation": {
+          "release_id": "release-atlas-7",
+          "checked_at": "2026-09-21T18:00:00Z",
+          "demo_page_verified": true,
+          "synthetic_example_data_verified": true,
+          "restricted_access_verified": true,
+          "visitor_instructions_verified": true,
+          "visitor_instructions": "Use the sample learner account shown on the sign-in page."
+        }
+      }
+    },
+    {
+      "project_reference_id": "case-ref-accessibility",
+      "kind": {
+        "type": "external_case_study",
+        "external_reference_id": "case-accessibility-audit"
+      },
+      "order": 1,
+      "visibility": "shown",
+      "title": "Accessibility audit case study",
+      "purpose": "Documents an accessibility review and remediation plan for an owned synthetic interface.",
+      "contribution": "Ran the review, prioritized findings, and documented the remediation decisions.",
+      "technical_decisions": [],
+      "links": [],
+      "evidence": [],
+      "authorized_deployment_facts_id": null,
+      "displayed_status": {
+        "deployment_timestamp": false,
+        "availability": false,
+        "release_identifier": false,
+        "source_commit": false,
+        "demo_readiness": false
+      },
+      "demo_readiness": {
+        "state": "needs_recheck",
+        "previous_attestation": null,
+        "reason": "never_checked"
+      }
+    }
+  ],
+  "section_visibility": {
+    "headline": "shown",
+    "introduction": "shown",
+    "target_role": "shown",
+    "skills": "shown",
+    "resume": "shown",
+    "contacts": "shown",
+    "projects": "shown"
+  }
+}

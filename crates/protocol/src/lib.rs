@@ -4,6 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod portfolio;
 pub mod project;
 
 /// The only agent protocol accepted by this first release.

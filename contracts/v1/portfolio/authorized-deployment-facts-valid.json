@@ -1,0 +1,30 @@
+{
+  "contract_version": "v1",
+  "facts_id": "facts-atlas-release-7",
+  "owner_id": "account-avery",
+  "project_reference_id": "project-ref-atlas",
+  "deployment_id": "deployment-atlas-7",
+  "release_id": "release-atlas-7",
+  "managed_demo_url": "https://atlas.example.test/",
+  "deployed_at": "2026-09-21T17:30:00Z",
+  "availability": "available",
+  "status_label": "Deployment verified",
+  "public_source_commit": null,
+  "fact_refresh": {
+    "fields": [
+      "managed_demo_destination",
+      "deployment_timestamp",
+      "availability_label"
+    ],
+    "authorized_by_owner_id": "account-avery",
+    "authorized_at": "2026-09-21T18:10:00Z"
+  },
+  "audit": {
+    "event_id": "audit-facts-atlas-7",
+    "kind": "deployment_facts_authorized",
+    "actor_id": "account-avery",
+    "occurred_at": "2026-09-21T18:10:00Z",
+    "reason": "Owner authorized the displayed deployment facts and narrow refresh scope.",
+    "correlation_id": "request-portfolio-approve-4"
+  }
+}

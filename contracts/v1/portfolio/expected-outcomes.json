@@ -1,0 +1,35 @@
+{
+  "contract_version": "v1",
+  "typed_fixtures": [
+    {
+      "path": "draft-valid.json",
+      "rust_type": "PortfolioDraft",
+      "expected": "valid"
+    },
+    {
+      "path": "approved-revision-metadata-valid.json",
+      "rust_type": "ApprovedRevisionMetadata",
+      "expected": "valid"
+    },
+    {
+      "path": "owner-edit-valid.json",
+      "rust_type": "OwnerEditDescriptor",
+      "expected": "valid"
+    },
+    {
+      "path": "authorized-deployment-facts-valid.json",
+      "rust_type": "AuthorizedDeploymentFacts",
+      "expected": "valid"
+    }
+  ],
+  "scenario_fixtures": [
+    {
+      "path": "negative-missing-approval.json",
+      "expected_code": "missing_or_duplicate_approval"
+    },
+    {
+      "path": "negative-url-scheme.json",
+      "expected_code": "unsupported_url_scheme"
+    }
+  ]
+}

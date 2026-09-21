@@ -1,0 +1,15 @@
+{
+  "scenario": "reject_unsafe_public_link_scheme",
+  "base_fixture": "draft-valid.json",
+  "operation": "replace_draft",
+  "mutation": {
+    "path": "projects[0].links[0].link.url",
+    "value": "javascript:alert(document.domain)"
+  },
+  "expected": {
+    "accepted": false,
+    "code": "unsupported_url_scheme",
+    "path": "projects[0].links[0].link.url",
+    "draft_version_advanced": false
+  }
+}

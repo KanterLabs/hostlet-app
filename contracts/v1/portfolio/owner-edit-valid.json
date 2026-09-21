@@ -1,0 +1,16 @@
+{
+  "edit_id": "portfolio-edit-7",
+  "draft_id": "portfolio-draft-avery",
+  "base_draft_version": 6,
+  "resulting_draft_version": 7,
+  "changed_paths": ["projects[0].contribution", "projects[0].links[0]"],
+  "resulting_content_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "audit": {
+    "event_id": "audit-owner-edit-7",
+    "kind": "owner_edit",
+    "actor_id": "account-avery",
+    "occurred_at": "2026-09-21T18:05:00Z",
+    "reason": "Owner revised the contribution and demo link.",
+    "correlation_id": "request-portfolio-edit-7"
+  }
+}

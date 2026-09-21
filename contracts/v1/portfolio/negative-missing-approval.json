@@ -1,0 +1,19 @@
+{
+  "scenario": "reject_public_revision_with_missing_screenshot_approval",
+  "base_fixture": "draft-valid.json",
+  "operation": "assemble_approved_revision",
+  "mutation": {
+    "omit_approval_target": {
+      "type": "screenshot",
+      "project_reference_id": "project-ref-atlas",
+      "evidence_id": "evidence-atlas-dashboard"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "code": "missing_or_duplicate_approval",
+    "path": "approvals",
+    "durable_revision_created": false,
+    "public_pointer_changed": false
+  }
+}

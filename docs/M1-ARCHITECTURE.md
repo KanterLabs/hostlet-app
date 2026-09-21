@@ -133,6 +133,8 @@ password, a session token, a secret value, ciphertext, or a worker credential.
 | `POST /v1/sessions` | Verify local credentials and return a new opaque Bearer token once with its 24-hour expiry. This response is never stored in an idempotency record. |
 | `DELETE /v1/sessions/current` | Revoke the presented session and return 204. |
 | `GET /v1/me` | Return the authenticated account and session expiry metadata. |
+| `GET /v1/accounts/{account_id}` | Return the owner's account profile and revision; another owner sees not found. |
+| `PATCH /v1/accounts/{account_id}` | Persist the owner's display-name intent with `If-Match` and `Idempotency-Key`; return the committed profile revision. |
 
 Authentication uses `Authorization: Bearer <token>`. Missing, malformed,
 expired, revoked, or unknown tokens are uniformly rejected. Authentication
@@ -143,6 +145,24 @@ an unknown identity from a wrong password.
 Credential-bearing authentication requests do not use the resource-intent
 idempotency cache. In particular, never retain an unsalted fast hash of a
 password-bearing request as a replay fingerprint.
+The account-profile update is HOST-215's durable owned intent before HOST-216
+introduces project configuration. It never changes credentials or email.
+
+Account creation accepts `{email, password, display_name}` and returns HTTP 201
+with `{id, email, display_name, revision}`. Login returns HTTP 201 with
+`{token, expires_at, account_id}`. Owned account GET/PATCH responses use the same
+account record. `GET /v1/audit` returns `{events: [...]}` scoped to the current
+account. Error envelopes are `{error: {code, message, request_id}}`. A changed
+idempotent payload returns 409; a stale quoted `If-Match` revision returns 412.
+Authentication routes do not cache credential-bearing responses.
+
+Local process configuration uses `DATABASE_URL`, `HOSTLET_API_BIND`,
+`HOSTLET_WORKER_BIND`, `HOSTLET_WORKER_TOKEN`, `HOSTLET_SECRET_KEY` and
+`HOSTLET_RECOVERY_KEY`. The two encryption keys are separately supplied 32-byte
+keys encoded as 64 hexadecimal characters. Matching PostgreSQL tools may use
+an explicit `HOSTLET_PG_CONTAINER` for a run-owned development container; the
+application must not discover or select unrelated containers. Values never
+appear in command arguments, artifacts or logs.
 
 ### Owned resources
 

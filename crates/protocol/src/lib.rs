@@ -4,6 +4,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod project;
+
 /// The only agent protocol accepted by this first release.
 pub const PROTOCOL_VERSION: &str = "hostlet.agent/v1";
 

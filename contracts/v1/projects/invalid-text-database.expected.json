@@ -1,0 +1,7 @@
+{
+  "expected_issue_codes": [
+    "invalid_service_name",
+    "text_field_too_long",
+    "unexpected_service_configuration"
+  ]
+}

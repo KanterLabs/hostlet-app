@@ -1,0 +1,6 @@
+{
+  "expected_issue_codes": [
+    "unsupported_service_kind",
+    "extra_application_service"
+  ]
+}

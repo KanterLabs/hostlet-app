@@ -1,0 +1,6 @@
+{
+  "expected_issue_codes": [
+    "missing_start_command",
+    "missing_health_check"
+  ]
+}

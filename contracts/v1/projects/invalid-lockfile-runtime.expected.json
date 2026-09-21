@@ -1,0 +1,7 @@
+{
+  "expected_issue_codes": [
+    "missing_lockfile",
+    "unsupported_node_version",
+    "unsupported_framework_pattern"
+  ]
+}

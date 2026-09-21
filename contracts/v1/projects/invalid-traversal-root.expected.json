@@ -1,0 +1,5 @@
+{
+  "expected_issue_codes": [
+    "unsafe_service_root"
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "contract_version": "hostlet.project/v1",
+  "repositories": [
+    {
+      "layout": "monorepo",
+      "package_manager": "npm",
+      "lockfile_path": null
+    }
+  ],
+  "services": [
+    {
+      "name": "web",
+      "kind": "static_frontend",
+      "root": "apps/web",
+      "framework": "vite_static",
+      "node": {
+        "major": 24
+      },
+      "build_command": "npm run build",
+      "output_directory": "dist",
+      "start_command": null,
+      "health_check": null,
+      "uses_durable_data": false
+    },
+    {
+      "name": "api",
+      "kind": "application",
+      "root": "apps/api",
+      "framework": "custom_next_server",
+      "node": {
+        "major": 20
+      },
+      "build_command": "npm run build",
+      "output_directory": null,
+      "start_command": "npm run start",
+      "health_check": {
+        "protocol": "http",
+        "path": "/healthz"
+      },
+      "uses_durable_data": true
+    },
+    {
+      "name": "database",
+      "kind": "postgres",
+      "root": null,
+      "framework": "postgresql18",
+      "node": null,
+      "build_command": null,
+      "output_directory": null,
+      "start_command": null,
+      "health_check": null,
+      "uses_durable_data": false
+    }
+  ],
+  "resources": {
+    "limits": [
+      {
+        "resource": "application_memory",
+        "amount": 512,
+        "unit": "mebibytes",
+        "scope": "hosted_project",
+        "enforcement": "report_memory_termination_with_bounded_restart_backoff",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "application_cpu",
+        "amount": 250,
+        "unit": "millicpu",
+        "scope": "hosted_project",
+        "enforcement": "throttle_cpu",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "database_storage",
+        "amount": 1,
+        "unit": "gibibytes",
+        "scope": "project_database",
+        "enforcement": "warn_at80_prevent_growth_preserve_reads_and_export",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "database_connections",
+        "amount": 10,
+        "unit": "connections",
+        "scope": "project_database",
+        "enforcement": "cap_application_connections",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "scratch_storage",
+        "amount": 256,
+        "unit": "mebibytes",
+        "scope": "hosted_project",
+        "enforcement": "fail_excess_ephemeral_writes",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "build_cpu",
+        "amount": 2000,
+        "unit": "millicpu",
+        "scope": "build",
+        "enforcement": "fail_build_preserve_live_release",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "build_memory",
+        "amount": 2,
+        "unit": "gibibytes",
+        "scope": "build",
+        "enforcement": "fail_build_preserve_live_release",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "build_timeout",
+        "amount": 10,
+        "unit": "minutes",
+        "scope": "build",
+        "enforcement": "time_out_build_preserve_live_release",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "concurrent_builds",
+        "amount": 1,
+        "unit": "count",
+        "scope": "account",
+        "enforcement": "queue_builds_until_capacity",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "monthly_build_execution",
+        "amount": 60,
+        "unit": "minutes",
+        "scope": "purchased_slot_billing_month",
+        "enforcement": "queue_builds_until_billing_renewal",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "static_release_artifact",
+        "amount": 250,
+        "unit": "mebibytes",
+        "scope": "release",
+        "enforcement": "reject_oversized_replacement_preserve_current",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "runtime_release_artifact",
+        "amount": 1,
+        "unit": "gibibytes",
+        "scope": "release",
+        "enforcement": "reject_oversized_replacement_preserve_current",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "retained_successful_releases",
+        "amount": 3,
+        "unit": "count",
+        "scope": "hosted_project",
+        "enforcement": "retain_current_plus_two_previous",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "public_outbound_transfer",
+        "amount": 10,
+        "unit": "gibibytes",
+        "scope": "purchased_slot_billing_month",
+        "enforcement": "warn_at80_and95_then_limit_public_traffic",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "portfolio_assets",
+        "amount": 100,
+        "unit": "mebibytes",
+        "scope": "portfolio_account",
+        "enforcement": "reject_new_assets_preserve_published_revision",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "log_storage",
+        "amount": 100,
+        "unit": "mebibytes",
+        "scope": "project_logs",
+        "enforcement": "rotate_oldest_and_redact_secrets",
+        "status": "benchmark_candidate"
+      },
+      {
+        "resource": "log_retention",
+        "amount": 7,
+        "unit": "days",
+        "scope": "project_logs",
+        "enforcement": "rotate_oldest_and_redact_secrets",
+        "status": "benchmark_candidate"
+      }
+    ]
+  }
+}

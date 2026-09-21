@@ -1,87 +1,165 @@
-# Hostlet plan review and scaffold scope
+# Hostlet — portfolio and live demos
 
-Reviewed 2026-09-21 for the fresh `hostlet-app` project (Helm `HOST-207`).
+Authoritative product direction for `hostlet-app`, based on the brief supplied
+by Shane on 2026-09-21. This supersedes the provisional September generic-hosting
+baseline recorded in the initial scaffold commit. Older Hostlet documents and
+completed cards do not establish requirements or implementation evidence here.
 
-## Source and interpretation
+> Your projects, live and ready to show.
 
-The project directory was empty and no plan was attached to the request. This
-scaffold provisionally follows the existing September Hostlet planning package:
-`HOST-145`, the September 7 decision register, and the September 8 implementation
-contract and first-release amendment. The local source documents are in
-`/home/shane/projects/hostlet/hostlet`: `docs/PLAN.md`, `DESIGN.md`,
-`docs/DECISIONS.md`, `docs/IMPLEMENTATION_CONTRACT.md`, and
-`docs/FIRST_RELEASE.md`. This document is a new summary, not an import of that
-repository or its operational state. A newer supplied plan takes precedence.
+## Customer and outcome
 
-The current request names this project `hostlet-app`. Current repository policy
-uses private Gitea as source of truth and GitHub as a public mirror, superseding
-the historical proposal for a private GitHub repository named `hostlet`.
+Start with students and early-career web developers who already have projects
+and want a professional link for applications. Hostlet combines deployment,
+ongoing hosting and presentation: connect GitHub, select supported projects,
+resolve missing configuration, and publish a reviewed portfolio with live demos.
 
-## Product direction
+Activation means a published portfolio with at least one working demo. A GitHub
+connection or a running process alone is insufficient. Hosting is infrastructure
+underneath that outcome; the product is not a general cloud console.
 
-Hostlet is a managed service for one stateless HTTP application per project.
-The intended customer flow is account creation, subscription, GitHub connection,
-exact-revision build, deployment and ongoing management from a web panel.
+## Customer journey
 
-The planned first release includes Dockerfile builds, bounded resource limits,
-secrets, health checks, logs, health-gated promotion, retained-image rollback,
-safe deletion and Stripe subscriptions. A bounded Railpack path follows the
-Dockerfile path. Checkout redirects cannot grant entitlement; verified provider
-state and durable records decide access.
+1. Connect a least-privilege GitHub App and choose accessible repositories.
+2. Check compatibility before purchase. Distinguish ready, configuration needed,
+   database needed, secrets needed and showcase-only unsupported repositories.
+3. Infer framework, root directory, build/output/start settings and variable names
+   where reliable; ask for confirmation when uncertain. Never infer secret values.
+4. Preview the portfolio and resolve configuration before activating paid hosting.
+5. Deploy supported applications and collect the owner's introduction, target
+   role, résumé, contact details and project contributions.
+6. Attach healthy live URLs and approved screenshots to the draft. The owner
+   reviews claims and publication permissions, then publishes.
+7. Keep deployment facts synchronized; suggest narrative changes without
+   overwriting the owner's edits.
 
-Self-host distribution, Compose stacks, worker-only processes, arbitrary TCP/UDP,
-tenant volumes, managed databases, custom domains, team RBAC and a general CLI
-are outside the recorded first-release scope.
+Prepurchase compatibility analysis is not an entitlement to execute arbitrary
+customer code. Begin with bounded static inspection; any later build validation
+requires the same isolation and explicit cost/admission limits as paid builds.
 
-## Architecture carried into this scaffold
+## Standard project: draft contract
 
-| Boundary | Direction | Current implementation |
+A project is one demonstrable application, not necessarily one repository or
+container. Model `Account -> Projects -> Services -> Deployments`; portfolios
+reference projects and their authorized public deployment facts.
+
+The proposed standard project includes one static frontend where applicable,
+one always-running application process and one optional small PostgreSQL database.
+The first release may accept one repository or monorepo per project, while the
+model allows a future frontend/backend split across repositories.
+
+Initial supported scope is small JavaScript/TypeScript web applications: static
+frontends and an explicitly documented set of Node/Next.js patterns, plus
+PostgreSQL. A 512 MiB backend is a measurement starting point, not an approved
+universal allocation or compatibility guarantee. Python and other runtimes follow.
+
+Before implementation freezes this contract, specify the supported versions and
+build patterns, service-count semantics, CPU/memory, database size/connections,
+static/artifact storage, transfer, build usage, backup retention and deployment
+headroom. Each limit needs units, enforcement behavior and a customer-visible
+failure explanation. Extra workers/backends or larger databases require explicit
+future options, not unlimited inclusion in one slot.
+
+## Portfolio and demo readiness
+
+- Begin with three layouts sharing a structured content model. Allow typography,
+  accent, project order and section visibility; defer a drag-and-drop page builder.
+- Include introduction, featured projects, skills, résumé/contact links and project
+  detail pages covering purpose, contribution, technical decisions and evidence.
+- Require owner confirmation of contribution and technical claims. Optional AI
+  drafts use approved inputs, exclude secrets and never invent statistics or work.
+- Private source access is not publication permission. Explicitly approve public
+  descriptions, screenshots and source links; a private README is not public copy.
+- Publish approved revisions as static sites independent of dashboard, GitHub and
+  app availability. A failed deployment cannot replace the last published portfolio.
+- Portfolio pages and external case studies do not consume live-project slots.
+- Track "Ready to share" separately from deployment health: the owner verifies the
+  demo page, synthetic example data, restricted demo access and visitor instructions.
+- Initial demo access is configuration and guidance. Automatic guest-mode injection
+  and arbitrary data resets are not promised. Later resets require application support.
+
+## Availability, data and billing behavior
+
+Admitted paid apps do not sleep due to inactivity. This does not promise zero
+crashes, maintenance or outages. Build allowances may block new builds without
+stopping an existing deployment. Build and health-check replacements before
+switching traffic; keep the previous healthy version on failed updates.
+
+Included databases must not sleep or expire silently. Small project databases,
+backups and a tested restore/export path are first-release scope in this brief,
+superseding the earlier no-operational-backups plan. Platform data also needs an
+explicit preservation/recovery policy. RPO/RTO and retention are not yet promised.
+Application rollback does not reverse database migrations; require compatible
+changes and a separately scoped restore procedure. Populated upgrades require
+verified pre-upgrade backups and retained-binary compatibility.
+
+Paid-only live compute follows compatibility checking and portfolio preview.
+Proposed monthly prices are hypotheses: Starter 1 project/$5, Portfolio 3/$12,
+Builder 5/$20. Every proposed tier includes the portfolio, templates, HTTPS,
+automatic deployments and basic logs. These are not an approved catalog; do not
+create Stripe prices or publish checkout from this document.
+
+Define nonpayment, abuse, exhaustion, cancellation, export and deletion retention
+explicitly. Keep them distinct from inactivity. Model full slot use, databases,
+builds, backups, bandwidth, payment costs, support and rollout/spare capacity.
+Do not inherit the old $15/$35/$75 catalog or legacy subscriptions.
+
+## Architecture and current scaffold
+
+| Boundary | Planned responsibility | Current state |
 | --- | --- | --- |
-| Control | Rust/Axum modular API; PostgreSQL owns durable state | Liveness, version, explicit not-ready response |
-| Web | React/TypeScript; same-origin API; public prerendering later | Vite development shell and real API status |
-| Protocol | Versioned HTTP and outbound agent contracts | Version response and protocol compatibility primitive |
-| Builder | Outbound supervisor, rootless BuildKit in one disposable VM per attempt | Configuration/version entrypoint only |
-| Runtime | Separate outbound reconciler; digest-addressed Docker/gVisor workloads | Configuration/version entrypoint only |
-| Persistence | PostgreSQL with additive numbered migrations | Boundary documented; no schema or database |
-| Infrastructure | Separate control, registry, runtime, builder and ingress trust zones | Boundary documented; no provisioning |
+| Control API | Accounts, GitHub, configuration, secrets, subscriptions, durable intent | Rust/Axum health and version skeleton |
+| Web dashboard | Compatibility, setup, portfolio editing, demo readiness | React/TypeScript/Vite development shell |
+| Platform PostgreSQL | Authoritative account/project/service/deployment and content records | No database/schema connected |
+| Builder | Exact-commit source, isolated builds, bounded artifacts and reports | Rust CLI skeleton; refuses real work |
+| Runtime | Isolated workloads, routing, resource limits, health and logs | Rust CLI skeleton; refuses real work |
+| Project data | Tenant-isolated PostgreSQL, backup, restore and export | Unimplemented |
+| Portfolio publisher | Approved structured revisions to independent static artifacts | Boundary documented; unimplemented |
 
-The historical baseline pins Rust 1.96.0 and Node 22.22.1. The browser API uses
-`/v1`; the agent protocol identifier is `hostlet.agent/v1`. The current wire
-fixture covers only version reporting. Authentication, jobs, errors, identifiers,
-lease/fence envelopes and compatibility rollout remain implementation work.
+Next.js is a proposed dashboard choice, not a mandate to replace the existing
+React scaffold. Decide SSR/prerendering needs before that change. Public portfolios
+must support independent static publication regardless of dashboard framework.
+Rust 1.96.0, Node 22.22.1, `/v1` and `hostlet.agent/v1` are current scaffold
+implementation choices, not requirements implied by the new brief.
 
-Trusted platform surfaces are intended for `hostlet.cloud`; customer applications
-use `hostlet.app`. No domain, certificate or route is configured by this scaffold.
-The planned homelab placement has a shared host/power/uplink failure domain;
-separate trust zones do not provide high availability.
+Customer builds and workloads are untrusted. Retain isolated build execution,
+stronger runtime isolation evaluation (gVisor or microVMs), resource/egress limits,
+separate management networks and separate domains for trusted UI and untrusted
+content. No tenant Docker socket or management access. Signed GitHub events must
+match authorized repositories/branches. Build load cannot starve live demos.
 
-## Review findings
+The brief recommends homelab development/testing and rejects relying on residential
+connectivity for paid availability. Production placement, provider and spend are
+unresolved: do not provision or migrate based on the older homelab-only decision.
+Domain assignments for platform, demos and published portfolios also need a fresh
+trust-boundary decision. Existing infrastructure and provider records remain intact.
 
-1. The September documents mix preparation status with later completed work.
-   Prior card completion must not imply that features exist in this fresh tree.
-2. Earlier OVH placement is superseded by the recorded homelab amendment.
-   Existing infrastructure remains preserved; this task creates no replacement.
-3. The first-release amendment defers operational backups and broad recovery
-   drills. Later upgrades of populated data still require backup and migration
-   evidence; those are separate from an initial empty scaffold.
-4. Paid hosting and customer execution require real persistence, identity,
-   entitlement, isolation and provider integration before admission. Readiness
-   stays false and agents refuse to run until those boundaries are implemented.
-5. Public sales/docs prerendering is a future web milestone. Vite's development
-   shell alone does not meet that release requirement.
+## Review and implementation order
 
-## Next implementation slices
+The brief is coherent around one outcome; the largest new obligations are database
+lifecycle/recovery and independent portfolio publishing. Low slot prices depend on
+measured full-use economics. Keep these obligations visible rather than implementing
+only deployment and postponing the differentiating portfolio experience.
 
-- Establish authoritative PostgreSQL persistence, safe migrations and a disposable
-  local database harness; prove data survives restart and additive upgrades.
-- Implement customer/operator identity and account ownership with cross-account
-  denial checks, then GitHub installation binding and immutable source resolution.
-- Add project snapshots, scoped secrets and durable jobs with leases/fences;
-  prove retries and cancellation cannot accept stale work.
-- Connect disposable builders, artifact verification and the isolated runtime;
-  prove a real build, healthy promotion, rollback and cleanup.
-- Add verified billing/entitlements, customer journeys and public sales/docs;
-  validate the recorded minimal functional release journeys before deployment.
+1. Freeze the standard-project compatibility/resource contract (`HOST-209`) and
+   portfolio content/publication contract (`HOST-210`). Both are unclaimed Backlog
+   cards for this new direction. Record unresolved values instead of treating
+   recommendations as approvals.
+2. Implement selected-repository binding, bounded compatibility analysis and an
+   editable portfolio preview before paid-compute activation.
+3. Implement authoritative persistence, identity, scoped secrets and project/service
+   snapshots; connect isolated builds/runtime and project database lifecycle.
+4. Add three portfolio templates, reviewed static publication, screenshots and
+   independent demo-readiness state without duplicating deployment truth.
+5. Add slot billing from the approved catalog, no-idle-sleep behavior, last-good
+   deployments, backup/restore/export and clear cancellation/retention controls.
+6. Prove a complete journey, essential isolation and restore/export behavior before
+   a small paid pilot. Measure unaided activation, time to publish, demo durability,
+   full-allowance costs, résumé use and post-job-search retention.
 
-These are sequencing notes, not new claims on existing backlog cards or claims
-of feature completion. Select implementation-sized cards when work is assigned.
+A 20–30 person paid pilot is a proposal, not authorization to contact customers,
+charge accounts or spend money. Arbitrary Compose, GPUs, hosted dev environments,
+teams, job boards, recruiter matching and AI résumé generation remain deferred.
+
+No competitor pricing or cited vendor claims are adopted as verified facts here;
+recheck them if later used in public positioning or an economic model.

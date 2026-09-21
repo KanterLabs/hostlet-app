@@ -1,7 +1,8 @@
 # Hostlet development
 
 This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md` and
-`README.md` before implementation. The current deliverable is a local scaffold.
+`README.md` before implementation. The supplied September 21 portfolio-and-demo brief is authoritative; the earlier
+generic-hosting plan is superseded. The current deliverable is a local scaffold.
 
 - Author new code, tests, manifests and automation here. Other Hostlet repositories
   are references; do not import their history, runtime state or credentials.
@@ -10,8 +11,16 @@ This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md` and
 - Keep control, builder and runtime boundaries separate. PostgreSQL will own
   durable intent; an in-memory placeholder must not accept customer work.
 - Customer builds belong in disposable VMs, never organization CI runners.
-  Tenant runtime requires the planned isolated Docker/gVisor environment.
-- Keep the trusted platform origin separate from tenant application origins.
+  Tenant runtime requires stronger isolation evaluation, resource/network controls
+  and a documented compatibility decision before customer admission.
+- Keep trusted platform, tenant applications and portfolio publishing trust boundaries
+  explicit. Private repository access never grants permission to publish its content.
+- Model projects containing services and deployments; the portfolio references those
+  projects. A portfolio or external case study does not consume a live-project slot.
+- Keep live deployment facts distinct from owner-approved narratives and demo readiness.
+- Project databases, backups and tested restore/export belong to the new launch scope.
+  Do not carry forward the old no-backup exception or pricing catalog.
+- Proposed prices, limits, Next.js migration and production placement are not approvals.
 - Add credentials only through explicit service-scoped injection. Do not commit
   secrets, private operational inventories, customer data or provider identifiers.
 - Run `make check` before publishing changes. Pin toolchains and commit both locks.

@@ -1,12 +1,17 @@
 # Hostlet
 
-A fresh foundation for managed application hosting: a Rust control API,
-React/TypeScript web app, and separate builder and runtime agents.
+A fresh foundation for a portfolio-and-demo service for students and early-career
+developers: connect GitHub, deploy supported projects, and publish a professional
+portfolio around working demos.
+
+**Your projects, live and ready to show.**
 
 **Status: development scaffold.** The API exposes health and version information,
-and the web shell reports its actual status. Accounts, subscriptions, persistence,
-builds and deployments are not implemented. Read the [plan review](PLAN.md) for
-the September planning baseline and next implementation slices.
+and the web shell reports its actual status. Portfolios, compatibility analysis,
+accounts, billing, project databases, builds and deployments are not implemented.
+The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
+the provisional generic-hosting baseline. Prices and production placement remain
+unresolved proposals.
 
 ## Run locally
 
@@ -55,6 +60,7 @@ web/             React application and Vite development proxy
 contracts/       Shared protocol fixtures
 migrations/      PostgreSQL ownership and migration policy
 infra/           Future provisioning boundaries
+portfolio/       Content and independent static-publishing boundary
 .github/         Non-deploying validation workflow
 ```
 

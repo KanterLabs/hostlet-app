@@ -362,11 +362,12 @@ export function App() {
 
       <main className="page-content">
         <section className="hero" aria-labelledby="page-title">
-          <p className="eyebrow">Stateless HTTP application hosting</p>
-          <h1 id="page-title">A clear home for your services.</h1>
+          <p className="eyebrow">A portfolio built around your projects</p>
+          <h1 id="page-title">Your projects, live and ready to show.</h1>
           <p className="hero__copy">
-            Hostlet will make it simple to run focused, stateless HTTP applications.
-            Control-plane signals are visible here while the product surface is still taking shape.
+            Connect GitHub, turn supported projects into live demos, and publish a portfolio you’re
+            proud to share. You’ll review every project story before it goes live. GitHub connection,
+            hosting and publishing are not available in this development scaffold yet.
           </p>
         </section>
 
@@ -446,20 +447,20 @@ export function App() {
             <span />
           </div>
           <div>
-            <p className="eyebrow">Product surface</p>
-            <h2 id="empty-title">Nothing to manage yet.</h2>
+            <p className="eyebrow">Your portfolio</p>
+            <h2 id="empty-title">Nothing to publish yet.</h2>
             <p>
-              Service and deployment views will appear when the Hostlet control plane has its
-              application model. This development scaffold keeps the state honest while that
-              work is underway.
+              When the workflows are implemented, this space will show projects selected for your
+              published portfolio and its working demo. This development scaffold has no GitHub
+              integration, project data, or publishing workflow yet.
             </p>
           </div>
         </section>
       </main>
 
       <footer className="footer">
-        <span>Hostlet · Building the calm path to production.</span>
-        <span>Local control plane · 127.0.0.1:8080</span>
+        <span>Hostlet · Your projects, ready to share.</span>
+        <span>Development scaffold · Local control plane · 127.0.0.1:8080</span>
       </footer>
     </div>
   );

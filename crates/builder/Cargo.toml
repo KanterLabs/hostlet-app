@@ -1,0 +1,8 @@
+[package]
+name = "hostlet-builder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hostlet-contracts = { path = "../protocol" }

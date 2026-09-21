@@ -1,0 +1,15 @@
+/target/
+/web/node_modules/
+/web/dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+/.local/
+/coverage/
+/test-results/
+/playwright-report/
+*.pem
+*.key

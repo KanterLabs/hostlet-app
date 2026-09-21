@@ -172,9 +172,9 @@ The initial resource surface is deliberately small:
 | --- | --- |
 | Projects | `POST /v1/projects`, `GET /v1/projects/{project_id}`, `PATCH /v1/projects/{project_id}` |
 | Configuration revisions | `POST /v1/projects/{project_id}/configuration-revisions`, `GET /v1/projects/{project_id}/configuration-revisions/{revision_id}` |
-| Services | `POST /v1/projects/{project_id}/services`, `GET /v1/projects/{project_id}/services`, `GET /v1/projects/{project_id}/services/{service_id}` |
+| Services | `GET /v1/projects/{project_id}/services`, `GET /v1/projects/{project_id}/services/{service_id}`; writes occur atomically through the project's complete configuration revision |
 | Deployment intent and snapshots | `POST /v1/projects/{project_id}/deployment-intents`, `GET /v1/projects/{project_id}/deployments/{deployment_id}` |
-| Portfolio drafts | `POST /v1/portfolio-draft-revisions`, `GET /v1/portfolio-draft-revisions/{revision_id}` |
+| Portfolio drafts | `POST /v1/portfolio/draft-revisions`, `GET /v1/portfolio/draft-revisions/{revision_id}` |
 | Secret metadata and versions | `POST /v1/projects/{project_id}/services/{service_id}/secrets`, `POST /v1/projects/{project_id}/services/{service_id}/secrets/{secret_id}/versions`, and metadata-only `GET` routes |
 | Durable jobs | `POST /v1/projects/{project_id}/jobs`, `GET /v1/projects/{project_id}/jobs/{job_id}` |
 
@@ -183,6 +183,13 @@ IDs, and referenced parent IDs never establish ownership. A resource owned by
 another account returns the same not-found response as an unknown UUID. Cross-
 owner references also fail at the database boundary through composite owner
 foreign keys.
+
+Project creation persists the repository and service graph with its first
+configuration revision in one transaction. Later configuration revisions keep
+stable repository/service identities and append immutable specifications.
+Deployment and artifact references retain their original configuration revision;
+reading an old release never substitutes today's service configuration. There is
+no separate partial service mutation that could leave the graph inconsistent.
 
 All accepted durable resource-intent writes commit their authoritative rows, audit
 event, and idempotency result in one transaction before returning success.
@@ -214,6 +221,29 @@ claim real entitlement/capacity reservation or hosted resources. Only M2 may
 produce a real capacity-backed reservation, and only M3 may produce runtime or
 tenant-database effects. Drafts, compatibility checks, portfolio revisions,
 and external case studies always have no slot disposition.
+
+`hosted_slots` counts actual allocated slots. An M1 `admission_required` intent
+therefore has zero; it becomes one only after actual admission. Removal intent
+preserves the previous count until confirmed cleanup. M1 E2E seeds later trusted
+resource observations directly into its owned disposable database to verify
+the persistence model, owner intent transitions and HTTP reads. This explicitly
+labeled fixture boundary is not capacity admission or customer workload proof.
+Public owners cannot supply healthy/reserved states or authoritative release
+facts. Portfolio draft writes similarly reject deployment-fact authority that
+is not available in M1; no draft write publishes content.
+
+Only one unresolved rollback/removal intent may exist per project. A project
+row lock and a partial unique database constraint enforce this together.
+While that intent is requested, or removal is pending, new deployment and
+lifecycle intents fail with a conflict. A trusted completion or cancellation
+resolves the existing intent before another one can start; retries with the
+original idempotency key still return their original committed result.
+
+M1 permits only one unresolved admission-required deployment per project.
+After a trusted observation resolves it, a replacement intent preserves any
+already allocated slot and retained resources. It never zeroes the allocation
+as a side effect of requesting another deployment. Superseding and scheduling
+multiple deployment requests are later orchestration behavior.
 
 ## PostgreSQL ownership model
 

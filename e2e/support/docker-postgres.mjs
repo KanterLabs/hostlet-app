@@ -186,6 +186,63 @@ export class OwnedPostgres {
     }
   }
 
+  async psqlCommand(label, sql) {
+    const result = await this.command(`psql-${label}`, [
+      "exec",
+      this.containerName,
+      "psql",
+      "--no-psqlrc",
+      "--set",
+      "ON_ERROR_STOP=1",
+      "--username",
+      POSTGRES_USER,
+      "--dbname",
+      POSTGRES_DB,
+      "--command",
+      sql,
+    ]);
+    return { exitStatus: result.code };
+  }
+
+  async psqlExpectFailure(label, sql, expectedSqlStates) {
+    const acceptedStates = Array.isArray(expectedSqlStates) ? expectedSqlStates : [expectedSqlStates];
+    if (!acceptedStates.length || acceptedStates.some((state) => !/^\d{5}$/.test(state))) {
+      throw new Error(`independent SQL negative check ${label} requires an expected SQLSTATE`);
+    }
+    const result = await this.command(
+      `psql-${label}`,
+      [
+        "exec",
+        this.containerName,
+        "psql",
+        "--no-psqlrc",
+        "--tuples-only",
+        "--no-align",
+        "--set",
+        "ON_ERROR_STOP=1",
+        "--set",
+        "VERBOSITY=verbose",
+        "--username",
+        POSTGRES_USER,
+        "--dbname",
+        POSTGRES_DB,
+        "--command",
+        sql,
+      ],
+      { allowFailure: true },
+    );
+    if (result.code === 0) {
+      throw new Error(`independent SQL negative check ${label} unexpectedly succeeded`);
+    }
+    const observedState = acceptedStates.find((state) =>
+      new RegExp(`(?:ERROR|FATAL):\\s+${state}:`).test(result.stderr),
+    );
+    if (!observedState) {
+      throw new Error(`independent SQL negative check ${label} failed without the expected SQLSTATE`);
+    }
+    return { exitStatus: result.code, sqlState: observedState };
+  }
+
   async requireOwnedContainer() {
     const result = await this.command("verify-container-owner", [
       "container",

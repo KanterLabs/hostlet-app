@@ -5,6 +5,9 @@ pub mod config;
 pub mod db;
 mod error;
 mod foundation;
+mod graph;
+mod intent;
+mod portfolio_drafts;
 
 use std::{fmt, net::SocketAddr, str::FromStr};
 

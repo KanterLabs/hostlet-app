@@ -5,6 +5,11 @@ import { scrubArtifactCredentials, scanArtifactForCredentials } from "../support
 import { createFoundationCredentials, credentialValues, productEnvironment } from "../support/credentials.mjs";
 import { OwnedPostgres } from "../support/docker-postgres.mjs";
 import {
+  GRAPH_REQUIRED_ASSERTIONS,
+  registerGraphFixtures,
+  runGraphScenarios,
+} from "./graph.mjs";
+import {
   assertAccountRecord,
   assertErrorShape,
   assertNoCredentialValue,
@@ -22,6 +27,7 @@ const REQUIRED_ASSERTIONS = Object.freeze([
   "M1-AUTH-04",
   "M1-AUTH-05",
   "M1-AUTH-06",
+  ...GRAPH_REQUIRED_ASSERTIONS,
 ]);
 
 function safeObserved(error) {
@@ -97,6 +103,7 @@ async function runFoundation(context) {
   const imagePath = join(context.repo, "e2e", "postgres-image.txt");
   context.registerFixture("M1 identity and ownership inputs", "e2e/support/foundation-fixtures.json");
   context.registerFixture("M1 PostgreSQL image pin", "e2e/postgres-image.txt");
+  const graphManifest = registerGraphFixtures(context);
   for (const support of [
     "artifact-safety.mjs",
     "credentials.mjs",
@@ -629,7 +636,7 @@ async function runFoundation(context) {
     await step(
       context,
       "M1-AUTH-05",
-      "database loss changes readiness to 503 and a profile write cannot report success or commit; recovery preserves state and permits a later write",
+      "database loss or required-table drift changes readiness to 503 and profile writes cannot report success or commit; recovery preserves state and permits a later write",
       async () => {
         const before = await call(profilePath(owner.id), { token: ownerToken });
         assertStatus(before, 200, "profile before database outage");
@@ -675,6 +682,55 @@ async function runFoundation(context) {
           { unchanged_profile_rows: 0 },
         );
 
+        let accountsRenamed = false;
+        try {
+          await postgres.psqlCommand(
+            "schema-drift-rename-accounts",
+            "ALTER TABLE accounts RENAME TO accounts_e2e_temporarily_unavailable;",
+          );
+          accountsRenamed = true;
+          const driftedReady = await waitForStatus(
+            context,
+            () => call("/readyz"),
+            503,
+            "readiness with required accounts table renamed",
+          );
+          expectScenario(
+            driftedReady.payload?.status === "not_ready",
+            "required-table drift returns safe not-ready response",
+            { status: driftedReady.status, not_ready_shape_valid: false },
+          );
+          const driftedWrite = await call(profilePath(owner.id), {
+            method: "PATCH",
+            token: ownerToken,
+            headers: idempotencyHeaders("m1-profile-schema-drift", beforeRevision),
+            body: { display_name: "Must not commit while a required table is unavailable" },
+          });
+          assertErrorShape(driftedWrite, 503, "profile write during required-table schema drift");
+        } finally {
+          if (accountsRenamed) {
+            await postgres.psqlCommand(
+              "schema-drift-restore-accounts",
+              "ALTER TABLE accounts_e2e_temporarily_unavailable RENAME TO accounts;",
+            );
+          }
+        }
+        const schemaRecoveredReady = await waitForStatus(
+          context,
+          () => call("/readyz"),
+          200,
+          "readiness after required-table restoration",
+        );
+        assertReady(schemaRecoveredReady, "readiness after required-table restoration");
+        const schemaUnchanged = await call(profilePath(owner.id), { token: ownerToken });
+        assertStatus(schemaUnchanged, 200, "profile after required-table restoration");
+        expectScenario(
+          schemaUnchanged.payload.revision === beforeRevision &&
+            schemaUnchanged.payload.display_name === before.payload.display_name,
+          "schema-drift write did not partially commit",
+          { unchanged_profile_rows: 0 },
+        );
+
         const recoveredWrite = await call(profilePath(owner.id), {
           method: "PATCH",
           token: ownerToken,
@@ -693,12 +749,28 @@ async function runFoundation(context) {
         return {
           offline_readiness_status: unavailable.status,
           offline_write_status: refusedWrite.status,
+          schema_drift_readiness_status: 503,
+          schema_drift_write_status: 503,
           unchanged_profile_rows: 1,
           recovered_readiness_status: recoveredReady.status,
+          schema_recovered_readiness_status: schemaRecoveredReady.status,
           recovered_write_status: recoveredWrite.status,
         };
       },
     );
+
+    await runGraphScenarios({
+      context,
+      manifest: graphManifest,
+      postgres,
+      call,
+      restartApi: async (reason) => {
+        await context.stopManaged(api, reason);
+        api = await startApi();
+      },
+      owner: { record: owner, token: ownerToken },
+      other: { record: other, token: otherToken },
+    });
 
     await step(
       context,
@@ -727,18 +799,17 @@ async function runFoundation(context) {
                SELECT COUNT(*)::int FROM sessions WHERE octet_length(token_hash) = 32
              ),
              'audit_events', (SELECT COUNT(*)::int FROM audit_events),
-             'unexpected_idempotency_keys', (
+             'unexpected_idempotency_operations', (
                SELECT COUNT(*)::int FROM idempotency_records
-                WHERE key NOT IN (
-                  'm1-owner-crosswrite',
-                  'm1-profile-replay',
-                  'm1-profile-contender-a',
-                  'm1-profile-contender-b',
-                  'm1-profile-database-offline',
-                  'm1-profile-after-recovery',
-                  'm1-profile-missing-if-match',
-                  'm1-profile-malformed-if-match',
-                  'm1-profile-stale-if-match'
+                WHERE NOT (
+                  operation LIKE 'account.profile.update/%' OR
+                  operation = 'project.create' OR
+                  operation LIKE 'project.update/%' OR
+                  operation LIKE 'project.configuration.create/%' OR
+                  operation LIKE 'project.deployment_intent.create/%' OR
+                  operation LIKE 'project.rollback_intent.create/%' OR
+                  operation LIKE 'project.removal_intent.create/%' OR
+                  operation = 'portfolio.draft_revision.create'
                 )
              ),
              'credential_fields_in_replay_rows', (
@@ -754,7 +825,7 @@ async function runFoundation(context) {
             sql.sessions >= 4 &&
             sql.sha256_token_hashes === sql.sessions &&
             sql.audit_events > 0 &&
-            sql.unexpected_idempotency_keys === 0 &&
+            sql.unexpected_idempotency_operations === 0 &&
             sql.credential_fields_in_replay_rows === 0,
           "independent credential, replay, and audit SQL checks",
           {
@@ -764,7 +835,7 @@ async function runFoundation(context) {
             session_rows: sql.sessions,
             sha256_token_hash_rows: sql.sha256_token_hashes,
             audit_event_rows: sql.audit_events,
-            unexpected_idempotency_rows: sql.unexpected_idempotency_keys,
+            unexpected_idempotency_rows: sql.unexpected_idempotency_operations,
             credential_bearing_replay_rows: sql.credential_fields_in_replay_rows,
           },
         );
@@ -811,7 +882,7 @@ async function runFoundation(context) {
           audit_event_rows: sql.audit_events,
           argon2id_hash_rows: sql.argon2id_hashes,
           sha256_token_hash_rows: sql.sha256_token_hashes,
-          unexpected_idempotency_rows: sql.unexpected_idempotency_keys,
+          unexpected_idempotency_rows: sql.unexpected_idempotency_operations,
           credential_matches_in_artifacts: 0,
           files_scanned: scan.filesScanned,
         };

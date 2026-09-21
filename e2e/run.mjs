@@ -169,6 +169,7 @@ let fatalError = null;
 let finalized = false;
 let shutdownStarted = false;
 let finalizationIncomplete = false;
+let artifactCommitted = false;
 let phase = "initialization";
 
 const requiredAssertions = [...scaffoldScenario.requiredAssertions];
@@ -180,7 +181,7 @@ const runDeadline = setTimeout(() => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    if (interruptedSignal) return;
+    if (interruptedSignal || artifactCommitted) return;
     interruptedSignal = signal;
     abortRun(new Error(`received ${signal}`), "interrupted");
   });
@@ -1198,6 +1199,10 @@ async function finalize() {
       );
     }
     writeChecksums(artifactDir);
+    // Finalization and receipt creation are synchronous. Signals delivered
+    // after this commit belong to the finished process, not a new outcome
+    // that could disagree with the immutable evidence just written.
+    artifactCommitted = true;
   } catch (error) {
     finalizationIncomplete = true;
     fatalError ||= error;

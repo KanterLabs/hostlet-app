@@ -15,6 +15,7 @@ use crate::{
     config::{FoundationConfig, FoundationPrerequisites},
     db,
     error::ApiError,
+    graph,
 };
 
 #[derive(Clone)]
@@ -81,6 +82,8 @@ pub fn router(state: FoundationState) -> Router {
         .route("/v1/sessions/current", delete(auth::revoke_session))
         .route("/v1/me", get(auth::me))
         .route("/v1/audit", get(auth::audit))
+        .merge(graph::routes())
+        .merge(crate::portfolio_drafts::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), require_ready));
     Router::new()
         .route("/healthz", get(crate::healthz))

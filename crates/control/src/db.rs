@@ -5,10 +5,32 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-pub const READER_SCHEMA_VERSION: i64 = 1;
+pub const READER_SCHEMA_VERSION: i64 = 2;
 const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
+const REQUIRED_RELATIONS: &[&str] = &[
+    "public.database_identity",
+    "public.platform_schema_compatibility",
+    "public.accounts",
+    "public.password_identities",
+    "public.sessions",
+    "public.audit_events",
+    "public.idempotency_records",
+    "public.projects",
+    "public.configuration_revisions",
+    "public.repositories",
+    "public.repository_configurations",
+    "public.services",
+    "public.service_configurations",
+    "public.deployments",
+    "public.deployment_artifact_refs",
+    "public.hosting_state_events",
+    "public.project_lifecycle_intents",
+    "public.portfolio_draft_revisions",
+    "public.portfolio_project_references",
+];
 
 pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
     let options = database_url
@@ -42,6 +64,7 @@ pub enum SchemaProblem {
     IncompatibleReader,
     InvalidCompatibility,
     InvalidMigrationOrder,
+    IncompleteSchema,
 }
 
 impl SchemaProblem {
@@ -56,6 +79,7 @@ impl SchemaProblem {
             Self::IncompatibleReader => "schema_reader_incompatible",
             Self::InvalidCompatibility => "schema_compatibility_invalid",
             Self::InvalidMigrationOrder => "schema_migration_order_invalid",
+            Self::IncompleteSchema => "schema_objects_missing",
         }
     }
 }
@@ -122,6 +146,27 @@ pub async fn check_schema(pool: &PgPool) -> Result<(), SchemaProblem> {
     }
     if minimum_reader > READER_SCHEMA_VERSION {
         return Err(SchemaProblem::IncompatibleReader);
+    }
+    // A ledger alone is not proof that a partial restore or manual operation
+    // left the application's relations and immutable identity intact.
+    let relations_present: bool = sqlx::query_scalar(
+        "SELECT bool_and(to_regclass(name) IS NOT NULL) FROM unnest($1::text[]) AS name",
+    )
+    .bind(REQUIRED_RELATIONS)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|_| SchemaProblem::DatabaseUnavailable)?;
+    if !relations_present {
+        return Err(SchemaProblem::IncompleteSchema);
+    }
+    let identity_present: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM database_identity WHERE singleton = true AND id IS NOT NULL)",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|_| SchemaProblem::IncompleteSchema)?;
+    if !identity_present {
+        return Err(SchemaProblem::IncompleteSchema);
     }
     Ok(())
 }

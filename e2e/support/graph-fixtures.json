@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "project_contract": {
+    "positive": [
+      {
+        "path": "contracts/v1/projects/valid-standard.json",
+        "name": "Foundation standard project",
+        "idempotency_key": "m1-contract-project-standard"
+      },
+      {
+        "path": "contracts/v1/projects/valid-static-only.json",
+        "name": "Foundation static-only project",
+        "idempotency_key": "m1-contract-project-static"
+      },
+      {
+        "path": "contracts/v1/projects/valid-api-only.json",
+        "name": "Foundation API-only project",
+        "idempotency_key": "m1-contract-project-api"
+      }
+    ],
+    "negative": [
+      {
+        "path": "contracts/v1/projects/invalid-separate-repositories.json",
+        "expected_path": "contracts/v1/projects/invalid-separate-repositories.expected.json",
+        "name": "Rejected separate repositories",
+        "idempotency_key": "m1-contract-reject-repositories"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-extra-services.json",
+        "expected_path": "contracts/v1/projects/invalid-extra-services.expected.json",
+        "name": "Rejected extra services",
+        "idempotency_key": "m1-contract-reject-services"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-traversal-root.json",
+        "expected_path": "contracts/v1/projects/invalid-traversal-root.expected.json",
+        "name": "Rejected traversal root",
+        "idempotency_key": "m1-contract-reject-traversal"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-lockfile-runtime.json",
+        "expected_path": "contracts/v1/projects/invalid-lockfile-runtime.expected.json",
+        "name": "Rejected lockfile and runtime",
+        "idempotency_key": "m1-contract-reject-runtime"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-application-contract.json",
+        "expected_path": "contracts/v1/projects/invalid-application-contract.expected.json",
+        "name": "Rejected application contract",
+        "idempotency_key": "m1-contract-reject-application"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-unbounded-resource.json",
+        "expected_path": "contracts/v1/projects/invalid-unbounded-resource.expected.json",
+        "name": "Rejected unbounded resource",
+        "idempotency_key": "m1-contract-reject-resource"
+      },
+      {
+        "path": "contracts/v1/projects/invalid-text-database.json",
+        "expected_path": "contracts/v1/projects/invalid-text-database.expected.json",
+        "name": "Rejected text and database fields",
+        "idempotency_key": "m1-contract-reject-text"
+      }
+    ]
+  },
+  "portfolio_contract": {
+    "draft_path": "contracts/v1/portfolio/draft-valid.json",
+    "expected_outcomes_path": "contracts/v1/portfolio/expected-outcomes.json",
+    "negative_url_path": "contracts/v1/portfolio/negative-url-scheme.json",
+    "approved_metadata_path": "contracts/v1/portfolio/approved-revision-metadata-valid.json",
+    "owner_edit_path": "contracts/v1/portfolio/owner-edit-valid.json",
+    "authorized_facts_path": "contracts/v1/portfolio/authorized-deployment-facts-valid.json"
+  },
+  "graph": {
+    "renamed_project": "Foundation standard project — renamed",
+    "contender_a": "Foundation standard project — contender A",
+    "contender_b": "Foundation standard project — contender B",
+    "source_commit": "0123456789abcdef0123456789abcdef01234567"
+  }
+}

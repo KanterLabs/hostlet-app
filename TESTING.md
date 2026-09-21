@@ -57,11 +57,11 @@ assertions, assertions that only inspect fixtures, or an assertion that can
 never fail. Keep setup, seed data and test-mode switches explicit so that a
 green run demonstrates the product path rather than a test harness shortcut.
 
-The scaffold harness runs with `make e2e`; `make e2e-gate` requires a clean
+The foundation harness runs with `make e2e`; `make e2e-gate` requires a clean
 source tree and `make e2e-failure` deliberately fails one assertion to verify
 failed-run evidence. See [e2e/README.md](e2e/README.md) for prerequisites and
-scenario coverage. Foundation scenarios extend this runner as their behavior
-is implemented; a passing scaffold run alone does not complete M1.
+scenario coverage. `make e2e-scaffold` runs only the original API/web shell
+checks; a passing scaffold run alone does not complete M1.
 
 ## Run artifact contract
 

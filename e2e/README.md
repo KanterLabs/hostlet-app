@@ -1,9 +1,11 @@
 # Hostlet E2E runner
 
-`make e2e` starts the real Rust control API and Vite web server on run-owned
-loopback ports, calls the public HTTP endpoints, loads the web shell in Chromium,
-stops the API, and loads the web shell again to prove its offline state. It does
-not mock Hostlet code or use an in-memory replacement for a product dependency.
+`make e2e` runs the API/web shell scenarios and the M1 foundation module. The
+shell scenarios start real Rust and Vite processes on run-owned loopback ports,
+call HTTP endpoints, load Chromium, then stop the API to prove the offline UI.
+The foundation module adds real disposable PostgreSQL and authenticated HTTP
+scenarios. It does not mock Hostlet code or replace durable storage with memory.
+The acceptance inventory is [M1-SCENARIOS.md](../docs/M1-SCENARIOS.md).
 
 Every invocation creates `artifacts/e2e/M1/<run-id>/` before prerequisite checks
 or builds. The directory is private and ignored by Git. A handled pass, failure,
@@ -16,6 +18,7 @@ record; the next run marks any such prior record abandoned before starting.
 
 ```sh
 make e2e
+make e2e-scaffold
 make e2e-failure
 make e2e-gate
 ```
@@ -25,6 +28,20 @@ fact. `make e2e-gate` adds `--require-clean` and fails before process setup when
 tracked or untracked source changes exist. `make e2e-failure` uses
 `--inject-failure`; that integrity self-check deliberately falsifies one browser
 oracle, must return nonzero, and retains the full failed evidence bundle.
+`make e2e-scaffold` is the smaller API/web check; it cannot complete M1.
+
+Install the pinned Rust and Node toolchains, locked web dependencies, Make,
+Chromium (default `/snap/bin/chromium`), and a reachable Docker daemon. The
+foundation uses the exact PostgreSQL 18 image digest in `postgres-image.txt`.
+Each run creates a uniquely labeled container and named volume and removes only
+those resources. Database passwords, session tokens, and separate secret/recovery
+keys are generated in memory and never retained. A Docker named volume makes
+the PostgreSQL restart check preserve actual data; it is not a reset.
+
+Verify a finished bundle from its own directory with `sha256sum --check
+SHA256SUMS`, then compare `sha256sum SHA256SUMS` with the handoff receipt. Check
+the manifest's status, assertions, source identity and cleanup results as well:
+a valid checksum proves file integrity, not that a failed scenario passed.
 
 Run `node e2e/run.mjs --help` for optional paths, timeouts, milestone flags, and
 the repeatable `--scenario-module` extension hook. A module exports
@@ -45,8 +62,8 @@ recorded tree even before integration creates a commit.
 | `browser-connected` | Start Vite on another dynamic loopback port with its proxy targeting the run API; load it in installed Chromium. | Rendered DOM reports Online, Healthy, Not ready, the API version, protocol, and readiness reason; a screenshot and DOM are retained. | Browser is one-shot; terminate the owned Vite process group. |
 | `browser-offline` | Stop and reap the API while leaving Vite running, then load a fresh Chromium page. | Rendered DOM reports three Offline states and the three endpoint-specific unreachable messages. | Terminate Vite and delete browser profiles; retain only sanitized evidence. |
 
-Future cards extend the `SCENARIOS` registry in `run.mjs` and add real disposable
-PostgreSQL/worker/sandbox fixtures. They must retain public-boundary assertions,
+Foundation cards extend `foundation.mjs` and add real disposable
+PostgreSQL/worker fixtures. They must retain public-boundary assertions,
 run-owned resource cleanup, durable-data checks, and the same artifact contract;
 they do not create a parallel unit-test suite.
 
@@ -76,6 +93,5 @@ HTTP, browser, or artifact boundary.
 
 The runner itself is infrastructure, so the failure inventory also covers
 timeouts, cancellation, partial failure, resource leaks, recovery of incomplete
-records, and concurrency. Authentication and durable persistence are correctly
-inapplicable to the scaffold and remain future E2E work rather than simulated
-successes.
+records, and concurrency. Authentication and durable persistence are verified
+by the foundation module; the smaller scaffold-only command cannot prove them.

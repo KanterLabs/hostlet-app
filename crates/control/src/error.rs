@@ -34,6 +34,10 @@ struct ErrorBody {
 pub struct SafeJson<T>(pub T);
 
 impl ApiError {
+    pub(crate) fn is_database_unavailable(&self) -> bool {
+        self.code == "database_unavailable"
+    }
+
     pub fn bad_request(code: &'static str, message: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code, message)
     }

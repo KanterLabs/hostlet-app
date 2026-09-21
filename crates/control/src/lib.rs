@@ -10,6 +10,7 @@ mod graph;
 mod intent;
 mod jobs;
 mod portfolio_drafts;
+pub mod recovery;
 mod secrets;
 
 use std::{fmt, net::SocketAddr, str::FromStr};
@@ -129,7 +130,7 @@ pub async fn migrate(config: config::ProcessConfig) -> Result<(), MigrationCliEr
         return Err(MigrationCliError::DatabaseUrlRequired);
     };
     let (_, _, database_url, _) = config.into_runtime_parts();
-    db::run_migrations(&database_url)
+    db::run_migrations(&database_url, None)
         .await
         .map_err(MigrationCliError::Command)
 }

@@ -3,7 +3,7 @@
   "updated": "2026-09-21",
   "project": "HOST",
   "repository": "KanterLabs/hostlet-app",
-  "release": "Hostlet 0.1 — paid pilot readiness",
+  "release": "Hostlet 0.1 \u2014 paid pilot readiness",
   "release_status": "planned",
   "tasks": [
     {
@@ -21,7 +21,9 @@
       ],
       "depends_on": [],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-209",
@@ -39,7 +41,9 @@
         "HOST-241"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-210",
@@ -48,7 +52,7 @@
       "title": "Implement portfolio publication typed contract and fixtures",
       "goal": "Define the shared content, approval, deployment-fact, publication, and demo-readiness contract used by editable portfolios and independent static artifacts.",
       "acceptance": [
-        "Versioned types and fixtures cover profile, introduction, target role, skills, résumé and contact links, ordered project references, contributions, technical decisions, evidence, visibility, and readiness state.",
+        "Versioned types and fixtures cover profile, introduction, target role, skills, r\u00e9sum\u00e9 and contact links, ordered project references, contributions, technical decisions, evidence, visibility, and readiness state.",
         "Drafts, immutable approved revisions, authorized deployment facts, and owner edits are represented as separate states with an audit trail.",
         "Record positive and negative public-boundary scenarios for narrative, contribution, links, screenshots, contact and status approvals; compile typed fixtures now and verify the complete publication behavior in M3 E2E. Private repository access never substitutes for explicit publication approval.",
         "The contract states that static publication has no dashboard, GitHub, or application page-load dependency and that portfolios and external case studies consume no hosted project slot."
@@ -57,7 +61,9 @@
         "HOST-241"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-215",
@@ -76,7 +82,9 @@
         "HOST-210"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-216",
@@ -85,7 +93,7 @@
       "title": "Add project, service, deployment, and slot-state records",
       "goal": "Implement the authoritative project graph and release records so drafts, hosted resources, deployment facts, and portfolio references remain distinct.",
       "acceptance": [
-        "PostgreSQL records implement Account → Project → Service → Deployment ownership and support one repository or monorepo with the contract's service-count rules.",
+        "PostgreSQL records implement Account \u2192 Project \u2192 Service \u2192 Deployment ownership and support one repository or monorepo with the contract's service-count rules.",
         "Deployment records retain source commit, configuration revision, artifact references, health result, and database migration revision without secret values.",
         "Drafts, compatibility checks, portfolios, and external case studies have no hosted slot; first deployment, retained database failure, rollback, and removal states have explicit transitions.",
         "E2E scenarios submit duplicate and concurrent project/service/deployment intent requests through the running API and verify persisted transitions, no duplicate rows, and no dropped updates after a restart."
@@ -94,7 +102,9 @@
         "HOST-215"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-217",
@@ -112,7 +122,9 @@
         "HOST-216"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-218",
@@ -130,13 +142,15 @@
         "HOST-217"
       ],
       "milestone": "M1",
-      "is_gate": false
+      "is_gate": false,
+      "status": "active",
+      "dependency_state": "owned"
     },
     {
       "key": "HOST-242",
       "slug": "m1-foundation-stop",
       "phase": "milestone",
-      "title": "M1 stop — verify foundation E2E and hand off",
+      "title": "M1 stop \u2014 verify foundation E2E and hand off",
       "goal": "Stop after the durable foundation is proven through real API/process/PostgreSQL boundaries and a repeatable evidence bundle.",
       "acceptance": [
         "All M1 implementation cards are complete; no M2 or later work is claimed.",
@@ -148,7 +162,9 @@
         "HOST-218"
       ],
       "milestone": "M1",
-      "is_gate": true
+      "is_gate": true,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-219",
@@ -166,7 +182,9 @@
         "HOST-242"
       ],
       "milestone": "M2",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-220",
@@ -184,7 +202,9 @@
         "HOST-242"
       ],
       "milestone": "M2",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-221",
@@ -194,7 +214,7 @@
       "goal": "Analyze selected source without executing customer code and return actionable compatibility outcomes before payment or hosted capacity admission.",
       "acceptance": [
         "E2E repository-import and analysis requests inspect fixture lockfiles, roots, commands, framework markers and environment names through the running service; prove install scripts, builds, migrations and app code were not executed.",
-        "Reports distinguish the exact outcome `Looks compatible — deployment not yet verified`, Configuration needed, Database needed, Secrets needed, and Showcase-only unsupported outcomes with a reason and source location.",
+        "Reports distinguish the exact outcome `Looks compatible \u2014 deployment not yet verified`, Configuration needed, Database needed, Secrets needed, and Showcase-only unsupported outcomes with a reason and source location.",
         "The analyzer recognizes the selected Vite/static, single Node HTTP service, and documented Next.js patterns and rejects Docker Compose, custom servers, extra workers, and unsupported persistent-disk assumptions.",
         "A compatibility check creates no entitlement, hosted slot, deployment, or customer build allowance consumption."
       ],
@@ -202,7 +222,9 @@
         "HOST-219"
       ],
       "milestone": "M2",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-224",
@@ -220,13 +242,15 @@
         "HOST-221"
       ],
       "milestone": "M2",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-243",
       "slug": "m2-onboarding-stop",
       "phase": "milestone",
-      "title": "M2 stop — verify onboarding E2E and hand off",
+      "title": "M2 stop \u2014 verify onboarding E2E and hand off",
       "goal": "Stop after an owner can safely connect authorized source, inspect compatibility, preview a portfolio and exercise capacity admission without running untrusted prepurchase code.",
       "acceptance": [
         "All M2 implementation cards are complete; use M1 evidence and keep M3 work unclaimed.",
@@ -239,7 +263,9 @@
         "HOST-220"
       ],
       "milestone": "M2",
-      "is_gate": true
+      "is_gate": true,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-222",
@@ -257,7 +283,9 @@
         "HOST-243"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-223",
@@ -275,7 +303,9 @@
         "HOST-243"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-225",
@@ -293,7 +323,9 @@
         "HOST-243"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-227",
@@ -311,7 +343,9 @@
         "HOST-243"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-226",
@@ -331,7 +365,9 @@
         "HOST-223"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-229",
@@ -340,7 +376,7 @@
       "title": "Publish one independent static portfolio template",
       "goal": "Render an owner-approved portfolio revision into a durable static artifact that survives dashboard, GitHub, and application outages and proves the first internal milestone.",
       "acceptance": [
-        "One template renders introduction, featured projects, skills, résumé/contact links, and project detail evidence from the approved structured revision and referenced deployment facts.",
+        "One template renders introduction, featured projects, skills, r\u00e9sum\u00e9/contact links, and project detail evidence from the approved structured revision and referenced deployment facts.",
         "The publisher emits an immutable artifact and atomically advances a public pointer while retaining the last good artifact when rendering or upload fails.",
         "A browser E2E loads the published artifact from the independent static server after dashboard, GitHub and tenant endpoints are unavailable; assert content and links, not merely an HTTP 200 or screenshot.",
         "Portfolio publication and an external case study create no hosted project slot and cannot expose an unapproved private source field."
@@ -349,13 +385,15 @@
         "HOST-227"
       ],
       "milestone": "M3",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-233",
       "slug": "internal-journey-milestone",
       "phase": "launch",
-      "title": "M3 stop — prove the working demo and portfolio E2E",
+      "title": "M3 stop \u2014 prove the working demo and portfolio E2E",
       "goal": "Demonstrate the differentiating outcome with owned fixtures before any external pilot activity: exact source to isolated build, healthy release, project database, and reviewed static portfolio.",
       "acceptance": [
         "An owned fixture passes bounded compatibility, uses an internal entitlement, builds an exact commit in a disposable VM, and records the job, artifact, and meter evidence.",
@@ -370,7 +408,9 @@
         "HOST-229"
       ],
       "milestone": "M3",
-      "is_gate": true
+      "is_gate": true,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-228",
@@ -388,7 +428,9 @@
         "HOST-233"
       ],
       "milestone": "M4",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-230",
@@ -406,7 +448,9 @@
         "HOST-233"
       ],
       "milestone": "M4",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-231",
@@ -424,7 +468,9 @@
         "HOST-233"
       ],
       "milestone": "M4",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-232",
@@ -443,7 +489,9 @@
         "HOST-228"
       ],
       "milestone": "M4",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-234",
@@ -461,13 +509,15 @@
         "HOST-230"
       ],
       "milestone": "M4",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-244",
       "slug": "m4-product-behavior-stop",
       "phase": "milestone",
-      "title": "M4 stop — verify product lifecycle E2E and hand off",
+      "title": "M4 stop \u2014 verify product lifecycle E2E and hand off",
       "goal": "Stop after launch feature behavior is proven across templates, demo readiness, resource limits, test-mode billing and retention/export/deletion.",
       "acceptance": [
         "All M4 cards are complete; preserve M3 evidence and keep M5 work unclaimed.",
@@ -481,7 +531,9 @@
         "HOST-234"
       ],
       "milestone": "M4",
-      "is_gate": true
+      "is_gate": true,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-235",
@@ -493,13 +545,15 @@
         "A reproducible load run exercises full purchased slot use, tenant databases, builds, backups, traffic, payment fees, support allowance, rollout overlap, and spare/recovery capacity.",
         "The report records observed compatibility, enforcement thresholds, per-account cost, margin sensitivity, and metric variance for each candidate tier and resource allowance.",
         "Candidate limits remain labeled proposed until tests prove enforcement and isolation; unmeasured prices or allowances cannot be promoted by configuration alone.",
-        "The evidence package defines pilot metrics for activation, time to publish, demo durability, full-allowance cost, support load, résumé use, and post-job-search retention."
+        "The evidence package defines pilot metrics for activation, time to publish, demo durability, full-allowance cost, support load, r\u00e9sum\u00e9 use, and post-job-search retention."
       ],
       "depends_on": [
         "HOST-244"
       ],
       "milestone": "M5",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-236",
@@ -517,7 +571,9 @@
         "HOST-235"
       ],
       "milestone": "M5",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-237",
@@ -535,7 +591,9 @@
         "HOST-236"
       ],
       "milestone": "M5",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-238",
@@ -553,13 +611,15 @@
         "HOST-236"
       ],
       "milestone": "M5",
-      "is_gate": false
+      "is_gate": false,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-239",
       "slug": "paid-pilot-readiness",
       "phase": "launch",
-      "title": "M5 stop — verify pilot readiness evidence without launching",
+      "title": "M5 stop \u2014 verify pilot readiness evidence without launching",
       "goal": "Assemble the evidence required for a small paid pilot while keeping contact, deployment, charging, and production changes explicitly outside this implementation task.",
       "acceptance": [
         "A clean-source verification records pinned toolchains, both lockfiles, source revisions, make check and passing milestone E2E bundles with verified checksums and clean-repeat results; static checks and legacy unit tests alone never satisfy readiness.",
@@ -567,14 +627,16 @@
         "The recovery gate links populated platform and tenant migration checks, pre-upgrade backups, restore/export drills, cancellation/deletion evidence, and observed recovery timings.",
         "The economics and metrics gate links full-use cost evidence, the reviewed test catalog, capacity headroom, fixture-verified instrumentation, and a collection plan for activation, publishing, durability, support and retention; real pilot outcomes are measured after launch.",
         "The resulting record is readiness only: it performs no customer contact, provider purchase, infrastructure deployment, DNS cutover, live charge, or external pilot admission.",
-        "Verify the M5 TESTING.md bundle and linked M1–M4 bundle hashes, reproduce required scenarios and cost/load evidence, and STOP with the readiness handoff; do not launch or silently widen scope."
+        "Verify the M5 TESTING.md bundle and linked M1\u2013M4 bundle hashes, reproduce required scenarios and cost/load evidence, and STOP with the readiness handoff; do not launch or silently widen scope."
       ],
       "depends_on": [
         "HOST-238",
         "HOST-237"
       ],
       "milestone": "M5",
-      "is_gate": true
+      "is_gate": true,
+      "status": "backlog",
+      "dependency_state": "dependency_blocked"
     }
   ],
   "testing_policy": {
@@ -583,7 +645,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Policy and planned acceptance only; the E2E runner and product milestone artifacts are not implemented yet. Existing make check includes legacy tests and is not product E2E evidence."
+    "current_status": "M1 foundation through HOST-217 has clean E2E evidence. All 53 assertions, including eight recovery scenarios, pass in the HOST-218 diagnostic full run. Clean recovery repeat and HOST-242 handoff remain; M1 is not complete yet. Routine make check is not product E2E evidence."
   },
   "milestones": [
     {
@@ -672,5 +734,14 @@
       "artifact_path": "artifacts/e2e/M5/<run-id>/",
       "stop_after_gate": true
     }
-  ]
+  ],
+  "execution_snapshot": {
+    "read_at": "2026-09-21T22:46:42.773757823Z",
+    "project_revision": 11510,
+    "completed": 6,
+    "active": 1,
+    "backlog": 24,
+    "active_task": "HOST-218",
+    "assigned_stop": "HOST-242"
+  }
 }

@@ -943,4 +943,13 @@ export async function runJobScenarios({
       };
     },
   );
+
+  return Object.freeze({
+    project,
+    service,
+    otherService,
+    secretMetadata: state.secrets,
+    secretVersions: state.versions,
+    allowedSecretValue: state.values.allowed,
+  });
 }

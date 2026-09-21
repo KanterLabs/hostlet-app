@@ -17,6 +17,7 @@ export class OwnedPostgres {
     const suffix = resourceSuffix(context.state.runId);
     this.containerName = `hostlet-pg-${suffix}`;
     this.volumeName = `hostlet-pgdata-${suffix}`;
+    this.recoveryDatabaseName = `hostlet_recovery_${suffix.replace(/[^a-z0-9]/g, "_").slice(-36)}`;
     this.commandSequence = 0;
     this.cleanupPromise = null;
     context.registerCleanup("run-owned PostgreSQL container and volume", () =>
@@ -26,6 +27,15 @@ export class OwnedPostgres {
 
   get databaseUrl() {
     return `postgresql://${POSTGRES_USER}:${encodeURIComponent(this.password)}@127.0.0.1:${this.hostPort}/${POSTGRES_DB}`;
+  }
+
+  get recoveryDatabaseUrl() {
+    return this.databaseUrlFor(this.recoveryDatabaseName);
+  }
+
+  databaseUrlFor(databaseName) {
+    if (!/^[a-z0-9_]+$/.test(databaseName)) throw new Error("unsafe E2E database name");
+    return `postgresql://${POSTGRES_USER}:${encodeURIComponent(this.password)}@127.0.0.1:${this.hostPort}/${databaseName}`;
   }
 
   dockerEnvironment() {
@@ -199,6 +209,11 @@ export class OwnedPostgres {
   }
 
   async psqlJson(label, sql) {
+    return this.psqlJsonDatabase(label, POSTGRES_DB, sql);
+  }
+
+  async psqlJsonDatabase(label, databaseName, sql) {
+    if (!/^[a-z0-9_]+$/.test(databaseName)) throw new Error("unsafe E2E database name");
     const result = await this.command(`psql-${label}`, [
       "exec",
       this.containerName,
@@ -211,7 +226,7 @@ export class OwnedPostgres {
       "--username",
       POSTGRES_USER,
       "--dbname",
-      POSTGRES_DB,
+      databaseName,
       "--command",
       sql,
     ]);
@@ -223,7 +238,35 @@ export class OwnedPostgres {
     }
   }
 
+  async createRecoveryDatabase() {
+    await this.createDatabase(this.recoveryDatabaseName);
+    return this.recoveryDatabaseName;
+  }
+
+  async dropRecoveryDatabase() {
+    await this.dropDatabase(this.recoveryDatabaseName);
+  }
+
+  async createDatabase(databaseName) {
+    if (!/^[a-z0-9_]+$/.test(databaseName)) throw new Error("unsafe E2E database name");
+    await this.psqlCommand(`create-database-${databaseName}`, `CREATE DATABASE ${databaseName};`);
+  }
+
+  async dropDatabase(databaseName) {
+    if (!/^[a-z0-9_]+$/.test(databaseName)) throw new Error("unsafe E2E database name");
+    if (databaseName === POSTGRES_DB) throw new Error("refusing to drop the E2E source database");
+    await this.psqlCommand(
+      `drop-database-${databaseName}`,
+      `DROP DATABASE IF EXISTS ${databaseName} WITH (FORCE);`,
+    );
+  }
+
   async psqlCommand(label, sql) {
+    return this.psqlCommandDatabase(label, POSTGRES_DB, sql);
+  }
+
+  async psqlCommandDatabase(label, databaseName, sql) {
+    if (!/^[a-z0-9_]+$/.test(databaseName)) throw new Error("unsafe E2E database name");
     const result = await this.command(`psql-${label}`, [
       "exec",
       this.containerName,
@@ -234,7 +277,7 @@ export class OwnedPostgres {
       "--username",
       POSTGRES_USER,
       "--dbname",
-      POSTGRES_DB,
+      databaseName,
       "--command",
       sql,
     ]);
@@ -380,6 +423,9 @@ export class OwnedPostgres {
             result: "retained: Docker removal failed",
           });
         } else {
+          if (await this.findOwnedContainer({ cleanup: true })) {
+            throw new Error("run-owned PostgreSQL container remained after successful removal command");
+          }
           this.context.state.cleanup.push({
             resource: this.containerName,
             action: `${reason}; remove exact labeled run-owned PostgreSQL container`,
@@ -417,6 +463,9 @@ export class OwnedPostgres {
             result: "retained: Docker removal failed",
           });
         } else {
+          if (await this.findOwnedVolume({ cleanup: true })) {
+            throw new Error("run-owned PostgreSQL volume remained after successful removal command");
+          }
           this.context.state.cleanup.push({
             resource: this.volumeName,
             action: `${reason}; remove exact labeled run-owned PostgreSQL data volume`,

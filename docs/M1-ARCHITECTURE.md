@@ -415,13 +415,13 @@ the source oracle:
 
 | Assertion IDs | Source scenario heading |
 | --- | --- |
-| `M1-HARNESS-01` through `M1-HARNESS-03` | Harness: real boundaries, failing evidence, and clean repeat |
+| `api-*`, `browser-*`, `source-policy`, `gate-source-stable`, `required-assertions-complete`, `artifact-credentials-absent` | Harness: real boundaries and per-run integrity; failed-run receipts and clean repeats are linked in the milestone handoff |
 | `M1-CONTRACT-01` and `M1-CONTRACT-02` | Harness: standard-project and portfolio contract fixtures |
 | `M1-AUTH-01` through `M1-AUTH-06` | Accounts, authentication and durable ownership |
 | `M1-GRAPH-01` through `M1-GRAPH-05` | Project graph and release records |
 | `M1-JOB-01` through `M1-JOB-06` | Durable jobs and scoped credentials |
 | `M1-RECOVERY-01` through `M1-RECOVERY-08` | Additive upgrades, backup and recovery |
-| `M1-GATE-01` | Gate and evidence handoff |
+| HOST-242 handoff and verified external receipts | Gate: review all required assertions, failed-run evidence, cleanup and clean repeats before completion |
 
 Numbering follows bullet order within each named source section. A scenario
 change updates this mapping and the harness assertion list together. E2E is the

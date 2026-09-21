@@ -1,0 +1,10 @@
+{
+  "manifest_schema_version": 1,
+  "role": "schema-v3-retained-control",
+  "source_commit": "c78d9a2857bdb6a741cf7c67a8bd89acd4781767",
+  "binary_sha256": "f68b958e98842992bb542c8b5a1ddb7f3ed043f1b33c8d16f56ab3635fe6cb40",
+  "cache_path": ".local/retained/c78d9a2857bdb6a741cf7c67a8bd89acd4781767/hostlet-control",
+  "cargo_package": "hostlet-control",
+  "cargo_binary": "hostlet-control",
+  "database_schema_version": 3
+}

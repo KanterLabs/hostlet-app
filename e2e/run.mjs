@@ -4,9 +4,11 @@ import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -31,6 +33,7 @@ const args = {
   chromium: process.env.HOSTLET_E2E_CHROMIUM || DEFAULT_CHROMIUM,
   requireClean: false,
   injectFailure: false,
+  rebuildRetained: false,
   operationTimeoutMs: 30_000,
   runTimeoutMs: 180_000,
   scenarioModules: [],
@@ -49,6 +52,7 @@ Options:
   --scenario-module PATH    Append a scenario module exporting a scenario object
   --require-clean           Fail unless the source tree is clean
   --inject-failure          Deliberately falsify one browser oracle and fail
+  --rebuild-retained        Force a fresh retained schema-3 binary build
   --help                    Show this help without creating a run
 `;
 }
@@ -76,6 +80,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
     else if (argument === "--scenario-module") args.scenarioModules.push(resolve(REPO, next()));
     else if (argument === "--require-clean") args.requireClean = true;
     else if (argument === "--inject-failure") args.injectFailure = true;
+    else if (argument === "--rebuild-retained") args.rebuildRetained = true;
     else throw new Error(`unknown argument: ${argument}`);
   } catch (error) {
     parseError = error;
@@ -110,6 +115,12 @@ chmodSync(artifactDir, 0o700);
 
 const effectiveRunnerArgs = [...process.argv.slice(2)];
 if (!effectiveRunnerArgs.includes("--chromium")) effectiveRunnerArgs.push("--chromium", args.chromium);
+const effectiveRunnerCommand = [
+  process.execPath,
+  ...process.execArgv,
+  "e2e/run.mjs",
+  ...effectiveRunnerArgs,
+];
 
 const state = {
   schemaVersion: 1,
@@ -125,9 +136,9 @@ const state = {
   source: {},
   harness: {},
   command: {
-    argv: process.argv,
-    effective: shellJoin([process.execPath, "e2e/run.mjs", ...effectiveRunnerArgs]),
-    rerun: shellJoin([process.execPath, "e2e/run.mjs", ...effectiveRunnerArgs]),
+    argv: [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
+    effective: shellJoin(effectiveRunnerCommand),
+    rerun: shellJoin(effectiveRunnerCommand),
     workingDirectory: "$REPO",
   },
   configuration: {
@@ -136,6 +147,7 @@ const state = {
     operationTimeoutMs: args.operationTimeoutMs,
     runTimeoutMs: args.runTimeoutMs,
     requireClean: args.requireClean,
+    rebuildRetained: args.rebuildRetained,
     artifactVisibility: "private; ignored by Git",
     deterministicSeed: "hostlet-e2e-m1-v1",
     environmentCapture: "disabled; only named non-secret configuration is recorded",
@@ -315,15 +327,31 @@ function sourceIdentity() {
     statusEntryCount: status ? status.split("\n").length : 0,
     diffSha256: sha256(`${diff}\n${untrackedReceipt}`),
   };
+  const crashBeforeReceiptFixture = join(
+    REPO,
+    "e2e",
+    "faults",
+    "crash-before-receipt.cjs",
+  );
+  const harnessFiles = [
+    join(REPO, "e2e", "README.md"),
+    join(REPO, "e2e", "run.mjs"),
+    join(REPO, "e2e", "scenarios", "scaffold.mjs"),
+    crashBeforeReceiptFixture,
+    join(REPO, "Makefile"),
+    join(REPO, "web", "vite.config.ts"),
+  ];
   state.harness = {
-    revisionSha256: treeDigest([
-      join(REPO, "e2e", "README.md"),
-      join(REPO, "e2e", "run.mjs"),
-      join(REPO, "e2e", "scenarios", "scaffold.mjs"),
-      join(REPO, "Makefile"),
-      join(REPO, "web", "vite.config.ts"),
-    ]),
-    files: ["e2e/README.md", "e2e/run.mjs", "e2e/scenarios/scaffold.mjs", "Makefile", "web/vite.config.ts"],
+    revisionSha256: treeDigest(harnessFiles),
+    files: harnessFiles.map((path) => relative(REPO, path)),
+    fixtures: existsSync(crashBeforeReceiptFixture)
+      ? [
+        {
+          path: relative(REPO, crashBeforeReceiptFixture),
+          sha256: fileSha256(crashBeforeReceiptFixture),
+        },
+      ]
+      : [],
   };
   assertion(
     "source-policy",
@@ -335,6 +363,97 @@ function sourceIdentity() {
   if (args.requireClean && state.source.dirty) throw new Error("gate requires a clean source tree");
 }
 
+function inspectArtifactFiles(root, prefix = "") {
+  const files = [];
+  for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
+    const name = join(prefix, entry.name);
+    if (name.includes("\\") || name.includes("\r") || name.includes("\n")) {
+      return { valid: false, reason: "artifact contains an unsafe file name", files: [] };
+    }
+    if (entry.isSymbolicLink()) {
+      return { valid: false, reason: "artifact contains a symbolic link", files: [] };
+    }
+    if (entry.isDirectory()) {
+      const nested = inspectArtifactFiles(root, name);
+      if (!nested.valid) return nested;
+      files.push(...nested.files);
+    } else if (entry.isFile()) {
+      if (name !== "SHA256SUMS") files.push(name);
+    } else {
+      return { valid: false, reason: "artifact contains an unsupported file type", files: [] };
+    }
+  }
+  return { valid: true, reason: null, files: files.sort() };
+}
+
+function validateCommittedReceipt(directory) {
+  try {
+    const receiptPath = join(directory, "SHA256SUMS");
+    if (!existsSync(receiptPath)) return { valid: false, reason: "receipt is missing" };
+    const receiptInfo = lstatSync(receiptPath);
+    if (!receiptInfo.isFile() || receiptInfo.isSymbolicLink()) {
+      return { valid: false, reason: "receipt is not a regular file" };
+    }
+    if (receiptInfo.size === 0) return { valid: false, reason: "receipt is empty" };
+    if (receiptInfo.size > 4 * 1024 * 1024) {
+      return { valid: false, reason: "receipt exceeds the recovery validation limit" };
+    }
+
+    const inspection = inspectArtifactFiles(directory);
+    if (!inspection.valid) return { valid: false, reason: inspection.reason };
+    const lines = readFileSync(receiptPath, "utf8").split(/\r?\n/);
+    if (lines.at(-1) === "") lines.pop();
+    if (lines.length === 0 || lines.some((line) => line.length === 0)) {
+      return { valid: false, reason: "receipt has no complete entries" };
+    }
+
+    const seen = new Set();
+    for (const line of lines) {
+      const match = /^([0-9a-f]{64})  ([^\r\n]+)$/.exec(line);
+      if (!match) return { valid: false, reason: "receipt entry is malformed" };
+      const [, expectedHash, name] = match;
+      if (
+        name === "SHA256SUMS"
+        || name.startsWith("/")
+        || name.includes("\\")
+        || name.split("/").some((part) => part === "" || part === "." || part === "..")
+        || seen.has(name)
+      ) {
+        return { valid: false, reason: "receipt entry path is unsafe or duplicated" };
+      }
+      const path = resolve(directory, name);
+      if (!path.startsWith(`${directory}${sep}`) || relative(directory, path) !== name) {
+        return { valid: false, reason: "receipt entry escapes or aliases the artifact directory" };
+      }
+      if (!existsSync(path)) return { valid: false, reason: "receipt entry is missing" };
+      const info = lstatSync(path);
+      if (!info.isFile() || info.isSymbolicLink()) {
+        return { valid: false, reason: "receipt entry is not a regular artifact file" };
+      }
+      if (fileSha256(path) !== expectedHash) {
+        return { valid: false, reason: "receipt entry hash does not match" };
+      }
+      seen.add(name);
+    }
+
+    if (
+      seen.size !== inspection.files.length
+      || inspection.files.some((name) => !seen.has(name))
+    ) {
+      return { valid: false, reason: "receipt does not cover every retained artifact file" };
+    }
+    return { valid: true, reason: null };
+  } catch {
+    return { valid: false, reason: "receipt could not be verified" };
+  }
+}
+
+function preserveInvalidReceipt(directory) {
+  const receiptPath = join(directory, "SHA256SUMS");
+  if (!existsSync(receiptPath)) return;
+  renameSync(receiptPath, join(directory, `SHA256SUMS.incomplete-${runId}`));
+}
+
 function markAbandonedRuns() {
   const milestoneDir = join(args.artifactRoot, args.milestone);
   if (!existsSync(milestoneDir)) return;
@@ -344,22 +463,58 @@ function markAbandonedRuns() {
     const priorManifest = join(priorDir, "manifest.json");
     if (!existsSync(priorManifest)) continue;
     try {
+      const priorDirectoryInfo = lstatSync(priorDir);
+      const priorManifestInfo = lstatSync(priorManifest);
+      if (
+        !priorDirectoryInfo.isDirectory()
+        || priorDirectoryInfo.isSymbolicLink()
+        || !priorManifestInfo.isFile()
+        || priorManifestInfo.isSymbolicLink()
+      ) {
+        throw new Error("prior artifact directory or manifest is not a regular local record");
+      }
       const prior = JSON.parse(readFileSync(priorManifest, "utf8"));
-      if (prior.status !== "running" || prior.runner?.hostname !== hostname()) continue;
+      const receipt = validateCommittedReceipt(priorDir);
+      if (prior.status !== "running" && receipt.valid) continue;
+      if (prior.runner?.hostname !== hostname()) continue;
+      if (!Number.isSafeInteger(prior.runner?.pid) || prior.runner.pid <= 0) {
+        throw new Error("prior artifact has no valid runner PID");
+      }
       try {
         process.kill(prior.runner.pid, 0);
         continue;
-      } catch {
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          throw new Error("could not establish whether the prior runner is alive");
+        }
         // A dead same-host PID means the prior runner cannot finalize itself.
       }
+      const priorStatus = prior.status;
       prior.status = "abandoned";
       prior.endedAt = new Date().toISOString();
-      prior.errors ||= [];
-      prior.errors.push({ phase: "recovery", kind: "hard-interruption", message: `marked abandoned by ${runId}; prior PID was not alive` });
+      if (!Array.isArray(prior.errors)) prior.errors = [];
+      prior.errors.push({
+        phase: "recovery",
+        kind: "hard-interruption",
+        message: priorStatus === "running"
+          ? `marked abandoned by ${runId}; prior PID was not alive`
+          : `marked abandoned by ${runId}; terminal status ${priorStatus} lacked a valid committed receipt: ${receipt.reason}`,
+      });
+      preserveInvalidReceipt(priorDir);
+      renameSync(priorManifest, join(priorDir, `manifest.before-recovery-${runId}.json`));
       writeFileSync(priorManifest, `${JSON.stringify(prior, null, 2)}\n`, { mode: 0o600 });
       const priorReport = join(priorDir, "REPORT.md");
-      appendFileSync(priorReport, `\nRecovered status: **ABANDONED**\n\nThe next runner found the recorded process absent. This run cannot pass a gate.\n`);
-      writeChecksums(priorDir);
+      const inspection = inspectArtifactFiles(priorDir);
+      if (inspection.valid) {
+        appendFileSync(priorReport, `\nRecovered status: **ABANDONED**\n\nThe next runner found no live process and no valid committed receipt. This run cannot pass a gate.\n`);
+        writeChecksums(priorDir);
+      } else {
+        state.errors.push({
+          phase: "recovery",
+          kind: "warning",
+          message: `marked prior run ${entry} abandoned without a receipt: ${inspection.reason}`,
+        });
+      }
     } catch (error) {
       state.errors.push({ phase: "recovery", kind: "warning", message: `could not inspect prior run ${entry}: ${redact(error.message)}` });
     }
@@ -742,6 +897,13 @@ async function captureBrowser(label, webUrl) {
     ],
     { timeoutMs: args.operationTimeoutMs, logName: `chromium-${label}.log` },
   );
+  if (existsSync(screenshot)) {
+    const screenshotInfo = lstatSync(screenshot);
+    if (!screenshotInfo.isFile() || screenshotInfo.isSymbolicLink()) {
+      throw new Error(`Chromium ${label} screenshot is not a regular file`);
+    }
+    chmodSync(screenshot, 0o600);
+  }
   writeFileSync(domPath, result.stdout, { mode: 0o600 });
   rmSync(profile, { recursive: true, force: true });
   state.cleanup.push({ resource: `Chromium ${label} profile`, action: "delete run-owned temporary profile", result: "removed" });
@@ -968,7 +1130,7 @@ function makeReport() {
     "",
     `Status: **${state.status.toUpperCase()}**`,
     "",
-    `- Task / milestone: HOST-241 / ${state.milestone}`,
+    `- Task / milestone: ${state.task} / ${state.milestone}`,
     `- Started: ${state.startedAt}`,
     `- Ended: ${state.endedAt}`,
     `- Source: ${state.source.commit || "unavailable"} (${state.source.dirty ? "dirty local tree" : "clean tree"})`,
@@ -1011,9 +1173,18 @@ function listFiles(root, prefix = "") {
 }
 
 function writeChecksums(directory) {
-  const files = listFiles(directory);
+  const inspection = inspectArtifactFiles(directory);
+  if (!inspection.valid) throw new Error(`refusing to receipt unsafe artifacts: ${inspection.reason}`);
+  const files = inspection.files;
+  if (files.length === 0) throw new Error("refusing to create an empty artifact receipt");
   const receipt = files.map((name) => `${fileSha256(join(directory, name))}  ${name}`).join("\n");
-  writeFileSync(join(directory, "SHA256SUMS"), `${receipt}\n`, { mode: 0o600 });
+  const receiptPath = join(directory, "SHA256SUMS");
+  writeFileSync(receiptPath, `${receipt}\n`, { flag: "wx", mode: 0o600 });
+  const receiptInfo = lstatSync(receiptPath);
+  if (!receiptInfo.isFile() || receiptInfo.isSymbolicLink() || receiptInfo.nlink !== 1) {
+    throw new Error("artifact receipt is not a private regular file");
+  }
+  chmodSync(receiptPath, 0o600);
 }
 
 function sanitizeArtifactValue(value, key = "") {

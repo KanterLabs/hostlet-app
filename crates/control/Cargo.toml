@@ -21,6 +21,7 @@ chacha20poly1305.workspace = true
 hmac.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

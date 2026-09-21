@@ -5,8 +5,8 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-pub const READER_SCHEMA_VERSION: i64 = 3;
-const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
+pub const READER_SCHEMA_VERSION: i64 = 4;
+pub(crate) const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
@@ -36,6 +36,7 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "public.job_attempts",
     "public.job_secret_refs",
     "public.job_effects",
+    "public.platform_backup_receipts",
 ];
 
 pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
@@ -47,6 +48,9 @@ pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
         .acquire_timeout(Duration::from_secs(2))
         .after_connect(|connection, _| {
             Box::pin(async move {
+                sqlx::query("SET search_path = public, pg_temp")
+                    .execute(&mut *connection)
+                    .await?;
                 sqlx::query("SET statement_timeout = '5s'")
                     .execute(&mut *connection)
                     .await?;
@@ -90,15 +94,39 @@ impl SchemaProblem {
     }
 }
 
+pub struct SchemaPrefix {
+    pub database_identity_id: uuid::Uuid,
+    pub current_version: i64,
+    pub minimum_reader_version: i64,
+    pub pending_versions: Vec<i64>,
+}
+
 pub async fn check_schema(pool: &PgPool) -> Result<(), SchemaProblem> {
-    if !embedded_migrations_are_ordered() {
-        return Err(SchemaProblem::InvalidMigrationOrder);
-    }
     let mut connection = pool
         .acquire()
         .await
         .map_err(|_| SchemaProblem::DatabaseUnavailable)?;
+    let prefix = inspect_prefix(&mut connection).await?;
+    if !prefix.pending_versions.is_empty() {
+        return Err(SchemaProblem::PendingMigration);
+    }
+    Ok(())
+}
 
+/// Inspect an existing, contiguous migration prefix without requiring pending
+/// additive migrations. Recovery uses this on the same snapshot connection.
+pub(crate) async fn inspect_schema_prefix(
+    connection: &mut PgConnection,
+) -> Result<SchemaPrefix, MigrationCommandError> {
+    inspect_prefix(connection)
+        .await
+        .map_err(|problem| MigrationCommandError::new(problem.readiness_reason()))
+}
+
+async fn inspect_prefix(connection: &mut PgConnection) -> Result<SchemaPrefix, SchemaProblem> {
+    if !embedded_migrations_are_ordered() {
+        return Err(SchemaProblem::InvalidMigrationOrder);
+    }
     let ledger_exists: bool =
         sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
             .fetch_one(&mut *connection)
@@ -107,13 +135,13 @@ pub async fn check_schema(pool: &PgPool) -> Result<(), SchemaProblem> {
     if !ledger_exists {
         return Err(SchemaProblem::MissingMigrationLedger);
     }
-
-    let applied: Vec<(i64, Vec<u8>, bool)> =
-        sqlx::query_as("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
-            .fetch_all(&mut *connection)
-            .await
-            .map_err(|_| SchemaProblem::DatabaseUnavailable)?;
-    if !applied_migrations_are_ordered(&applied) {
+    let applied: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT version, checksum, success FROM public._sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|_| SchemaProblem::DatabaseUnavailable)?;
+    if applied.is_empty() || !applied_migrations_are_ordered(&applied) {
         return Err(SchemaProblem::InvalidMigrationOrder);
     }
     if applied.iter().any(|(_, _, success)| !success) {
@@ -123,58 +151,71 @@ pub async fn check_schema(pool: &PgPool) -> Result<(), SchemaProblem> {
         .iter()
         .map(|(version, checksum, _)| (*version, checksum.as_slice()))
         .collect();
+    let mut pending_versions = Vec::new();
     for migration in MIGRATOR.iter() {
-        let Some(checksum) = applied_by_version.get(&migration.version) else {
-            return Err(SchemaProblem::PendingMigration);
-        };
-        if *checksum != migration.checksum.as_ref() {
-            return Err(SchemaProblem::ChangedMigration);
+        match applied_by_version.get(&migration.version) {
+            Some(checksum) if *checksum == migration.checksum.as_ref() => {}
+            Some(_) => return Err(SchemaProblem::ChangedMigration),
+            None => pending_versions.push(migration.version),
         }
     }
-
     let compatibility: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT current_version, min_reader_version \
-         FROM platform_schema_compatibility WHERE singleton = true",
-    )
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(|_| SchemaProblem::MissingCompatibility)?;
-    let Some((current_version, minimum_reader)) = compatibility else {
+        "SELECT current_version, min_reader_version FROM public.platform_schema_compatibility WHERE singleton = true"
+    ).fetch_optional(&mut *connection).await.map_err(|error| if error.as_database_error().and_then(|db| db.code()).as_deref() == Some("42P01") { SchemaProblem::MissingCompatibility } else { SchemaProblem::DatabaseUnavailable })?;
+    let Some((current_version, minimum_reader_version)) = compatibility else {
         return Err(SchemaProblem::MissingCompatibility);
     };
     let maximum_applied = applied
         .last()
         .map(|(version, _, _)| *version)
         .unwrap_or_default();
-    if current_version != maximum_applied || minimum_reader <= 0 || minimum_reader > current_version
+    if current_version != maximum_applied
+        || minimum_reader_version <= 0
+        || minimum_reader_version > current_version
     {
         return Err(SchemaProblem::InvalidCompatibility);
     }
-    if minimum_reader > READER_SCHEMA_VERSION {
+    if minimum_reader_version > READER_SCHEMA_VERSION {
         return Err(SchemaProblem::IncompatibleReader);
     }
-    // A ledger alone is not proof that a partial restore or manual operation
-    // left the application's relations and immutable identity intact.
+    let relation_count = match current_version {
+        1 => 7,
+        2 => 19,
+        3 => 25,
+        _ => REQUIRED_RELATIONS.len(),
+    };
     let relations_present: bool = sqlx::query_scalar(
         "SELECT bool_and(to_regclass(name) IS NOT NULL) FROM unnest($1::text[]) AS name",
     )
-    .bind(REQUIRED_RELATIONS)
+    .bind(&REQUIRED_RELATIONS[..relation_count])
     .fetch_one(&mut *connection)
     .await
     .map_err(|_| SchemaProblem::DatabaseUnavailable)?;
     if !relations_present {
         return Err(SchemaProblem::IncompleteSchema);
     }
-    let identity_present: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM database_identity WHERE singleton = true AND id IS NOT NULL)",
-    )
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(|_| SchemaProblem::IncompleteSchema)?;
-    if !identity_present {
-        return Err(SchemaProblem::IncompleteSchema);
-    }
-    Ok(())
+    let database_identity_id: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM public.database_identity WHERE singleton = true")
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(|error| {
+                if error
+                    .as_database_error()
+                    .and_then(|db| db.code())
+                    .as_deref()
+                    == Some("42P01")
+                {
+                    SchemaProblem::IncompleteSchema
+                } else {
+                    SchemaProblem::DatabaseUnavailable
+                }
+            })?;
+    Ok(SchemaPrefix {
+        database_identity_id: database_identity_id.ok_or(SchemaProblem::IncompleteSchema)?,
+        current_version,
+        minimum_reader_version,
+        pending_versions,
+    })
 }
 
 pub struct MigrationCommandError {
@@ -199,15 +240,27 @@ impl std::fmt::Display for MigrationCommandError {
 impl std::error::Error for MigrationCommandError {}
 
 impl MigrationCommandError {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         Self { code }
+    }
+
+    pub fn code(&self) -> &'static str {
+        self.code
     }
 }
 
-/// Initialize an explicitly selected empty database, or verify an already
-/// initialized compatible database. Populated upgrades remain closed until
-/// HOST-218 provides a verified encrypted backup receipt.
-pub async fn run_migrations(database_url: &str) -> Result<(), MigrationCommandError> {
+pub struct UpgradeBackup<'a> {
+    pub selection: crate::recovery::BackupSelection<'a>,
+    pub key: &'a crate::recovery::RecoveryKey,
+    pub maximum_age: Duration,
+}
+
+/// Initialize an explicitly selected empty database, or perform a serialized
+/// additive upgrade only after authenticating a fresh backup of this database.
+pub async fn run_migrations(
+    database_url: &str,
+    upgrade_backup: Option<UpgradeBackup<'_>>,
+) -> Result<(), MigrationCommandError> {
     if !embedded_migrations_are_ordered() {
         return Err(MigrationCommandError::new(
             "embedded_migration_order_invalid",
@@ -224,7 +277,7 @@ pub async fn run_migrations(database_url: &str) -> Result<(), MigrationCommandEr
     .await
     .map_err(|_| MigrationCommandError::new("database_connect_timeout"))?
     .map_err(|_| MigrationCommandError::new("database_unavailable"))?;
-    sqlx::raw_sql("SET statement_timeout = '120s'; SET lock_timeout = '30s'")
+    sqlx::raw_sql("SET search_path = public, pg_temp; SET statement_timeout = '120s'; SET lock_timeout = '30s'")
         .execute(&mut connection)
         .await
         .map_err(|_| MigrationCommandError::new("database_configuration_failed"))?;
@@ -233,74 +286,73 @@ pub async fn run_migrations(database_url: &str) -> Result<(), MigrationCommandEr
         .execute(&mut connection)
         .await
         .map_err(|_| MigrationCommandError::new("migration_lock_failed"))?;
-
     let ledger_exists: bool =
         sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
             .fetch_one(&mut connection)
             .await
             .map_err(|_| MigrationCommandError::new("schema_inspection_failed"))?;
-
     if !ledger_exists {
         if database_has_user_objects(&mut connection).await? {
             return Err(MigrationCommandError::new("initial_database_not_empty"));
         }
+        let mut transaction = connection
+            .begin()
+            .await
+            .map_err(|_| MigrationCommandError::new("migration_transaction_failed"))?;
         MIGRATOR
-            .run(&mut connection)
+            .run(&mut *transaction)
             .await
             .map_err(|_| MigrationCommandError::new("migration_apply_failed"))?;
+        inspect_schema_prefix(&mut transaction).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| MigrationCommandError::new("migration_commit_failed"))?;
         return Ok(());
     }
-
-    let applied: Vec<(i64, Vec<u8>, bool)> =
-        sqlx::query_as("SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version")
-            .fetch_all(&mut connection)
-            .await
-            .map_err(|_| MigrationCommandError::new("schema_inspection_failed"))?;
-    if !applied_migrations_are_ordered(&applied) {
-        return Err(MigrationCommandError::new("migration_order_invalid"));
+    let prefix = inspect_schema_prefix(&mut connection).await?;
+    if prefix.pending_versions.is_empty() {
+        return Ok(());
     }
-    if applied.iter().any(|(_, _, success)| !success) {
-        return Err(MigrationCommandError::new("failed_migration_present"));
-    }
-    let applied_by_version: HashMap<_, _> = applied
-        .iter()
-        .map(|(version, checksum, _)| (*version, checksum.as_slice()))
-        .collect();
-    let mut pending = false;
-    for migration in MIGRATOR.iter() {
-        match applied_by_version.get(&migration.version) {
-            Some(checksum) if *checksum == migration.checksum.as_ref() => {}
-            Some(_) => return Err(MigrationCommandError::new("migration_checksum_changed")),
-            None => pending = true,
-        }
-    }
-    if pending {
+    // Each populated upgrade has one explicit intended migration and backup.
+    if prefix.pending_versions != [prefix.current_version + 1] {
         return Err(MigrationCommandError::new(
-            "populated_upgrade_requires_verified_backup",
+            "populated_upgrade_requires_single_additive_step",
         ));
     }
-
-    let current: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT current_version, min_reader_version \
-         FROM platform_schema_compatibility WHERE singleton = true",
+    let backup = upgrade_backup
+        .ok_or_else(|| MigrationCommandError::new("populated_upgrade_requires_verified_backup"))?;
+    let verified = crate::recovery::verify_upgrade_for_locked_database(
+        &mut connection,
+        backup.selection,
+        backup.key,
+        crate::recovery::UpgradeExpectation {
+            source_schema_version: prefix.current_version,
+            intended_migration: prefix.pending_versions[0],
+            maximum_age: chrono::Duration::from_std(backup.maximum_age)
+                .map_err(|_| MigrationCommandError::new("backup_maximum_age_invalid"))?,
+        },
     )
-    .fetch_optional(&mut connection)
     .await
-    .map_err(|_| MigrationCommandError::new("schema_compatibility_missing"))?;
-    let Some((current_version, minimum_reader)) = current else {
-        return Err(MigrationCommandError::new("schema_compatibility_missing"));
-    };
-    let maximum_applied = applied
-        .last()
-        .map(|(version, _, _)| *version)
-        .unwrap_or_default();
-    if current_version != maximum_applied
-        || minimum_reader <= 0
-        || minimum_reader > current_version
-        || minimum_reader > READER_SCHEMA_VERSION
-    {
-        return Err(MigrationCommandError::new("schema_reader_incompatible"));
-    }
+    .map_err(|error| MigrationCommandError::new(error.code()))?;
+    // SQLx migrations are transactional. There is no reset, schema rollback,
+    // automatic restore, or destructive retry path.
+    let mut transaction = connection
+        .begin()
+        .await
+        .map_err(|_| MigrationCommandError::new("migration_transaction_failed"))?;
+    MIGRATOR
+        .run(&mut *transaction)
+        .await
+        .map_err(|_| MigrationCommandError::new("migration_apply_failed"))?;
+    crate::recovery::record_verified_upgrade(&mut transaction, &verified)
+        .await
+        .map_err(|error| MigrationCommandError::new(error.code()))?;
+    inspect_schema_prefix(&mut transaction).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| MigrationCommandError::new("migration_commit_failed"))?;
     Ok(())
 }
 
@@ -322,7 +374,7 @@ fn applied_migrations_are_ordered(applied: &[(i64, Vec<u8>, bool)]) -> bool {
         .all(|(index, (version, _, _))| *version == index as i64 + 1)
 }
 
-async fn database_has_user_objects(
+pub(crate) async fn database_has_user_objects(
     connection: &mut PgConnection,
 ) -> Result<bool, MigrationCommandError> {
     sqlx::query_scalar(

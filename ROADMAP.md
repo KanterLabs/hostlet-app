@@ -12,18 +12,19 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 unclaimed Backlog cards, 38 prerequisite links and
-five milestone stop gates** in one planned release. Every later milestone is
+The snapshot contains **31 cards (six complete, one active, 24 in Backlog),
+38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone is
 blocked by the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**HOST-241 — Build the real-process E2E runner and repeatable evidence bundle**
-is the only currently dependency-ready implementation card. It exercises the
-existing API/web scaffold truthfully and defines the actual rerun command and
-evidence format before feature work. HOST-209 and HOST-210 then establish the
-typed project and portfolio contracts. The runner is not implemented yet.
+**M1 is in progress at HOST-218 — populated platform backup and recovery.**
+HOST-241, HOST-209, HOST-210, HOST-215, HOST-216 and HOST-217 are complete.
+The foundation through jobs and scoped credentials has clean-source evidence.
+All eight recovery scenarios now pass in a diagnostic full run, including
+populated upgrade, retained-binary compatibility, separate restore and retention.
+The clean recovery repeat and HOST-242 handoff remain before the M1 stopping point.
 
 Keep future cards unclaimed until their prerequisites are complete and their
 milestone is in the assigned scope. Consult Helm for current claimability.

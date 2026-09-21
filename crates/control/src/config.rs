@@ -24,7 +24,7 @@ pub struct FoundationConfig {
 pub struct FoundationPrerequisites {
     pub worker_token_hash: Option<[u8; 32]>,
     pub secret_key: Option<Arc<crate::crypto::SecretKey>>,
-    pub recovery_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub recovery_key: Option<Arc<crate::recovery::RecoveryKey>>,
     pub worker_lease_seconds: i64,
 }
 
@@ -144,7 +144,7 @@ impl FoundationConfig {
                 .map(|key| Arc::new(crate::crypto::SecretKey::new(key.0))),
             recovery_key: self
                 .recovery_key
-                .map(|key| Arc::new(crate::crypto::SecretKey::new(key.0))),
+                .map(|key| Arc::new(crate::recovery::RecoveryKey::new(key.0))),
             worker_lease_seconds: self.worker_lease_seconds,
         };
         (
@@ -204,4 +204,30 @@ fn decode_hex(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+impl Drop for KeyMaterial {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.0.zeroize();
+    }
+}
+
+/// Recovery commands do not require a live source database, listener settings,
+/// worker authentication, or the secret-decryption key.
+pub fn recovery_key_from_env() -> Result<crate::recovery::RecoveryKey, FoundationConfigError> {
+    let key = optional_key("HOSTLET_RECOVERY_KEY")?.ok_or(FoundationConfigError {
+        variable: "HOSTLET_RECOVERY_KEY",
+        reason: "is required for recovery commands",
+    })?;
+    if let Some(encoded) = present_env("HOSTLET_SECRET_KEY")
+        && let Ok(secret) = decode_key("HOSTLET_SECRET_KEY", &encoded)
+        && secret.0 == key.0
+    {
+        return Err(FoundationConfigError {
+            variable: "HOSTLET_RECOVERY_KEY",
+            reason: "must differ from HOSTLET_SECRET_KEY",
+        });
+    }
+    Ok(crate::recovery::RecoveryKey::new(key.0))
 }

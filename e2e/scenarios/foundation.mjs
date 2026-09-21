@@ -5,6 +5,10 @@ import { scrubArtifactCredentials, scanArtifactForCredentials } from "../support
 import { createFoundationCredentials, credentialValues, productEnvironment } from "../support/credentials.mjs";
 import { OwnedPostgres } from "../support/docker-postgres.mjs";
 import {
+  registerRetainedFoundationFixtures,
+  resolveRetainedFoundationBinary,
+} from "../support/retained-foundation.mjs";
+import {
   GRAPH_REQUIRED_ASSERTIONS,
   registerGraphFixtures,
   runGraphScenarios,
@@ -14,6 +18,11 @@ import {
   registerJobFixtures,
   runJobScenarios,
 } from "./jobs.mjs";
+import {
+  RECOVERY_REQUIRED_ASSERTIONS,
+  registerRecoveryFixtures,
+  runRecoveryScenarios,
+} from "./recovery.mjs";
 import {
   assertAccountRecord,
   assertErrorShape,
@@ -34,6 +43,7 @@ const REQUIRED_ASSERTIONS = Object.freeze([
   "M1-AUTH-06",
   ...GRAPH_REQUIRED_ASSERTIONS,
   ...JOB_REQUIRED_ASSERTIONS,
+  ...RECOVERY_REQUIRED_ASSERTIONS,
 ]);
 
 function safeObserved(error) {
@@ -111,6 +121,8 @@ async function runFoundation(context) {
   context.registerFixture("M1 PostgreSQL image pin", "e2e/postgres-image.txt");
   const graphManifest = registerGraphFixtures(context);
   const jobManifest = registerJobFixtures(context);
+  const recoveryManifest = registerRecoveryFixtures(context);
+  const retainedManifest = registerRetainedFoundationFixtures(context);
   for (const support of [
     "artifact-safety.mjs",
     "credentials.mjs",
@@ -144,7 +156,9 @@ async function runFoundation(context) {
   });
   const apiUrl = `http://127.0.0.1:${apiPort}`;
   const workerUrl = `http://127.0.0.1:${workerPort}`;
-  const apiBinary = join(context.repo, "target", "debug", "hostlet-control");
+  const currentApiBinary = join(context.repo, "target", "debug", "hostlet-control");
+  const retainedApiBinary = await resolveRetainedFoundationBinary(context, retainedManifest);
+  let activeApiBinary = retainedApiBinary;
   const configuration = {
     databaseUrl: postgres.databaseUrl,
     apiBind: `127.0.0.1:${apiPort}`,
@@ -209,7 +223,7 @@ async function runFoundation(context) {
     apiSequence += 1;
     const processHandle = context.spawnManaged(
       `hostlet-control foundation ${apiSequence}`,
-      apiBinary,
+      activeApiBinary,
       [],
       { env: environmentForProbe(environmentOverrides, removeEnvironment) },
       `foundation-api-${apiSequence}.log`,
@@ -236,7 +250,7 @@ async function runFoundation(context) {
 
     const migration = await context.runCommand(
       "Hostlet foundation migration",
-      apiBinary,
+      activeApiBinary,
       ["migrate"],
       {
         env: apiEnvironment,
@@ -809,7 +823,7 @@ async function runFoundation(context) {
       other: { record: other, token: otherToken },
     });
 
-    await runJobScenarios({
+    const jobs = await runJobScenarios({
       context,
       manifest: jobManifest,
       postgres,
@@ -826,6 +840,36 @@ async function runFoundation(context) {
       graph,
       owner: { record: owner, token: ownerToken },
       other: { record: other, token: otherToken },
+    });
+
+    await runRecoveryScenarios({
+      context,
+      manifest: recoveryManifest,
+      postgres,
+      call,
+      callInternal,
+      callInternalSensitive,
+      switchApi: async (binary, databaseUrl, reason, options = {}) => {
+        if (api) {
+          await context.stopManaged(api, reason);
+          api = null;
+        }
+        if (options.stopOnly) return;
+        activeApiBinary = binary;
+        api = await startApi({
+          environmentOverrides: { DATABASE_URL: databaseUrl, ...(options.environmentOverrides ?? {}) },
+          removeEnvironment: options.removeEnvironment ?? [],
+          expectReady: options.expectReady ?? true,
+        });
+      },
+      environmentForProbe,
+      currentApiBinary,
+      retainedApiBinary,
+      graph,
+      jobs,
+      owner: { record: owner, token: ownerToken },
+      other: { record: other, token: otherToken },
+      workerToken: credentials.workerToken,
     });
 
     await step(

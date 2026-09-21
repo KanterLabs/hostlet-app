@@ -8,7 +8,9 @@ portfolio around working demos.
 
 **Status: local control foundation.** The API persists authenticated accounts,
 owner-scoped projects, immutable configurations, deployment intents, and portfolio
-drafts in PostgreSQL. The web application remains a status preview; it does not
+drafts in PostgreSQL. It also supports fenced bookkeeping jobs, service-scoped
+encrypted secrets, and verified platform backup, additive upgrade, and restore
+commands. The web application remains a status preview; it does not
 yet provide account or project-management screens. Customer hosting, GitHub
 integration, compatibility analysis, billing, tenant databases, builds, and
 portfolio publication belong to later milestones.
@@ -75,7 +77,11 @@ backup procedure; it never resets the database. See the
 [project/draft HTTP contract](docs/M1-GRAPH-API.md) for the current API boundaries.
 The [job contract](docs/M1-JOBS-API.md) and
 [secret metadata/version API](docs/M1-SECRETS.md) describe worker leases and
-scoped credential access.
+scoped credential access. The [recovery runbook](docs/M1-RECOVERY.md) documents
+encrypted PostgreSQL backups, the backup-gated schema-3-to-4 upgrade, retained
+binary compatibility, separate empty-target restore, and the hourly scheduler
+tick. M1 recovery has a 64 MiB plaintext dump limit and does not install a host
+timer or perform a production cutover.
 
 The builder and runtime offer `--version` and `--check-config`; their default
 execution continues to refuse customer work.

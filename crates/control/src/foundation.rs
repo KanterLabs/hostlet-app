@@ -25,7 +25,7 @@ pub struct FoundationState {
     pub pool: PgPool,
     pub worker_token_hash: Option<[u8; 32]>,
     pub secret_key: Option<Arc<crate::crypto::SecretKey>>,
-    pub recovery_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub recovery_key: Option<Arc<crate::recovery::RecoveryKey>>,
     pub worker_lease_seconds: i64,
 }
 
@@ -148,20 +148,31 @@ impl FoundationState {
             }
             Err(_) => return Err(ApiError::foundation_unavailable()),
         }
-        if self.worker_token_hash.is_none()
-            || self.secret_key.is_none()
-            || self.recovery_key.is_none()
-        {
+        if self.worker_token_hash.is_none() {
             return Err(ApiError::foundation_unavailable());
         }
-        crate::secrets::check_keyring(
-            &self.pool,
-            self.secret_key
-                .as_deref()
-                .ok_or_else(ApiError::foundation_unavailable)?,
-        )
-        .await?;
-        Ok(())
+        self.check_keyrings().await
+    }
+
+    async fn check_keyrings(&self) -> Result<(), ApiError> {
+        let secret_key = self
+            .secret_key
+            .as_deref()
+            .ok_or_else(ApiError::foundation_unavailable)?;
+        let recovery_key = self
+            .recovery_key
+            .as_deref()
+            .ok_or_else(ApiError::foundation_unavailable)?;
+        crate::secrets::check_keyring(&self.pool, secret_key).await?;
+        crate::recovery::check_keyring(&self.pool, recovery_key)
+            .await
+            .map_err(|error| {
+                if error.code() == "backup_key_receipt_check_failed" {
+                    ApiError::database_unavailable()
+                } else {
+                    ApiError::foundation_unavailable()
+                }
+            })
     }
 }
 
@@ -175,19 +186,20 @@ async fn readiness(
     axum::extract::State(state): axum::extract::State<FoundationState>,
 ) -> (StatusCode, Json<ReadinessResponse>) {
     let schema = db::check_schema(&state.pool).await;
-    let keys_ready = match (
-        schema.is_ok(),
-        state.secret_key.as_deref(),
-        state.recovery_key.as_deref(),
-    ) {
-        (true, Some(key), Some(_)) => crate::secrets::check_keyring(&state.pool, key)
-            .await
-            .is_ok(),
-        _ => false,
+    let keys = if schema.is_ok() {
+        state.check_keyrings().await
+    } else {
+        Err(ApiError::foundation_unavailable())
     };
+    let keys_ready = keys.is_ok();
+    let database_unavailable = matches!(schema, Err(db::SchemaProblem::DatabaseUnavailable))
+        || keys
+            .as_ref()
+            .is_err_and(|error| error.is_database_unavailable());
     let worker_ready = state.worker_token_hash.is_some();
     let reason = match schema {
         Err(problem) => Some(problem.readiness_reason()),
+        Ok(()) if database_unavailable => Some("database_unavailable"),
         Ok(()) if !keys_ready => Some("key_material_unavailable"),
         Ok(()) if !worker_ready => Some("worker_auth_unavailable"),
         Ok(()) => None,
@@ -205,7 +217,7 @@ async fn readiness(
             customer_admission: false,
             workload_execution: false,
             dependencies: ReadinessDependencies {
-                postgres: if matches!(schema, Err(db::SchemaProblem::DatabaseUnavailable)) {
+                postgres: if database_unavailable {
                     "unavailable"
                 } else {
                     "ready"

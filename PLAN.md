@@ -8,8 +8,9 @@ completed cards do not establish requirements or implementation evidence here.
 records the adopted planning rationale and detailed validation candidates, while
 [ROADMAP.md](ROADMAP.md) is the implementation ordering and dependency source.
 
-The current deliverable remains a local development scaffold. The product and
-lifecycle defaults below are adopted planning requirements for implementation;
+The current deliverable is the local M1 control foundation described in
+[README.md](README.md). The product and lifecycle defaults below are adopted
+planning requirements for implementation;
 they are not current capabilities, a published price catalog or permission to
 provision infrastructure. Resource numbers are starting benchmark targets, and
 $5/$12/$20 are pricing hypotheses subject to full-use validation. Provider,

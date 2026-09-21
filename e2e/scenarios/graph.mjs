@@ -1313,4 +1313,12 @@ export async function runGraphScenarios({
       };
     },
   );
+
+  return Object.freeze({
+    mainGraph: state.mainGraph,
+    otherGraph: state.otherGraph,
+    ownerGraphs: Object.fromEntries(state.ownerGraphs),
+    deployments: [state.deploymentOne, state.deploymentTwo],
+    portfolio: state.portfolio,
+  });
 }

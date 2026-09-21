@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "source_commits": {
+    "primary": "1111111111111111111111111111111111111111",
+    "secondary": "2222222222222222222222222222222222222222"
+  },
+  "secrets": {
+    "allowed": { "name": "e2e-source-read", "operation": "build", "credential_kind": "source_repository_read" },
+    "same_scope_undeclared": { "name": "e2e-build-environment", "operation": "build", "credential_kind": "build_environment" },
+    "other_service": { "name": "e2e-other-service", "operation": "build", "credential_kind": "source_repository_read" },
+    "production_database": { "name": "e2e-production-database", "operation": "build", "credential_kind": "production_database" },
+    "platform_management": { "name": "e2e-platform-management", "operation": "build", "credential_kind": "platform_management" }
+    ,"runtime_operation": { "name": "e2e-runtime-operation", "operation": "runtime", "credential_kind": "source_repository_read" }
+  },
+  "workers": {
+    "killed": "e2e-worker-killed",
+    "replacement": "e2e-worker-replacement",
+    "competitor_a": "e2e-worker-competitor-a",
+    "competitor_b": "e2e-worker-competitor-b",
+    "manual": "e2e-worker-manual"
+  },
+  "idempotency": {
+    "prefix": "m1-job"
+  }
+}

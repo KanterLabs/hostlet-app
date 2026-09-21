@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     Json, Router,
     extract::{Request, State},
@@ -21,14 +23,10 @@ use crate::{
 #[derive(Clone)]
 pub struct FoundationState {
     pub pool: PgPool,
-    prerequisites: FoundationReadiness,
-}
-
-#[derive(Clone)]
-struct FoundationReadiness {
-    worker_auth_configured: bool,
-    secret_key_configured: bool,
-    recovery_key_configured: bool,
+    pub worker_token_hash: Option<[u8; 32]>,
+    pub secret_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub recovery_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub worker_lease_seconds: i64,
 }
 
 pub struct FoundationServeError {
@@ -84,6 +82,8 @@ pub fn router(state: FoundationState) -> Router {
         .route("/v1/audit", get(auth::audit))
         .merge(graph::routes())
         .merge(crate::portfolio_drafts::routes())
+        .merge(crate::secrets::routes())
+        .merge(crate::jobs::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), require_ready));
     Router::new()
         .route("/healthz", get(crate::healthz))
@@ -104,24 +104,39 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
     let worker_listener = TcpListener::bind(worker_bind)
         .await
         .map_err(|_| FoundationServeError::new("worker_bind_failed"))?;
-    let api_server =
-        axum::serve(api_listener, router(state)).with_graceful_shutdown(crate::shutdown_signal());
-    let worker_server = axum::serve(worker_listener, Router::new())
+    let worker_router = crate::jobs::internal_routes()
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_ready))
+        .with_state(state.clone());
+    let api_server = axum::serve(api_listener, router(state.clone()))
         .with_graceful_shutdown(crate::shutdown_signal());
-    tokio::try_join!(async { api_server.await }, async { worker_server.await })
+    let worker_server = axum::serve(worker_listener, worker_router)
+        .with_graceful_shutdown(crate::shutdown_signal());
+    let reaper = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            if state.ensure_ready().await.is_ok() {
+                // Safe errors are observable through job state/readiness; no raw
+                // SQL error chains or job credentials enter process logs.
+                let _ = crate::jobs::reap_expired(&state.pool).await;
+            }
+        }
+    });
+    let result = tokio::try_join!(async { api_server.await }, async { worker_server.await })
         .map(|_| ())
-        .map_err(|_| FoundationServeError::new("server_failed"))
+        .map_err(|_| FoundationServeError::new("server_failed"));
+    reaper.abort();
+    result
 }
 
 impl FoundationState {
     fn new(pool: PgPool, prerequisites: FoundationPrerequisites) -> Self {
         Self {
             pool,
-            prerequisites: FoundationReadiness {
-                worker_auth_configured: prerequisites.worker_auth_configured,
-                secret_key_configured: prerequisites.secret_key_configured,
-                recovery_key_configured: prerequisites.recovery_key_configured,
-            },
+            worker_token_hash: prerequisites.worker_token_hash,
+            secret_key: prerequisites.secret_key,
+            recovery_key: prerequisites.recovery_key,
+            worker_lease_seconds: prerequisites.worker_lease_seconds,
         }
     }
 
@@ -133,12 +148,19 @@ impl FoundationState {
             }
             Err(_) => return Err(ApiError::foundation_unavailable()),
         }
-        if !self.prerequisites.worker_auth_configured
-            || !self.prerequisites.secret_key_configured
-            || !self.prerequisites.recovery_key_configured
+        if self.worker_token_hash.is_none()
+            || self.secret_key.is_none()
+            || self.recovery_key.is_none()
         {
             return Err(ApiError::foundation_unavailable());
         }
+        crate::secrets::check_keyring(
+            &self.pool,
+            self.secret_key
+                .as_deref()
+                .ok_or_else(ApiError::foundation_unavailable)?,
+        )
+        .await?;
         Ok(())
     }
 }
@@ -153,9 +175,17 @@ async fn readiness(
     axum::extract::State(state): axum::extract::State<FoundationState>,
 ) -> (StatusCode, Json<ReadinessResponse>) {
     let schema = db::check_schema(&state.pool).await;
-    let keys_ready =
-        state.prerequisites.secret_key_configured && state.prerequisites.recovery_key_configured;
-    let worker_ready = state.prerequisites.worker_auth_configured;
+    let keys_ready = match (
+        schema.is_ok(),
+        state.secret_key.as_deref(),
+        state.recovery_key.as_deref(),
+    ) {
+        (true, Some(key), Some(_)) => crate::secrets::check_keyring(&state.pool, key)
+            .await
+            .is_ok(),
+        _ => false,
+    };
+    let worker_ready = state.worker_token_hash.is_some();
     let reason = match schema {
         Err(problem) => Some(problem.readiness_reason()),
         Ok(()) if !keys_ready => Some("key_material_unavailable"),

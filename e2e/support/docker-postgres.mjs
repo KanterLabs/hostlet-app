@@ -49,6 +49,7 @@ export class OwnedPostgres {
     return {
       ...environment,
       POSTGRES_PASSWORD: this.password,
+      PGPASSWORD: this.password,
       POSTGRES_USER,
       POSTGRES_DB,
     };
@@ -139,10 +140,46 @@ export class OwnedPostgres {
     while (Date.now() < deadline) {
       const ready = await this.command(
         "pg-isready",
-        ["exec", this.containerName, "pg_isready", "-U", POSTGRES_USER, "-d", POSTGRES_DB],
+        [
+          "exec",
+          this.containerName,
+          "pg_isready",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "5432",
+          "--username",
+          POSTGRES_USER,
+          "--dbname",
+          POSTGRES_DB,
+        ],
         { allowFailure: true, timeoutMs: 5_000 },
       );
-      if (ready.code === 0) return;
+      if (ready.code === 0) {
+        const authenticated = await this.command(
+          "tcp-authenticated-select",
+          [
+            "exec",
+            "--env",
+            "PGPASSWORD",
+            this.containerName,
+            "psql",
+            "--no-psqlrc",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "5432",
+            "--username",
+            POSTGRES_USER,
+            "--dbname",
+            POSTGRES_DB,
+            "--command",
+            "SELECT 1;",
+          ],
+          { allowFailure: true, timeoutMs: 5_000 },
+        );
+        if (authenticated.code === 0) return;
+      }
       await this.context.delay(200);
     }
     throw new Error("run-owned PostgreSQL did not become ready within 30000ms");
@@ -202,6 +239,30 @@ export class OwnedPostgres {
       sql,
     ]);
     return { exitStatus: result.code };
+  }
+
+  spawnPsql(label, sql) {
+    this.commandSequence += 1;
+    return this.context.spawnManaged(
+      `Docker psql ${label}`,
+      "docker",
+      [
+        "exec",
+        this.containerName,
+        "psql",
+        "--no-psqlrc",
+        "--set",
+        "ON_ERROR_STOP=1",
+        "--username",
+        POSTGRES_USER,
+        "--dbname",
+        POSTGRES_DB,
+        "--command",
+        sql,
+      ],
+      { env: this.dockerEnvironment() },
+      `foundation-docker-${String(this.commandSequence).padStart(2, "0")}-psql-${label}.log`,
+    );
   }
 
   async psqlExpectFailure(label, sql, expectedSqlStates) {

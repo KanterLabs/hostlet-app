@@ -2,12 +2,15 @@
 
 mod auth;
 pub mod config;
+mod crypto;
 pub mod db;
 mod error;
 mod foundation;
 mod graph;
 mod intent;
+mod jobs;
 mod portfolio_drafts;
+mod secrets;
 
 use std::{fmt, net::SocketAddr, str::FromStr};
 

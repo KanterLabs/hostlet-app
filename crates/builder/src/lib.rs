@@ -1,16 +1,21 @@
-//! Builder supervisor command scaffold.
+//! Builder supervisor and M1 foundation bookkeeping worker.
 
 use std::io::Write;
 
 use hostlet_contracts::{PROTOCOL_VERSION, validate_protocol_version};
 
+mod worker;
+
+pub use worker::WorkerOptions;
+
 pub const SERVICE_NAME: &str = "hostlet-builder";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Version,
     CheckConfig,
     Run,
+    Worker(WorkerOptions),
 }
 
 pub fn parse_action(args: &[String]) -> Result<Action, String> {
@@ -18,6 +23,9 @@ pub fn parse_action(args: &[String]) -> Result<Action, String> {
         [] => Ok(Action::Run),
         [flag] if flag == "--version" => Ok(Action::Version),
         [flag] if flag == "--check-config" => Ok(Action::CheckConfig),
+        [command, rest @ ..] if command == "worker" => worker::parse_options(rest)
+            .map(Action::Worker)
+            .map_err(|_| worker::USAGE.to_owned()),
         [flag] => Err(format!(
             "unknown argument {flag}; use --version or --check-config"
         )),
@@ -59,6 +67,13 @@ pub fn execute<W: Write, E: Write>(args: &[String], output: &mut W, error: &mut 
             );
             1
         }
+        Action::Worker(options) => match worker::run(options, output) {
+            Ok(()) => 0,
+            Err(failure) => {
+                let _ = writeln!(error, "{}", failure.safe_message());
+                failure.exit_code()
+            }
+        },
     }
 }
 

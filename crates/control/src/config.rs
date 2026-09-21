@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use sha2::{Digest, Sha256};
 
@@ -18,12 +18,14 @@ pub struct FoundationConfig {
     worker_token_hash: Option<[u8; 32]>,
     secret_key: Option<KeyMaterial>,
     recovery_key: Option<KeyMaterial>,
+    worker_lease_seconds: i64,
 }
 
 pub struct FoundationPrerequisites {
-    pub worker_auth_configured: bool,
-    pub secret_key_configured: bool,
-    pub recovery_key_configured: bool,
+    pub worker_token_hash: Option<[u8; 32]>,
+    pub secret_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub recovery_key: Option<Arc<crate::crypto::SecretKey>>,
+    pub worker_lease_seconds: i64,
 }
 
 struct KeyMaterial([u8; 32]);
@@ -103,6 +105,17 @@ impl ProcessConfig {
         };
         let secret_key = optional_key("HOSTLET_SECRET_KEY")?;
         let recovery_key = optional_key("HOSTLET_RECOVERY_KEY")?;
+        let worker_lease_seconds = match present_env("HOSTLET_WORKER_LEASE_SECONDS") {
+            None => 30,
+            Some(value) => value
+                .parse::<i64>()
+                .ok()
+                .filter(|seconds| (2..=300).contains(seconds))
+                .ok_or(FoundationConfigError {
+                    variable: "HOSTLET_WORKER_LEASE_SECONDS",
+                    reason: "must be an integer from 2 through 300",
+                })?,
+        };
         if matches!((&secret_key, &recovery_key), (Some(left), Some(right)) if left.0 == right.0) {
             return Err(FoundationConfigError {
                 variable: "HOSTLET_RECOVERY_KEY",
@@ -117,6 +130,7 @@ impl ProcessConfig {
             worker_token_hash,
             secret_key,
             recovery_key,
+            worker_lease_seconds,
         }))
     }
 }
@@ -124,9 +138,14 @@ impl ProcessConfig {
 impl FoundationConfig {
     pub fn into_runtime_parts(self) -> (SocketAddr, SocketAddr, String, FoundationPrerequisites) {
         let prerequisites = FoundationPrerequisites {
-            worker_auth_configured: self.worker_token_hash.is_some(),
-            secret_key_configured: self.secret_key.is_some(),
-            recovery_key_configured: self.recovery_key.is_some(),
+            worker_token_hash: self.worker_token_hash,
+            secret_key: self
+                .secret_key
+                .map(|key| Arc::new(crate::crypto::SecretKey::new(key.0))),
+            recovery_key: self
+                .recovery_key
+                .map(|key| Arc::new(crate::crypto::SecretKey::new(key.0))),
+            worker_lease_seconds: self.worker_lease_seconds,
         };
         (
             self.api_bind,

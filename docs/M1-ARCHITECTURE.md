@@ -164,6 +164,10 @@ an explicit `HOSTLET_PG_CONTAINER` for a run-owned development container; the
 application must not discover or select unrelated containers. Values never
 appear in command arguments, artifacts or logs.
 
+`HOSTLET_WORKER_LEASE_SECONDS` defaults to 30 and accepts integers from 2 through
+300. Only the E2E lease duration is shortened; lease validity always uses current
+PostgreSQL time after acquiring the relevant row lock.
+
 ### Owned resources
 
 The initial resource surface is deliberately small:
@@ -285,6 +289,12 @@ Moving ciphertext between any of those scopes therefore fails authentication.
 Only key identifiers appear in PostgreSQL; key bytes are injected separately.
 Secret-holding Rust values must not implement a value-revealing `Debug`, and
 request tracing must never capture secret bodies.
+
+M1 supports one injected secret key. Its stored version identifies the actual
+key material through a domain-separated digest. Readiness rejects existing
+versions or secret replay records requiring another key. Key rotation and a
+multi-key provider are later operational work; changing the environment key
+does not silently re-encrypt or discard existing values.
 
 A job binds an exact source commit and exact `job_secret_refs` at enqueue time.
 Build-scoped resolution rejects undeclared versions, a different account,

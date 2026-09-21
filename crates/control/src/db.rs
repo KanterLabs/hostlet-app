@@ -5,7 +5,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-pub const READER_SCHEMA_VERSION: i64 = 2;
+pub const READER_SCHEMA_VERSION: i64 = 3;
 const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
@@ -30,6 +30,12 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "public.project_lifecycle_intents",
     "public.portfolio_draft_revisions",
     "public.portfolio_project_references",
+    "public.secrets",
+    "public.secret_versions",
+    "public.jobs",
+    "public.job_attempts",
+    "public.job_secret_refs",
+    "public.job_effects",
 ];
 
 pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {

@@ -112,7 +112,7 @@ documentation evidence only; actual runner artifacts establish observed results.
 
 ## Routine checks and milestone stops
 
-`make check` remains the routine scaffold check for formatting, linting, builds
+`make check` remains the routine workspace check for formatting, linting, builds
 and legacy tests. It is not an E2E run and cannot by itself establish
 complex-feature completion. Run it where the task requires it and report its
 result separately from E2E evidence.

@@ -6,9 +6,12 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: development scaffold.** The API exposes health and version information,
-and the web shell reports its actual status. Portfolios, compatibility analysis,
-accounts, billing, project databases, builds and deployments are not implemented.
+**Status: local control foundation.** The API persists authenticated accounts,
+owner-scoped projects, immutable configurations, deployment intents, and portfolio
+drafts in PostgreSQL. The web application remains a status preview; it does not
+yet provide account or project-management screens. Customer hosting, GitHub
+integration, compatibility analysis, billing, tenant databases, builds, and
+portfolio publication belong to later milestones.
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
 the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
 the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline
@@ -43,7 +46,8 @@ with Ctrl-C. The API also handles SIGTERM gracefully.
 
 The API accepts `HOSTLET_API_BIND` as an explicit socket address. If you change
 its port, update the development proxy in `web/vite.config.ts` to match. No
-environment file, database or provider credential is needed for this scaffold.
+environment file, database or provider credential is needed for this status-only
+mode. Setting `DATABASE_URL` selects the durable foundation mode described below.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -51,10 +55,30 @@ environment file, database or provider credential is needed for this scaffold.
 | `GET /readyz` | HTTP 503: product dependencies are not connected |
 | `GET /v1/version` | Service version and `hostlet.agent/v1` protocol identifier |
 
-An HTTP 503 readiness result is expected at this stage. It prevents a live
-process from being mistaken for a service ready to accept customer work.
-The agents offer `--version` and `--check-config`; normal execution refuses to
-start because enrollment and work processing are not implemented.
+An HTTP 503 readiness result is expected in status-only mode. With PostgreSQL,
+applied migrations, keys, and worker authentication configured, readiness can
+report `control_foundation` while keeping `customer_admission` and
+`workload_execution` false. Liveness does not imply customer-hosting readiness.
+
+For the durable API, inject `DATABASE_URL`, `HOSTLET_SECRET_KEY`,
+`HOSTLET_RECOVERY_KEY`, and `HOSTLET_WORKER_TOKEN` through the process environment.
+The two keys are distinct 32-byte values encoded as 64 hexadecimal characters;
+the worker token contains 32–256 non-whitespace bytes. Do not put credentials in
+command arguments, source files, logs, or artifacts. `HOSTLET_WORKER_BIND` must
+remain loopback (default `127.0.0.1:8081`).
+
+Startup never migrates. Against an explicitly selected empty development
+database, initialize with `cargo run --locked -p hostlet-control -- migrate`,
+then run `make dev-api`. A populated upgrade requires the documented verified
+backup procedure; it never resets the database. See the
+[foundation architecture](docs/M1-ARCHITECTURE.md) and
+[project/draft HTTP contract](docs/M1-GRAPH-API.md) for the current API boundaries.
+The [job contract](docs/M1-JOBS-API.md) and
+[secret metadata/version API](docs/M1-SECRETS.md) describe worker leases and
+scoped credential access.
+
+The builder and runtime offer `--version` and `--check-config`; their default
+execution continues to refuse customer work.
 
 ## Workspace
 
@@ -84,7 +108,8 @@ and `web/package-lock.json`; Rust validation uses `--locked` and web installs
 use `npm ci`.
 
 These routine checks are not product E2E evidence. `make e2e` exercises the real
-API/web scaffold through HTTP and Chromium; `make e2e-gate` requires clean source.
+API/web processes through HTTP and Chromium plus an owned PostgreSQL instance;
+`make e2e-gate` requires clean source.
 See [the E2E guide](e2e/README.md) for prerequisites, scenarios and the deliberate
 failure command. Complex features require E2E acceptance, and every run retains a
 verifiable report, manifest, checksums and rerun instructions. Never write unit
@@ -105,13 +130,14 @@ There are no deploy jobs, schedules, provider secrets or customer builds in CI.
 `origin` is the private canonical Gitea repository,
 `https://gitea.home.shanekanterman.dev/KanterLabs/hostlet-app.git`.
 `github` is the public mirror, `https://github.com/KanterLabs/hostlet-app.git`.
-The initial `main` commit is published to both. Subsequent mirroring is explicit;
+Mirroring is explicit;
 no automatic mirror credentials or webhook are configured.
 
 Push reviewed changes to Gitea first using the approved Infisical-injected
 authentication process, then push the same refs to `github`. Keep secrets,
 private provider configuration and customer data out of this mirrored history.
 
-Existing Hostlet repositories and resources are preserved. This project starts
-with new history and introduces no schema, migration, infrastructure deployment
-or customer/billing mutation.
+Existing Hostlet repositories and resources are preserved. This repository has
+its own history and additive platform migrations. E2E uses only owned synthetic
+data and disposable resources; no production infrastructure or customer/billing
+state is changed.

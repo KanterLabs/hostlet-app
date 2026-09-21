@@ -5,7 +5,7 @@ This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
 implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`
 records the accepted planning rationale and detailed validation candidates. The
 supplied September 21 portfolio-and-demo brief is authoritative; the earlier
-generic-hosting plan is superseded. The current deliverable is a local scaffold.
+generic-hosting plan is superseded. The current deliverable is the local M1 control foundation.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim
@@ -15,8 +15,8 @@ snapshots of the milestone and dependency ordering.
 - Author new code, tests, manifests and automation here. Other Hostlet repositories
   are references; do not import their history, runtime state or credentials.
 - Preserve existing databases, guest disks, DNS routes, registries, subscriptions
-  and provider mappings. A scaffold task does not authorize deployment or migration.
-- Keep control, builder and runtime boundaries separate. PostgreSQL will own
+  and provider mappings. M1 authorizes owned local foundation migrations and recovery drills, not production deployment or migration.
+- Keep control, builder and runtime boundaries separate. PostgreSQL owns
   durable intent; an in-memory placeholder must not accept customer work.
 - Customer builds belong in disposable VMs, never organization CI runners.
   Tenant runtime requires stronger isolation evaluation, resource/network controls

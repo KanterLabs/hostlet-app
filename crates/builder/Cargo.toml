@@ -6,3 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 hostlet-contracts = { path = "../protocol" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true

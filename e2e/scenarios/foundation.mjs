@@ -10,6 +10,11 @@ import {
   runGraphScenarios,
 } from "./graph.mjs";
 import {
+  JOB_REQUIRED_ASSERTIONS,
+  registerJobFixtures,
+  runJobScenarios,
+} from "./jobs.mjs";
+import {
   assertAccountRecord,
   assertErrorShape,
   assertNoCredentialValue,
@@ -28,6 +33,7 @@ const REQUIRED_ASSERTIONS = Object.freeze([
   "M1-AUTH-05",
   "M1-AUTH-06",
   ...GRAPH_REQUIRED_ASSERTIONS,
+  ...JOB_REQUIRED_ASSERTIONS,
 ]);
 
 function safeObserved(error) {
@@ -104,6 +110,7 @@ async function runFoundation(context) {
   context.registerFixture("M1 identity and ownership inputs", "e2e/support/foundation-fixtures.json");
   context.registerFixture("M1 PostgreSQL image pin", "e2e/postgres-image.txt");
   const graphManifest = registerGraphFixtures(context);
+  const jobManifest = registerJobFixtures(context);
   for (const support of [
     "artifact-safety.mjs",
     "credentials.mjs",
@@ -136,11 +143,13 @@ async function runFoundation(context) {
     hostPort: postgresPort,
   });
   const apiUrl = `http://127.0.0.1:${apiPort}`;
+  const workerUrl = `http://127.0.0.1:${workerPort}`;
   const apiBinary = join(context.repo, "target", "debug", "hostlet-control");
   const configuration = {
     databaseUrl: postgres.databaseUrl,
     apiBind: `127.0.0.1:${apiPort}`,
     workerBind: `127.0.0.1:${workerPort}`,
+    workerLeaseSeconds: 2,
   };
   const apiEnvironment = productEnvironment(process.env, configuration, credentials);
   context.state.configuration.foundation = {
@@ -170,18 +179,46 @@ async function runFoundation(context) {
     return response;
   };
 
-  const startApi = async () => {
+  const callInternal = async (path, options = {}) => {
+    const { omitToken = false, token = credentials.workerToken, ...requestOptions } = options;
+    const response = await requestJson(workerUrl, path, {
+      ...requestOptions,
+      token: omitToken ? undefined : token,
+      abortSignal: context.abortSignal,
+    });
+    responsePayloads.push({ path, status: response.status, payload: response.payload });
+    return response;
+  };
+
+  const callInternalSensitive = async (path, options = {}) => {
+    const { token = credentials.workerToken, ...requestOptions } = options;
+    return requestJson(workerUrl, path, {
+      ...requestOptions,
+      token,
+      abortSignal: context.abortSignal,
+    });
+  };
+
+  const environmentForProbe = (overrides = {}, removeEnvironment = []) => {
+    const environment = { ...apiEnvironment, ...overrides };
+    for (const name of removeEnvironment) delete environment[name];
+    return environment;
+  };
+
+  const startApi = async ({ environmentOverrides = {}, removeEnvironment = [], expectReady = true } = {}) => {
     apiSequence += 1;
     const processHandle = context.spawnManaged(
       `hostlet-control foundation ${apiSequence}`,
       apiBinary,
       [],
-      { env: apiEnvironment },
+      { env: environmentForProbe(environmentOverrides, removeEnvironment) },
       `foundation-api-${apiSequence}.log`,
     );
     await context.waitForHttp(`${apiUrl}/healthz`, 200, "stateful foundation API");
-    const ready = await call("/readyz");
-    assertReady(ready, "stateful foundation startup readiness");
+    if (expectReady) {
+      const ready = await call("/readyz");
+      assertReady(ready, "stateful foundation startup readiness");
+    }
     return processHandle;
   };
 
@@ -759,7 +796,7 @@ async function runFoundation(context) {
       },
     );
 
-    await runGraphScenarios({
+    const graph = await runGraphScenarios({
       context,
       manifest: graphManifest,
       postgres,
@@ -768,6 +805,25 @@ async function runFoundation(context) {
         await context.stopManaged(api, reason);
         api = await startApi();
       },
+      owner: { record: owner, token: ownerToken },
+      other: { record: other, token: otherToken },
+    });
+
+    await runJobScenarios({
+      context,
+      manifest: jobManifest,
+      postgres,
+      call,
+      callInternal,
+      callInternalSensitive,
+      restartApi: async (reason, options = {}) => {
+        await context.stopManaged(api, reason);
+        api = await startApi(options);
+      },
+      environmentForProbe,
+      workerUrl,
+      workerToken: credentials.workerToken,
+      graph,
       owner: { record: owner, token: ownerToken },
       other: { record: other, token: otherToken },
     });
@@ -810,6 +866,8 @@ async function runFoundation(context) {
                   operation LIKE 'project.rollback_intent.create/%' OR
                   operation LIKE 'project.removal_intent.create/%' OR
                   operation = 'portfolio.draft_revision.create'
+                  OR operation LIKE 'secret.%'
+                  OR operation LIKE 'job.%'
                 )
              ),
              'credential_fields_in_replay_rows', (

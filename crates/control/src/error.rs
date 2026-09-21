@@ -54,6 +54,10 @@ impl ApiError {
         Self::new(StatusCode::CONFLICT, code, message)
     }
 
+    pub fn unprocessable(code: &'static str, message: &'static str) -> Self {
+        Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, message)
+    }
+
     pub fn precondition_required() -> Self {
         Self::new(
             StatusCode::PRECONDITION_REQUIRED,

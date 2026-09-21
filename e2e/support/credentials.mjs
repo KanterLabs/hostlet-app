@@ -35,6 +35,7 @@ export function productEnvironment(baseEnvironment, configuration, credentials) 
     HOSTLET_SECRET_KEY: credentials.secretKey,
     HOSTLET_RECOVERY_KEY: credentials.recoveryKey,
     HOSTLET_WORKER_TOKEN: credentials.workerToken,
+    HOSTLET_WORKER_LEASE_SECONDS: String(configuration.workerLeaseSeconds ?? 30),
   });
 
   return environment;

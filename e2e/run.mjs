@@ -25,6 +25,7 @@ const startedAt = new Date();
 const runId = `${startedAt.toISOString().replaceAll(":", "").replaceAll(".", "-")}-${process.pid}-${randomBytes(3).toString("hex")}`;
 
 const args = {
+  task: "HOST-241",
   milestone: "M1",
   artifactRoot: DEFAULT_ARTIFACT_ROOT,
   chromium: process.env.HOSTLET_E2E_CHROMIUM || DEFAULT_CHROMIUM,
@@ -39,6 +40,7 @@ function usage() {
   return `Usage: node e2e/run.mjs [options]
 
 Options:
+  --task HOST-NUMBER        Roadmap task recorded in the artifact
   --milestone NAME          Artifact milestone directory (default: M1)
   --artifact-root PATH      Artifact root (default: artifacts/e2e)
   --chromium PATH           Chromium executable (default: /snap/bin/chromium)
@@ -65,7 +67,8 @@ for (let index = 2; index < process.argv.length; index += 1) {
     return process.argv[index];
   };
   try {
-    if (argument === "--milestone") args.milestone = next();
+    if (argument === "--task") args.task = next();
+    else if (argument === "--milestone") args.milestone = next();
     else if (argument === "--artifact-root") args.artifactRoot = resolve(REPO, next());
     else if (argument === "--chromium") args.chromium = resolve(next());
     else if (argument === "--operation-timeout") args.operationTimeoutMs = positiveInteger(next(), argument);
@@ -89,6 +92,9 @@ function positiveInteger(value, flag) {
 if (!/^[A-Za-z0-9._-]+$/.test(args.milestone) || args.milestone === "." || args.milestone === "..") {
   parseError = new Error("milestone may contain only letters, digits, dot, underscore, and dash");
 }
+if (!/^HOST-[1-9][0-9]*$/.test(args.task)) {
+  parseError = new Error("task must be a Hostlet roadmap key");
+}
 
 const artifactMilestone = parseError && !/^[A-Za-z0-9_-]+$/.test(args.milestone)
   ? "invalid-input"
@@ -107,7 +113,7 @@ if (!effectiveRunnerArgs.includes("--chromium")) effectiveRunnerArgs.push("--chr
 
 const state = {
   schemaVersion: 1,
-  task: "HOST-241",
+  task: args.task,
   milestone: args.milestone,
   runId,
   status: "running",
@@ -788,18 +794,22 @@ async function execute() {
   const versionFixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   state.fixtures.push({ name: "version response", path: "contracts/v1/version.json", sha256: fileSha256(fixturePath) });
   state.fixtures.push({ name: "web dependency lock", path: "web/package-lock.json", sha256: fileSha256(join(REPO, "web", "package-lock.json")) });
+  state.fixtures.push({ name: "Rust dependency lock", path: "Cargo.lock", sha256: fileSha256(join(REPO, "Cargo.lock")) });
 
   phase = "build-api";
   const build = await runCommand(
     "Cargo build",
     "cargo",
-    ["build", "--locked", "-p", "hostlet-control"],
+    ["build", "--locked", "-p", "hostlet-control", "-p", "hostlet-builder"],
     { env: { ...process.env, CARGO_TARGET_DIR: join(REPO, "target") }, timeoutMs: 120_000, logName: "cargo-build.log" },
   );
   if (build.code !== 0) throw new Error(`cargo build failed with exit ${build.code}`);
   const apiBinary = join(REPO, "target", "debug", "hostlet-control");
   if (!existsSync(apiBinary)) throw new Error("cargo build succeeded without target/debug/hostlet-control");
   state.productOutputs.apiBinarySha256 = fileSha256(apiBinary);
+  const builderBinary = join(REPO, "target", "debug", "hostlet-builder");
+  if (!existsSync(builderBinary)) throw new Error("cargo build succeeded without target/debug/hostlet-builder");
+  state.productOutputs.builderBinarySha256 = fileSha256(builderBinary);
 
   const apiPort = await allocatePort();
   const webPort = await allocatePort();

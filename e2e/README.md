@@ -30,6 +30,11 @@ tracked or untracked source changes exist. `make e2e-failure` uses
 oracle, must return nonzero, and retains the full failed evidence bundle.
 `make e2e-scaffold` is the smaller API/web check; it cannot complete M1.
 
+To prove an omitted required assertion also fails, run
+`node e2e/run.mjs --scenario-module e2e/faults/missing-required.mjs`.
+This deliberate fault must exit nonzero and must never be included in an
+acceptance run. Use `--task HOST-242` to label the final milestone gate bundle.
+
 Install the pinned Rust and Node toolchains, locked web dependencies, Make,
 Chromium (default `/snap/bin/chromium`), and a reachable Docker daemon. The
 foundation uses the exact PostgreSQL 18 image digest in `postgres-image.txt`.
@@ -49,8 +54,9 @@ the repeatable `--scenario-module` extension hook. A module exports
 same fail-closed completeness check and its fixtures use `context.registerFixture`.
 The exact effective invocation and a portable rerun command are copied into each
 artifact. The source identity includes HEAD, dirty state, a Git diff digest, and
-a harness-tree digest, so a local development run is reproducible from the
-recorded tree even before integration creates a commit.
+a harness-tree digest. Dirty runs are diagnostic evidence; their hashes identify
+changes but do not preserve those changes. Reproducible gate evidence comes from
+a clean committed tree and an unchanged source check at the end of the run.
 
 ## M1 scaffold scenarios (written before runner implementation)
 
@@ -84,7 +90,7 @@ HTTP, browser, or artifact boundary.
 | API fails to stop, remains reachable, or offline UI does not converge | Record cleanup/offline failure, terminate owned group, and fail. | Offline scenario and cleanup. |
 | Any required scenario omitted or assertion not executed | Finalization synthesizes a failed `required-assertions-complete` assertion and returns nonzero. | Finalization. |
 | Per-operation or whole-run timeout | Abort the operation, kill only run-owned process groups, finalize failed evidence, and return nonzero. | All phases. |
-| SIGINT/SIGTERM | Mark the run interrupted, clean owned groups, finalize handled evidence, and return nonzero. | Signal handler. |
+| SIGINT/SIGTERM before the receipt commits | Mark the run interrupted, clean owned groups, finalize handled evidence, and return nonzero. A signal after receipt commit preserves the already finalized result. | Signal handler and artifact commit boundary. |
 | Artifact write/hash/finalization failure | Return nonzero; never report a passing gate. Partial evidence remains for the next run to mark abandoned. | Artifact phase. |
 | Deliberately corrupted oracle | `--inject-failure` makes a real expected value wrong, producing a named failed assertion and nonzero exit while retaining evidence. | Integrity self-check. |
 | Sensitive environment values in evidence | Environment variables and process environments are never dumped; logs are scrubbed for common credential/token/authorization forms and local absolute paths. | Artifact writer. |

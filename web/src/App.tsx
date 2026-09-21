@@ -360,7 +360,7 @@ export function App() {
           </span>
           <span>Hostlet</span>
         </a>
-        <span className="environment-label">Development scaffold</span>
+        <span className="environment-label">Development preview</span>
       </header>
 
       <main className="page-content">
@@ -370,7 +370,7 @@ export function App() {
           <p className="hero__copy">
             Connect GitHub, turn supported projects into live demos, and publish a portfolio you’re
             proud to share. You’ll review every project story before it goes live. GitHub connection,
-            hosting and publishing are not available in this development scaffold yet.
+            hosting and publishing are not available in this development preview yet.
           </p>
         </section>
 
@@ -453,9 +453,8 @@ export function App() {
             <p className="eyebrow">Your portfolio</p>
             <h2 id="empty-title">Nothing to publish yet.</h2>
             <p>
-              When the workflows are implemented, this space will show projects selected for your
-              published portfolio and its working demo. This development scaffold has no GitHub
-              integration, project data, or publishing workflow yet.
+              Project selection and portfolio publishing will appear here in a later milestone.
+              This preview does not connect to a GitHub account or display saved projects.
             </p>
           </div>
         </section>
@@ -463,7 +462,7 @@ export function App() {
 
       <footer className="footer">
         <span>Hostlet · Your projects, ready to share.</span>
-        <span>Development scaffold · Local control plane · 127.0.0.1:8080</span>
+        <span>Development preview · Local control plane · 127.0.0.1:8080</span>
       </footer>
     </div>
   );

@@ -99,7 +99,16 @@ but they are intentionally **not acceptance passes**.
 | Deliberately wrong browser version oracle | `2026-09-21T232635-577Z-2547466-07c549` | Nonzero; `browser-connected-version` fails | `0599e12d01c6e7e45c5ab94c83b2fe6de870e1f1d49a91d81b2df0fa345c4416` |
 | Omitted required assertion | `2026-09-21T232657-932Z-2548476-f9ddd8` | Nonzero; `required-assertions-complete` fails | `99afab2411753755e360b2ad78623ffdb2911261f8638efd6bfac796c3c5139f` |
 
-See [the E2E guide](../e2e/README.md) for exact diagnostic commands. Earlier
+The recorded diagnostic sequence was:
+
+```sh
+node --require ./e2e/faults/crash-before-receipt.cjs e2e/run.mjs --task HOST-242
+make e2e-failure E2E_ARGS='--task HOST-242'
+node e2e/run.mjs --task HOST-242 --scenario-module e2e/faults/missing-required.mjs
+```
+
+These commands intentionally return nonzero. See each manifest for the resolved
+Chromium path and full invocation. Earlier
 handled SIGTERM, timeout and missing-prerequisite evidence remains private in
 the artifact history; the final clean receipts above establish this handoff.
 

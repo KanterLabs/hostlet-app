@@ -12,19 +12,22 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 cards (six complete, one active, 24 in Backlog),
-38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone is
-blocked by the preceding gate through real Helm dependencies. The acyclic
+The snapshot contains **31 cards (eight complete, none active, 23 in Backlog),
+38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone
+depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**M1 is in progress at HOST-218 — populated platform backup and recovery.**
-HOST-241, HOST-209, HOST-210, HOST-215, HOST-216 and HOST-217 are complete.
-The foundation through jobs and scoped credentials has clean-source evidence.
-All eight recovery scenarios now pass in a diagnostic full run, including
-populated upgrade, retained-binary compatibility, separate restore and retention.
-The clean recovery repeat and HOST-242 handoff remain before the M1 stopping point.
+**M1 is complete at HOST-242. Stop here.** All eight M1 cards are complete.
+Two clean full runs each passed 54 assertions, including populated upgrades,
+retained-binary compatibility, separate-target restore and real backup retention.
+The second run rebuilt the retained binary from its pinned source commit.
+[The M1 handoff](docs/M1-HANDOFF.md) records the exact implementation commit,
+commands, private artifact paths, receipt hashes, cleanup and limits.
+
+HOST-219 and HOST-220 are dependency-ready but remain unclaimed. M2 requires a
+new assignment; no later milestone is active.
 
 Keep future cards unclaimed until their prerequisites are complete and their
 milestone is in the assigned scope. Consult Helm for current claimability.
@@ -66,7 +69,7 @@ the agent handoff. Helm claimability alone is not an instruction to continue.
 - Every E2E run, including a failed run, produces verifiable repeatable
   evidence. Missing, incomplete or failed evidence cannot pass a gate.
 - Existing `make check` runs formatting, linting, builds and legacy tests.
-  It is not E2E evidence. No product milestone is complete yet.
+  It is not E2E evidence. M1 completion is established by the linked clean-run receipts.
 
 The full contract, artifact fields, interruption handling and isolation
 exception are in [TESTING.md](TESTING.md).

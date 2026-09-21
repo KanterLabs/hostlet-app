@@ -6,7 +6,9 @@ call HTTP endpoints, load Chromium, then stop the API to prove the offline UI.
 The foundation module uses disposable PostgreSQL 18, authenticated HTTP, real
 bookkeeping worker processes, and actual dump/restore commands. It does not mock
 Hostlet code, replace durable storage with memory, or execute customer workloads.
-The acceptance inventory is [M1-SCENARIOS.md](../docs/M1-SCENARIOS.md). The
+The acceptance inventory is [M1-SCENARIOS.md](../docs/M1-SCENARIOS.md).
+[The M1 handoff](../docs/M1-HANDOFF.md) records the verified clean runs, exact
+tested commit and external receipts. Changes after that commit need fresh evidence. The
 presence of these scenarios is not a final M1 acceptance claim; the milestone
 still requires a verified clean gate run and handoff.
 

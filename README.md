@@ -6,7 +6,7 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: local control foundation.** The API persists authenticated accounts,
+**Status: M1 complete — local control foundation.** The API persists authenticated accounts,
 owner-scoped projects, immutable configurations, deployment intents, and portfolio
 drafts in PostgreSQL. It also supports fenced bookkeeping jobs, service-scoped
 encrypted secrets, and verified platform backup, additive upgrade, and restore

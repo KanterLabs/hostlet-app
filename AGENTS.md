@@ -5,7 +5,9 @@ This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
 implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`
 records the accepted planning rationale and detailed validation candidates. The
 supplied September 21 portfolio-and-demo brief is authoritative; the earlier
-generic-hosting plan is superseded. The current deliverable is the local M1 control foundation.
+generic-hosting plan is superseded. M1 is complete at HOST-242; read
+`docs/M1-HANDOFF.md` for verified evidence and limits. Stop before M2 unless the
+user assigns it.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim

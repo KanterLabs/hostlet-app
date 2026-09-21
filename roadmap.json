@@ -143,8 +143,8 @@
       ],
       "milestone": "M1",
       "is_gate": false,
-      "status": "active",
-      "dependency_state": "owned"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-242",
@@ -163,8 +163,8 @@
       ],
       "milestone": "M1",
       "is_gate": true,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-219",
@@ -184,7 +184,7 @@
       "milestone": "M2",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-220",
@@ -204,7 +204,7 @@
       "milestone": "M2",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-221",
@@ -645,7 +645,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M1 foundation through HOST-217 has clean E2E evidence. All 53 assertions, including eight recovery scenarios, pass in the HOST-218 diagnostic full run. Clean recovery repeat and HOST-242 handoff remain; M1 is not complete yet. Routine make check is not product E2E evidence."
+    "current_status": "M1 is complete at HOST-242. Two clean full E2E runs each passed54 assertions at5d72bd0, including a retained-binary rebuild, populated recovery and verified private receipts. See docs/M1-HANDOFF.md. All23 later cards remain unclaimed; stop before M2. Routine make check is not product E2E evidence."
   },
   "milestones": [
     {
@@ -736,12 +736,13 @@
     }
   ],
   "execution_snapshot": {
-    "read_at": "2026-09-21T22:46:42.773757823Z",
-    "project_revision": 11510,
-    "completed": 6,
-    "active": 1,
-    "backlog": 24,
-    "active_task": "HOST-218",
-    "assigned_stop": "HOST-242"
+    "project_revision": 11546,
+    "read_at": "2026-09-21T23:41:18.368494667Z",
+    "completed": 8,
+    "active": 0,
+    "backlog": 23,
+    "active_task": null,
+    "assigned_stop": "HOST-242",
+    "stopped_at": "M1"
   }
 }

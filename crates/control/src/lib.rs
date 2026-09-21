@@ -1,5 +1,11 @@
 //! Minimal Hostlet control API scaffold.
 
+mod auth;
+pub mod config;
+pub mod db;
+mod error;
+mod foundation;
+
 use std::{fmt, net::SocketAddr, str::FromStr};
 
 use axum::{Router, http::StatusCode, response::Json, routing::get};
@@ -71,7 +77,7 @@ pub fn router() -> Router {
         .route("/v1/version", get(version))
 }
 
-async fn healthz() -> Json<HealthResponse> {
+pub(crate) async fn healthz() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
@@ -85,7 +91,7 @@ async fn readyz() -> (StatusCode, Json<ReadinessResponse>) {
     )
 }
 
-async fn version() -> Json<VersionResponse> {
+pub(crate) async fn version() -> Json<VersionResponse> {
     Json(VersionResponse::new(
         SERVICE_NAME,
         env!("CARGO_PKG_VERSION"),
@@ -101,7 +107,80 @@ pub async fn serve(config: Config) -> Result<(), std::io::Error> {
         .await
 }
 
-async fn shutdown_signal() {
+pub async fn serve_process(config: config::ProcessConfig) -> Result<(), ProcessServeError> {
+    match config {
+        config::ProcessConfig::Scaffold(config) => {
+            serve(config).await.map_err(ProcessServeError::Scaffold)
+        }
+        config::ProcessConfig::Foundation(config) => foundation::serve(config)
+            .await
+            .map_err(ProcessServeError::Foundation),
+    }
+}
+
+pub async fn migrate(config: config::ProcessConfig) -> Result<(), MigrationCliError> {
+    let config::ProcessConfig::Foundation(config) = config else {
+        return Err(MigrationCliError::DatabaseUrlRequired);
+    };
+    let (_, _, database_url, _) = config.into_runtime_parts();
+    db::run_migrations(&database_url)
+        .await
+        .map_err(MigrationCliError::Command)
+}
+
+pub enum ProcessServeError {
+    Scaffold(std::io::Error),
+    Foundation(foundation::FoundationServeError),
+}
+
+impl fmt::Debug for ProcessServeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Scaffold(_) => formatter.write_str("ProcessServeError::Scaffold"),
+            Self::Foundation(error) => formatter.debug_tuple("Foundation").field(error).finish(),
+        }
+    }
+}
+
+impl fmt::Display for ProcessServeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Scaffold(_) => formatter.write_str("scaffold server failed"),
+            Self::Foundation(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ProcessServeError {}
+
+pub enum MigrationCliError {
+    DatabaseUrlRequired,
+    Command(db::MigrationCommandError),
+}
+
+impl fmt::Debug for MigrationCliError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DatabaseUrlRequired => formatter.write_str("DatabaseUrlRequired"),
+            Self::Command(error) => formatter.debug_tuple("Command").field(error).finish(),
+        }
+    }
+}
+
+impl fmt::Display for MigrationCliError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DatabaseUrlRequired => {
+                formatter.write_str("DATABASE_URL is required for migrate")
+            }
+            Self::Command(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for MigrationCliError {}
+
+pub(crate) async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(error) = tokio::signal::ctrl_c().await {
             eprintln!("failed to install Ctrl-C handler: {error}");

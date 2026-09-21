@@ -90,7 +90,10 @@ if (!/^[A-Za-z0-9._-]+$/.test(args.milestone) || args.milestone === "." || args.
   parseError = new Error("milestone may contain only letters, digits, dot, underscore, and dash");
 }
 
-const artifactDir = join(args.artifactRoot, args.milestone, runId);
+const artifactMilestone = parseError && !/^[A-Za-z0-9_-]+$/.test(args.milestone)
+  ? "invalid-input"
+  : args.milestone;
+const artifactDir = join(args.artifactRoot, artifactMilestone, runId);
 const logDir = join(artifactDir, "logs");
 const browserDir = join(artifactDir, "browser");
 const tempDir = join(REPO, ".local", "e2e", runId);
@@ -151,27 +154,54 @@ writeFileSync(manifestPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600
 writeFileSync(reportPath, `# Hostlet E2E run ${runId}\n\nStatus: **RUNNING**\n`, { mode: 0o600 });
 
 const managed = [];
+const resourceCleanups = [];
+const sensitiveValues = new Set();
+const runAbortController = new AbortController();
+let rejectRunAbort;
+const runAborted = new Promise((_, reject) => {
+  rejectRunAbort = reject;
+});
+// A deadline can fire before the bottom-level race is installed during module setup.
+runAborted.catch(() => {});
+let shutdownChain = Promise.resolve();
 let interruptedSignal = null;
 let fatalError = null;
 let finalized = false;
+let shutdownStarted = false;
+let finalizationIncomplete = false;
 let phase = "initialization";
 
 const requiredAssertions = [...scaffoldScenario.requiredAssertions];
 const scenarioExtensions = [];
 
 const runDeadline = setTimeout(() => {
-  fatalError = new Error(`whole run exceeded ${args.runTimeoutMs}ms`);
-  state.errors.push({ phase, message: fatalError.message, kind: "timeout" });
-  void shutdown("run-timeout");
+  abortRun(new Error(`whole run exceeded ${args.runTimeoutMs}ms`), "timeout");
 }, args.runTimeoutMs);
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     if (interruptedSignal) return;
     interruptedSignal = signal;
-    state.errors.push({ phase, message: `received ${signal}`, kind: "interrupted" });
-    void shutdown(`signal-${signal}`);
+    abortRun(new Error(`received ${signal}`), "interrupted");
   });
+}
+
+function abortRun(error, kind) {
+  if (runAbortController.signal.aborted) return;
+  fatalError = error;
+  state.errors.push({ phase, message: redact(error.message), kind });
+  runAbortController.abort(error);
+  rejectRunAbort(error);
+}
+
+function ensureStartAllowed(label, { cleanup = false } = {}) {
+  // Explicit cleanup calls may also come from an extension's finally block
+  // while the central abort is stopping processes. They still have command
+  // deadlines and may act only on resources owned by that extension's run.
+  if (cleanup) return;
+  if (shutdownStarted || runAbortController.signal.aborted) {
+    throw new Error(`${label} cannot start after runner shutdown began`);
+  }
 }
 
 function shellJoin(values) {
@@ -187,11 +217,27 @@ function fileSha256(path) {
 }
 
 function redact(value) {
-  return String(value)
-    .replaceAll(REPO, "$REPO")
+  let redacted = String(value).replaceAll(REPO, "$REPO");
+  for (const sensitive of [...sensitiveValues].sort((left, right) => right.length - left.length)) {
+    redacted = redacted.replaceAll(sensitive, "[REDACTED]");
+  }
+  return redacted
     .replace(/(authorization\s*[:=]\s*)[^\r\n]*/gi, "$1[REDACTED]")
-    .replace(/((?:token|password|secret|api[_-]?key|database_url)\s*[:=]\s*)[^\r\n]*/gi, "$1[REDACTED]")
+    .replace(
+      /((?:["']?(?:authorization|(?:access[_-]?)?token|password|secret|api[_-]?key|database_url|recovery[_-]?key|private[_-]?key)["']?)\s*[:=]\s*)(["'])[^"'\r\n]*\2/gi,
+      "$1$2[REDACTED]$2",
+    )
+    .replace(
+      /((?:authorization|(?:access[_-]?)?token|password|secret|api[_-]?key|database_url|recovery[_-]?key|private[_-]?key)\s*[:=]\s*)[^\s,}\r\n]*/gi,
+      "$1[REDACTED]",
+    )
     .replace(/(postgres(?:ql)?:\/\/)[^\s@]+@/gi, "$1[REDACTED]@");
+}
+
+function registerSensitiveValues(values) {
+  for (const value of values || []) {
+    if (typeof value === "string" && value.length > 0) sensitiveValues.add(value);
+  }
 }
 
 function git(...gitArgs) {
@@ -314,19 +360,34 @@ function markAbandonedRuns() {
 }
 
 function allocatePort() {
+  ensureStartAllowed("port allocation");
   return new Promise((resolvePromise, reject) => {
     const server = net.createServer();
+    let settled = false;
     server.unref();
-    server.once("error", reject);
+    const finish = (error, port) => {
+      if (settled) return;
+      settled = true;
+      runAbortController.signal.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolvePromise(port);
+    };
+    const onAbort = () => {
+      server.close(() => finish(runAbortController.signal.reason));
+      finish(runAbortController.signal.reason);
+    };
+    runAbortController.signal.addEventListener("abort", onAbort, { once: true });
+    server.once("error", (error) => finish(error));
     server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : null;
-      server.close((error) => (error ? reject(error) : resolvePromise(port)));
+      server.close((error) => finish(error, port));
     });
   });
 }
 
 function spawnManaged(name, command, commandArgs, options, logName) {
+  ensureStartAllowed(name);
   const logPath = join(logDir, logName);
   writeFileSync(logPath, "", { mode: 0o600 });
   const child = spawn(command, commandArgs, {
@@ -342,7 +403,7 @@ function spawnManaged(name, command, commandArgs, options, logName) {
   const record = {
     name,
     pid: child.pid,
-    command: shellJoin([command, ...commandArgs]).replaceAll(REPO, "$REPO"),
+    command: redact(shellJoin([command, ...commandArgs])),
     log: relative(artifactDir, logPath),
     startedAt: new Date().toISOString(),
     stoppedAt: null,
@@ -379,11 +440,14 @@ async function stopManaged(item, reason) {
   if (item.child.exitCode === null && item.child.signalCode === null) {
     outcome = "SIGTERM";
     signalGroup(item.child, "SIGTERM");
-    const exited = await Promise.race([item.exited.then(() => true), delay(5_000).then(() => false)]);
+    const exited = await Promise.race([
+      item.exited.then(() => true),
+      delay(5_000, { ignoreAbort: true }).then(() => false),
+    ]);
     if (!exited) {
       outcome = "SIGTERM then SIGKILL";
       signalGroup(item.child, "SIGKILL");
-      await Promise.race([item.exited, delay(2_000)]);
+      await Promise.race([item.exited, delay(2_000, { ignoreAbort: true })]);
     }
   }
   item.record.cleanup = `${reason}: ${outcome}`;
@@ -402,25 +466,60 @@ function signalGroup(child, signal) {
   }
 }
 
-function delay(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+function delay(ms, { ignoreAbort = false } = {}) {
+  if (!ignoreAbort && runAbortController.signal.aborted) {
+    return Promise.reject(runAbortController.signal.reason);
+  }
+  return new Promise((resolvePromise, reject) => {
+    let timer;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(runAbortController.signal.reason);
+    };
+    timer = setTimeout(() => {
+      runAbortController.signal.removeEventListener("abort", onAbort);
+      resolvePromise();
+    }, ms);
+    if (!ignoreAbort) {
+      runAbortController.signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
 }
 
 async function withTimeout(label, fn, timeoutMs = args.operationTimeoutMs) {
+  ensureStartAllowed(label);
   let timeout;
+  let onAbort;
   try {
     return await Promise.race([
-      fn(),
+      fn(runAbortController.signal),
       new Promise((_, reject) => {
         timeout = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+      new Promise((_, reject) => {
+        onAbort = () => reject(runAbortController.signal.reason);
+        runAbortController.signal.addEventListener("abort", onAbort, { once: true });
       }),
     ]);
   } finally {
     clearTimeout(timeout);
+    runAbortController.signal.removeEventListener("abort", onAbort);
   }
 }
 
-async function runCommand(name, command, commandArgs, { cwd = REPO, env = process.env, timeoutMs = args.operationTimeoutMs, logName }) {
+async function runCommand(
+  name,
+  command,
+  commandArgs,
+  {
+    cwd = REPO,
+    env = process.env,
+    timeoutMs = args.operationTimeoutMs,
+    logName,
+    cleanup = false,
+  },
+) {
+  ensureStartAllowed(name, { cleanup });
   const logPath = join(logDir, logName);
   writeFileSync(logPath, "", { mode: 0o600 });
   return await new Promise((resolvePromise, reject) => {
@@ -431,7 +530,7 @@ async function runCommand(name, command, commandArgs, { cwd = REPO, env = proces
     const record = {
       name,
       pid: child.pid,
-      command: shellJoin([command, ...commandArgs]).replaceAll(REPO, "$REPO"),
+      command: redact(shellJoin([command, ...commandArgs])),
       log: relative(artifactDir, logPath),
       startedAt: new Date().toISOString(),
       stoppedAt: null,
@@ -447,10 +546,22 @@ async function runCommand(name, command, commandArgs, { cwd = REPO, env = proces
     managed.push(managedProcess);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
+    let killTimer;
+    let terminating = false;
+    const terminate = () => {
+      if (terminating) return;
+      terminating = true;
+      signalGroup(child, "SIGTERM");
+      killTimer = setTimeout(() => signalGroup(child, "SIGKILL"), 1_000);
+      killTimer.unref();
+    };
+    const onAbort = () => terminate();
+    if (!cleanup) {
+      runAbortController.signal.addEventListener("abort", onAbort, { once: true });
+    }
     const timer = setTimeout(() => {
       if (settled) return;
-      signalGroup(child, "SIGTERM");
-      setTimeout(() => signalGroup(child, "SIGKILL"), 1_000).unref();
+      terminate();
       settled = true;
       const output = redact(`${stdout}${stderr}`);
       writeFileSync(logPath, output, { mode: 0o600 });
@@ -461,6 +572,8 @@ async function runCommand(name, command, commandArgs, { cwd = REPO, env = proces
       record.exitCode = -1;
       record.stoppedAt = new Date().toISOString();
       resolveExited({ code: -1, signal: null, error });
+      clearTimeout(killTimer);
+      runAbortController.signal.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -472,6 +585,8 @@ async function runCommand(name, command, commandArgs, { cwd = REPO, env = proces
       record.signal = signal;
       record.stoppedAt = new Date().toISOString();
       resolveExited({ code, signal });
+      clearTimeout(killTimer);
+      runAbortController.signal.removeEventListener("abort", onAbort);
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -482,24 +597,21 @@ async function runCommand(name, command, commandArgs, { cwd = REPO, env = proces
 }
 
 function scaffoldEnvironment(overrides = {}) {
-  const environment = { ...process.env };
-  const removed = [];
-  for (const name of Object.keys(environment)) {
-    if (/(?:DATABASE|POSTGRES|PGHOST|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|SECRET|TOKEN|API_KEY|PRIVATE_KEY|WORKER|BUILDER)/i.test(name)) {
-      delete environment[name];
-      removed.push(name);
-    }
+  const environment = {};
+  for (const name of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ", "TMPDIR"]) {
+    if (process.env[name] !== undefined) environment[name] = process.env[name];
   }
   Object.assign(environment, overrides);
   state.configuration.scaffoldEnvironmentPolicy = {
-    removedVariableNames: removed.sort(),
-    note: "values are never recorded; database, key, secret, token, worker, and builder configuration is removed from scaffold product processes",
+    allowedVariableNames: Object.keys(environment).sort(),
+    note: "only basic process settings and explicit loopback test configuration are injected; values are never recorded here",
   };
   return environment;
 }
 
 async function loadScenarioExtensions() {
   for (const modulePath of args.scenarioModules) {
+    ensureStartAllowed("scenario extension loading");
     if (!modulePath.startsWith(`${REPO}${sep}`)) throw new Error(`scenario module must be inside the repository: ${modulePath}`);
     const loaded = await import(`file://${modulePath}`);
     const scenario = loaded.scenario;
@@ -526,6 +638,7 @@ function extensionContext() {
     logDir,
     tempDir,
     state,
+    abortSignal: runAbortController.signal,
     assertion,
     allocatePort,
     spawnManaged,
@@ -538,7 +651,15 @@ function extensionContext() {
     sha256,
     fileSha256,
     redact,
+    registerSensitiveValues,
+    registerCleanup(name, cleanup) {
+      ensureStartAllowed(`cleanup registration for ${name}`);
+      if (typeof cleanup !== "function") throw new Error(`cleanup for ${name} must be a function`);
+      let pending;
+      resourceCleanups.push({ name, run: () => (pending ||= Promise.resolve().then(cleanup)) });
+    },
     registerFixture(name, path) {
+      ensureStartAllowed(`fixture registration for ${name}`);
       const absolute = resolve(REPO, path);
       if (!absolute.startsWith(`${REPO}${sep}`) || !existsSync(absolute)) throw new Error(`invalid fixture path: ${path}`);
       state.fixtures.push({ name, path: relative(REPO, absolute), sha256: fileSha256(absolute) });
@@ -547,14 +668,19 @@ function extensionContext() {
 }
 
 async function waitForHttp(url, expectedStatus, label) {
+  ensureStartAllowed(label);
   let last = "no response";
   const deadline = Date.now() + args.operationTimeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(1_000), cache: "no-store" });
+      const response = await fetch(url, {
+        signal: AbortSignal.any([runAbortController.signal, AbortSignal.timeout(1_000)]),
+        cache: "no-store",
+      });
       last = `HTTP ${response.status}`;
       if (response.status === expectedStatus) return response;
     } catch (error) {
+      if (runAbortController.signal.aborted) throw runAbortController.signal.reason;
       last = error.message;
     }
     await delay(100);
@@ -563,8 +689,12 @@ async function waitForHttp(url, expectedStatus, label) {
 }
 
 async function getJson(url) {
+  ensureStartAllowed(`HTTP GET ${url}`);
   const response = await fetch(url, {
-    signal: AbortSignal.timeout(args.operationTimeoutMs),
+    signal: AbortSignal.any([
+      runAbortController.signal,
+      AbortSignal.timeout(args.operationTimeoutMs),
+    ]),
     cache: "no-store",
     headers: { Accept: "application/json" },
   });
@@ -579,6 +709,7 @@ async function getJson(url) {
 }
 
 async function captureBrowser(label, webUrl) {
+  ensureStartAllowed(`Chromium ${label}`);
   const profile = join(tempDir, `chromium-${label}`);
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   const screenshot = join(browserDir, `${label}.png`);
@@ -612,9 +743,13 @@ async function captureBrowser(label, webUrl) {
 
 async function assertUnreachable(url) {
   try {
-    await fetch(url, { signal: AbortSignal.timeout(2_000), cache: "no-store" });
+    await fetch(url, {
+      signal: AbortSignal.any([runAbortController.signal, AbortSignal.timeout(2_000)]),
+      cache: "no-store",
+    });
     return false;
-  } catch {
+  } catch (error) {
+    if (runAbortController.signal.aborted) throw runAbortController.signal.reason;
     return true;
   }
 }
@@ -743,13 +878,72 @@ async function execute() {
   await stopManaged(web, "normal completion");
 
   for (const extension of scenarioExtensions) {
+    ensureStartAllowed(`scenario extension ${extension.id}`);
     phase = `scenario-extension:${extension.id}`;
     await extension.run(extensionContext());
   }
 }
 
+async function boundedCleanup(label, operation) {
+  const timeoutMs = Math.min(45_000, Math.max(2_000, args.operationTimeoutMs * 2));
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} cleanup timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function shutdown(reason) {
-  for (const item of [...managed].reverse()) await stopManaged(item, reason);
+  shutdownStarted = true;
+  const performShutdown = async () => {
+    for (const item of [...managed].reverse()) {
+      try {
+        await boundedCleanup(item.name, () => stopManaged(item, reason));
+      } catch (error) {
+        state.errors.push({
+          phase: "cleanup",
+          kind: "failure",
+          message: `${item.name}: ${redact(error.message)}`,
+        });
+      }
+    }
+    for (const cleanup of [...resourceCleanups].reverse()) {
+      try {
+        await boundedCleanup(cleanup.name, cleanup.run);
+      } catch (error) {
+        state.errors.push({
+          phase: "cleanup",
+          kind: "failure",
+          message: `${cleanup.name}: ${redact(error.message)}`,
+        });
+      }
+    }
+    // Cleanup callbacks may start bounded helper commands. Reap any that were
+    // added after the initial managed-process snapshot.
+    for (const item of [...managed].reverse()) {
+      if (item.stopped) continue;
+      try {
+        await boundedCleanup(item.name, () => stopManaged(item, `${reason}; cleanup command`));
+      } catch (error) {
+        state.errors.push({
+          phase: "cleanup",
+          kind: "failure",
+          message: `${item.name}: ${redact(error.message)}`,
+        });
+      }
+    }
+  };
+  shutdownChain = shutdownChain.then(performShutdown, performShutdown);
+  await shutdownChain;
 }
 
 function makeReport() {
@@ -784,7 +978,7 @@ function makeReport() {
     lines.push("", "## Errors", "", ...state.errors.map((item) => `- ${item.phase} / ${item.kind}: ${item.message}`));
   }
   lines.push("", "`SHA256SUMS` is the external receipt and intentionally excludes itself.", "");
-  return lines.join("\n");
+  return redact(lines.join("\n"));
 }
 
 function md(value) {
@@ -807,46 +1001,229 @@ function writeChecksums(directory) {
   writeFileSync(join(directory, "SHA256SUMS"), `${receipt}\n`, { mode: 0o600 });
 }
 
+function sanitizeArtifactValue(value, key = "") {
+  if (
+    typeof value === "string" &&
+    /(?:authorization|(?:access[_-]?)?token|password|secret|api[_-]?key|database_url|recovery[_-]?key|private[_-]?key)/i.test(
+      key,
+    )
+  ) {
+    return "[REDACTED]";
+  }
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeArtifactValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, childValue]) => [
+        childKey,
+        sanitizeArtifactValue(childValue, childKey),
+      ]),
+    );
+  }
+  return value;
+}
+
+function artifactJson(value) {
+  return `${JSON.stringify(sanitizeArtifactValue(value), null, 2)}\n`;
+}
+
+function replaceBuffer(buffer, needle, replacement) {
+  const chunks = [];
+  let cursor = 0;
+  let matches = 0;
+  for (;;) {
+    const index = buffer.indexOf(needle, cursor);
+    if (index === -1) break;
+    chunks.push(buffer.subarray(cursor, index), replacement);
+    cursor = index + needle.length;
+    matches += 1;
+  }
+  if (matches === 0) return { buffer, matches };
+  chunks.push(buffer.subarray(cursor));
+  return { buffer: Buffer.concat(chunks), matches };
+}
+
+function scrubArtifactSensitiveValues(directory) {
+  const secrets = [...sensitiveValues]
+    .filter((value) => value.length > 0)
+    .sort((left, right) => right.length - left.length)
+    .map((value) => Buffer.from(value));
+  const replacement = Buffer.from("[REDACTED]");
+  let matches = 0;
+  let filesRewritten = 0;
+  for (const name of listFiles(directory)) {
+    const path = join(directory, name);
+    let content = readFileSync(path);
+    let fileMatches = 0;
+    for (const secret of secrets) {
+      const result = replaceBuffer(content, secret, replacement);
+      content = result.buffer;
+      fileMatches += result.matches;
+    }
+    if (fileMatches > 0) {
+      writeFileSync(path, content, { mode: 0o600 });
+      filesRewritten += 1;
+      matches += fileMatches;
+    }
+  }
+  return { matches, filesRewritten };
+}
+
+function scanArtifactSensitiveValues(directory) {
+  const secrets = [...sensitiveValues]
+    .filter((value) => value.length > 0)
+    .map((value) => Buffer.from(value));
+  let matches = 0;
+  let filesScanned = 0;
+  const matchedFiles = [];
+  for (const name of listFiles(directory)) {
+    const content = readFileSync(join(directory, name));
+    filesScanned += 1;
+    const fileMatches = secrets.filter((secret) => content.includes(secret)).length;
+    if (fileMatches > 0) {
+      matches += fileMatches;
+      matchedFiles.push(name);
+    }
+  }
+  return { matches, filesScanned, matchedFiles };
+}
+
+function writeCoreArtifacts() {
+  writeFileSync(
+    assertionsPath,
+    artifactJson({ schemaVersion: 1, runId, assertions: state.assertions }),
+    { mode: 0o600 },
+  );
+  writeFileSync(manifestPath, artifactJson(state), { mode: 0o600 });
+  writeFileSync(reportPath, makeReport(), { mode: 0o600 });
+}
+
 async function finalize() {
   if (finalized) return;
   finalized = true;
   clearTimeout(runDeadline);
-  await shutdown("finalization");
+  const artifactCleanup = {
+    resource: "artifact bundle",
+    action: "finalize manifest, report, assertions, credential scan, and external receipt",
+    result: "pending",
+  };
+  state.cleanup.push(artifactCleanup);
 
-  const observedIds = new Set(state.assertions.map((item) => item.id));
-  const missing = requiredAssertions.filter((id) => !observedIds.has(id));
-  assertion(
-    "required-assertions-complete",
-    "runner-integrity",
-    requiredAssertions,
-    missing,
-    missing.length === 0,
-    missing.length ? "one or more required assertions did not execute" : null,
-  );
+  try {
+    await shutdown("finalization");
 
-  if (existsSync(tempDir)) {
-    rmSync(tempDir, { recursive: true, force: true });
-    state.cleanup.push({ resource: "run temporary directory", action: "delete run-owned temporary files", result: "removed" });
+    state.source.endingCommit = git("rev-parse", "HEAD");
+    state.source.endingDirty = git("status", "--porcelain=v1", "--untracked-files=all").length > 0;
+    if (args.requireClean) {
+      assertion(
+        "gate-source-stable",
+        "source",
+        "the recorded commit remains clean and unchanged throughout the gate run",
+        { sameCommit: state.source.endingCommit === state.source.commit, dirty: state.source.endingDirty },
+        state.source.endingCommit === state.source.commit && !state.source.endingDirty,
+      );
+    }
+
+    const observedIds = new Set(state.assertions.map((item) => item.id));
+    const missing = requiredAssertions.filter((id) => !observedIds.has(id));
+    assertion(
+      "required-assertions-complete",
+      "runner-integrity",
+      requiredAssertions,
+      missing,
+      missing.length === 0,
+      missing.length ? "one or more required assertions did not execute" : null,
+    );
+
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+      state.cleanup.push({
+        resource: "run temporary directory",
+        action: "delete run-owned temporary files",
+        result: "removed",
+      });
+    }
+
+    rmSync(join(artifactDir, "SHA256SUMS"), { force: true });
+    const scrubbed = scrubArtifactSensitiveValues(artifactDir);
+    assertion(
+      "artifact-credentials-absent",
+      "runner-integrity",
+      0,
+      scrubbed.matches,
+      scrubbed.matches === 0,
+      scrubbed.matches > 0
+        ? "registered credential bytes were removed before the artifact receipt"
+        : null,
+    );
+    state.artifactSafety = {
+      registeredSensitiveValueCount: sensitiveValues.size,
+      scrubbedCredentialMatches: scrubbed.matches,
+      filesRewritten: scrubbed.filesRewritten,
+      finalCredentialMatches: 0,
+    };
+    state.retained = listFiles(artifactDir).filter(
+      (path) => !["manifest.json", "REPORT.md", "assertions.json"].includes(path),
+    );
+    const anyFailure =
+      state.assertions.some((item) => !item.passed)
+      || state.errors.some((item) => item.kind !== "warning")
+      || Boolean(fatalError)
+      || Boolean(interruptedSignal);
+    state.status = interruptedSignal ? "interrupted" : anyFailure ? "failed" : "passed";
+    state.endedAt = new Date().toISOString();
+    state.durationMs = new Date(state.endedAt).getTime() - startedAt.getTime();
+    artifactCleanup.result = "complete";
+
+    writeCoreArtifacts();
+    const scan = scanArtifactSensitiveValues(artifactDir);
+    state.artifactSafety.finalCredentialMatches = scan.matches;
+    state.artifactSafety.filesScanned = scan.filesScanned;
+    if (scan.matches > 0) {
+      throw new Error(
+        `credential scan found sensitive values in ${scan.matchedFiles.length} artifact file(s)`,
+      );
+    }
+    // Persist the final zero-match scan result, then verify those exact bytes
+    // once more before creating the external checksum receipt.
+    writeCoreArtifacts();
+    const finalScan = scanArtifactSensitiveValues(artifactDir);
+    if (finalScan.matches > 0) {
+      throw new Error(
+        `final credential scan found sensitive values in ${finalScan.matchedFiles.length} artifact file(s)`,
+      );
+    }
+    writeChecksums(artifactDir);
+  } catch (error) {
+    finalizationIncomplete = true;
+    fatalError ||= error;
+    state.status = interruptedSignal ? "interrupted" : "failed";
+    state.endedAt ||= new Date().toISOString();
+    state.durationMs = new Date(state.endedAt).getTime() - startedAt.getTime();
+    artifactCleanup.result = `incomplete: ${redact(error.message)}`;
+    state.errors.push({
+      phase: "artifact-finalization",
+      kind: "failure",
+      message: redact(error.message),
+    });
+    rmSync(join(artifactDir, "SHA256SUMS"), { force: true });
+    try {
+      scrubArtifactSensitiveValues(artifactDir);
+      writeCoreArtifacts();
+      scrubArtifactSensitiveValues(artifactDir);
+    } catch {
+      // Preserve whatever partial evidence remains. No receipt means it cannot pass.
+    }
+    throw error;
   }
-
-  state.retained = listFiles(artifactDir).filter((path) => !["manifest.json", "REPORT.md", "assertions.json"].includes(path));
-  const anyFailure = state.assertions.some((item) => !item.passed) || state.errors.some((item) => item.kind !== "warning") || Boolean(fatalError) || Boolean(interruptedSignal);
-  state.status = interruptedSignal ? "interrupted" : anyFailure ? "failed" : "passed";
-  state.endedAt = new Date().toISOString();
-  state.durationMs = new Date(state.endedAt).getTime() - startedAt.getTime();
-  state.cleanup.push({ resource: "artifact bundle", action: "finalize manifest, report, assertions, and external receipt", result: "complete" });
-
-  writeFileSync(assertionsPath, `${JSON.stringify({ schemaVersion: 1, runId, assertions: state.assertions }, null, 2)}\n`, { mode: 0o600 });
-  writeFileSync(manifestPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  writeFileSync(reportPath, makeReport(), { mode: 0o600 });
-  writeChecksums(artifactDir);
 }
 
 try {
-  await execute();
+  await Promise.race([execute(), runAborted]);
 } catch (error) {
-  fatalError = error;
-  state.errors.push({ phase, kind: /timed out/.test(error.message) ? "timeout" : "failure", message: redact(error.message) });
+  if (!runAbortController.signal.aborted) {
+    abortRun(error, /timed out/.test(error.message) ? "timeout" : "failure");
+  }
 } finally {
   try {
     await finalize();
@@ -857,7 +1234,29 @@ try {
 }
 
 const receiptPath = join(artifactDir, "SHA256SUMS");
-const receiptHash = existsSync(receiptPath) ? fileSha256(receiptPath) : "unavailable";
-process.stdout.write(`Hostlet E2E ${state.status}: ${relative(REPO, artifactDir)}\n`);
+let receiptHash = "unavailable";
+try {
+  if (existsSync(receiptPath)) receiptHash = fileSha256(receiptPath);
+} catch (error) {
+  finalizationIncomplete = true;
+  fatalError ||= error;
+}
+const effectiveStatus = finalizationIncomplete || fatalError
+  ? interruptedSignal ? "interrupted" : "failed"
+  : state.status;
+process.stdout.write(`Hostlet E2E ${effectiveStatus}: ${relative(REPO, artifactDir)}\n`);
 process.stdout.write(`SHA256SUMS sha256: ${receiptHash}\n`);
-if (state.status !== "passed" || fatalError || interruptedSignal || !existsSync(receiptPath)) process.exitCode = 1;
+if (
+  effectiveStatus !== "passed"
+  || fatalError
+  || interruptedSignal
+  || finalizationIncomplete
+  || !existsSync(receiptPath)
+) {
+  process.exitCode = 1;
+}
+if (runAbortController.signal.aborted) {
+  // A misbehaving scenario can retain event-loop handles after ignoring abort.
+  // Give synchronous artifact output a chance to flush, then honor the bounded run.
+  setTimeout(() => process.exit(process.exitCode || 1), 50).unref();
+}

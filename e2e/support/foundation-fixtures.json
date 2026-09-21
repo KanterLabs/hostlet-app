@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "accounts": [
+    {
+      "email": "owner-a@foundation.hostlet.test",
+      "display_name": "Foundation Owner A"
+    },
+    {
+      "email": "owner-b@foundation.hostlet.test",
+      "display_name": "Foundation Owner B"
+    }
+  ],
+  "profile_updates": {
+    "replayed": "Owner A — replayed intent",
+    "conflicting": "Owner A — changed replay payload",
+    "contender_a": "Owner A — contender A",
+    "contender_b": "Owner A — contender B",
+    "after_database_recovery": "Owner A — database recovered"
+  }
+}

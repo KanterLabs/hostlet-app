@@ -168,13 +168,13 @@ impl PortfolioDraft {
                 project_reference_id: None,
             });
         }
-        if self.section_visibility.resume == Visibility::Shown {
-            if let Some(resume) = &self.resume {
-                targets.push(ApprovalTarget::Link {
-                    link_id: resume.id.clone(),
-                    project_reference_id: None,
-                });
-            }
+        if self.section_visibility.resume == Visibility::Shown
+            && let Some(resume) = &self.resume
+        {
+            targets.push(ApprovalTarget::Link {
+                link_id: resume.id.clone(),
+                project_reference_id: None,
+            });
         }
         if self.section_visibility.contacts == Visibility::Shown {
             targets.extend(self.contacts.iter().map(|contact| ApprovalTarget::Contact {

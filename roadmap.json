@@ -1,11 +1,28 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "updated": "2026-09-21",
   "project": "HOST",
   "repository": "KanterLabs/hostlet-app",
-  "release": "Hostlet 0.1 \u2014 paid pilot readiness",
+  "release": "Hostlet 0.1 — paid pilot readiness",
   "release_status": "planned",
   "tasks": [
+    {
+      "key": "HOST-241",
+      "slug": "e2e-runner-and-artifacts",
+      "phase": "foundation",
+      "title": "Build the real-process E2E runner and repeatable evidence bundle",
+      "goal": "Establish the E2E acceptance path on the existing scaffold before feature implementation, with truthful assertions and verifiable repeatable evidence on successful and failed runs.",
+      "acceptance": [
+        "A documented command starts actual Hostlet API/web processes and exercises browser/HTTP health, version, honest not-ready and offline states without mocking Hostlet internals or claiming unimplemented features.",
+        "Successful and deliberately failed runs both produce the TESTING.md evidence bundle, exact rerun instructions, source/toolchain/fixture identities, machine assertions, sanitized outputs, file hashes and cleanup outcome.",
+        "Missing prerequisites, failed assertions, skipped required scenarios, timeout or artifact-finalization failure return nonzero; screenshots or a green process alone cannot count as a pass.",
+        "A clean repeat run reproduces semantic assertions and durable evidence checks; run-owned disposable resources are cleaned without deleting production or shared data.",
+        "Artifact output is ignored by Git and has no automatic public upload; future PostgreSQL, browser, worker and sandbox scenarios can extend the runner without adding a parallel unit-test suite."
+      ],
+      "depends_on": [],
+      "milestone": "M1",
+      "is_gate": false
+    },
     {
       "key": "HOST-209",
       "slug": "standard-project-contract",
@@ -16,9 +33,13 @@
         "Versioned types and fixtures represent accounts, projects, services, deployments, repository roots, configuration revisions, and the one-slot resource relationship.",
         "The contract lists initial Node/Vite/Next.js patterns and lockfile rules, requires commands and an HTTP health endpoint only for application services, and provides stable rejection reasons for unsupported patterns.",
         "Every proposed CPU, memory, database, storage, build, artifact, transfer, and log allowance has units, enforcement behavior, and a benchmark-candidate label; none is marked as an approved promise.",
-        "Focused contract tests accept static-only and API-only bundles while rejecting extra services, unbounded resource requests, and application services missing commands or health checks with versioned errors."
+        "Record public-boundary scenarios and representative fixtures for accepted static-only/API-only bundles and rejected extra services, unbounded resources or missing application commands/health checks; compile the types and carry the scenarios into M1 running-service E2E. This types-only card does not prove end-to-end behavior."
       ],
-      "depends_on": []
+      "depends_on": [
+        "HOST-241"
+      ],
+      "milestone": "M1",
+      "is_gate": false
     },
     {
       "key": "HOST-210",
@@ -27,12 +48,16 @@
       "title": "Implement portfolio publication typed contract and fixtures",
       "goal": "Define the shared content, approval, deployment-fact, publication, and demo-readiness contract used by editable portfolios and independent static artifacts.",
       "acceptance": [
-        "Versioned types and fixtures cover profile, introduction, target role, skills, r\u00e9sum\u00e9 and contact links, ordered project references, contributions, technical decisions, evidence, visibility, and readiness state.",
+        "Versioned types and fixtures cover profile, introduction, target role, skills, résumé and contact links, ordered project references, contributions, technical decisions, evidence, visibility, and readiness state.",
         "Drafts, immutable approved revisions, authorized deployment facts, and owner edits are represented as separate states with an audit trail.",
-        "Contract tests require explicit approval for narrative, contribution, source/demo links, screenshots, contact details, and deployment fields; private repository access alone cannot make content public.",
+        "Record positive and negative public-boundary scenarios for narrative, contribution, links, screenshots, contact and status approvals; compile typed fixtures now and verify the complete publication behavior in M3 E2E. Private repository access never substitutes for explicit publication approval.",
         "The contract states that static publication has no dashboard, GitHub, or application page-load dependency and that portfolios and external case studies consume no hosted project slot."
       ],
-      "depends_on": []
+      "depends_on": [
+        "HOST-241"
+      ],
+      "milestone": "M1",
+      "is_gate": false
     },
     {
       "key": "HOST-215",
@@ -41,15 +66,17 @@
       "title": "Implement authenticated identity, ownership, and durable platform persistence",
       "goal": "Replace scaffold-only state with authenticated accounts, ownership checks, and PostgreSQL-backed platform records that cannot accept customer work through memory alone.",
       "acceptance": [
-        "A local PostgreSQL integration test creates account, identity, ownership, and intent records, restarts the API, and reads the same durable rows.",
-        "A shared ownership guard is applied to every route introduced in this foundation and onboarding slice; two-account tests allow the owner and deny the non-owner for each read and write.",
+        "A running-service E2E scenario creates account, identity, ownership and intent through real HTTP, restarts the API connected to a real disposable PostgreSQL instance, and verifies the same durable rows and ownership through public responses plus recorded data checks.",
+        "Browser or HTTP E2E scenarios use two authenticated accounts against introduced routes to allow the owner and deny the non-owner for reads and writes; all later routes inherit the ownership boundary.",
         "Readiness reports the platform as unavailable when PostgreSQL is unavailable, and each accepted intent or job write commits durable truth before returning success.",
         "Audit records and structured logs contain no provider credential or secret value, while authentication and ownership events remain queryable for recovery."
       ],
       "depends_on": [
         "HOST-209",
         "HOST-210"
-      ]
+      ],
+      "milestone": "M1",
+      "is_gate": false
     },
     {
       "key": "HOST-216",
@@ -58,14 +85,16 @@
       "title": "Add project, service, deployment, and slot-state records",
       "goal": "Implement the authoritative project graph and release records so drafts, hosted resources, deployment facts, and portfolio references remain distinct.",
       "acceptance": [
-        "PostgreSQL records implement Account \u2192 Project \u2192 Service \u2192 Deployment ownership and support one repository or monorepo with the contract's service-count rules.",
+        "PostgreSQL records implement Account → Project → Service → Deployment ownership and support one repository or monorepo with the contract's service-count rules.",
         "Deployment records retain source commit, configuration revision, artifact references, health result, and database migration revision without secret values.",
         "Drafts, compatibility checks, portfolios, and external case studies have no hosted slot; first deployment, retained database failure, rollback, and removal states have explicit transitions.",
-        "Idempotency tests cover duplicate project, service, and deployment intent writes and persisted lifecycle transitions without duplicate rows or dropped updates."
+        "E2E scenarios submit duplicate and concurrent project/service/deployment intent requests through the running API and verify persisted transitions, no duplicate rows, and no dropped updates after a restart."
       ],
       "depends_on": [
         "HOST-215"
-      ]
+      ],
+      "milestone": "M1",
+      "is_gate": false
     },
     {
       "key": "HOST-217",
@@ -77,11 +106,13 @@
         "Persisted job states cover queued, running, succeeded, failed, canceled, and retriable outcomes with an idempotency key and lease/fence owner.",
         "Secret records are scoped to an account, project, service, and operation; release records, logs, and job reports contain only secret-version references or redacted values.",
         "A build receives only the selected commit's declared credentials, while production database credentials and management credentials are rejected by policy.",
-        "Recovery tests fence an expired worker, prevent duplicate execution, and prove that a retry cannot read another project's secret reference."
+        "Process-level E2E scenarios crash or expire a real worker lease, observe fencing and recovery through the API, and prove retries cannot commit duplicate outcomes or read another project secret reference."
       ],
       "depends_on": [
         "HOST-216"
-      ]
+      ],
+      "milestone": "M1",
+      "is_gate": false
     },
     {
       "key": "HOST-218",
@@ -92,12 +123,32 @@
       "acceptance": [
         "Numbered additive migrations are serialized, checked in, and fail closed on reset/recreate or an out-of-order version.",
         "A populated disposable database containing accounts, projects, jobs, secrets, deployments, and portfolio revisions upgrades while preserving rows, ownership, and relationships.",
-        "An upgrade test verifies a fresh pre-upgrade backup before migration and reads the upgraded data with both the retained binary and the new binary.",
+        "An E2E upgrade runs the actual migration command against populated disposable PostgreSQL after verifying a fresh backup, then launches the retained and new binaries to verify readable upgraded data; record migration and recovery receipts.",
         "Platform backups run hourly with 48-hour retention plus seven daily backups, target at most one hour of data loss and four hours to recovery, and are treated as explicit recovery policy rather than an unmeasured candidate; restore tests validate ownership and audit relationships with separately controlled recovery configuration and keys."
       ],
       "depends_on": [
         "HOST-217"
-      ]
+      ],
+      "milestone": "M1",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-242",
+      "slug": "m1-foundation-stop",
+      "phase": "milestone",
+      "title": "M1 stop — verify foundation E2E and hand off",
+      "goal": "Stop after the durable foundation is proven through real API/process/PostgreSQL boundaries and a repeatable evidence bundle.",
+      "acceptance": [
+        "All M1 implementation cards are complete; no M2 or later work is claimed.",
+        "E2E scenarios prove account ownership, persisted intent, duplicate/concurrent requests, API/worker restarts, unavailable database behavior and populated migration/backup/recovery through running components.",
+        "Publish and verify the M1 TESTING.md bundle with data-preservation receipts and a clean repeat run; link exact commit, command, checksums and remaining limitations.",
+        "Record a concise handoff and STOP without claiming M2, even when Helm shows its tasks as claimable."
+      ],
+      "depends_on": [
+        "HOST-218"
+      ],
+      "milestone": "M1",
+      "is_gate": true
     },
     {
       "key": "HOST-219",
@@ -108,12 +159,14 @@
       "acceptance": [
         "An owner can list and bind only repositories granted to the Hostlet App, with an explicit authorized branch or ref recorded in PostgreSQL.",
         "Fetches resolve an exact authorized commit and never accept an arbitrary repository URL, ref, or credential from a client request.",
-        "Signed webhook tests reject invalid signatures, unauthorized repositories or branches, replayed delivery IDs, and events for an unbound project.",
+        "HTTP E2E scenarios deliver signed events to the real webhook endpoint and reject invalid signatures, unauthorized repositories/branches, replayed delivery IDs and unbound projects; record any external GitHub fixture boundary explicitly.",
         "Private source access is represented as a scoped credential and does not create a publication approval or public source link."
       ],
       "depends_on": [
-        "HOST-218"
-      ]
+        "HOST-242"
+      ],
+      "milestone": "M2",
+      "is_gate": false
     },
     {
       "key": "HOST-220",
@@ -122,14 +175,16 @@
       "title": "Implement entitlement, capacity hold, slot reservation, and build meter reconciliation",
       "goal": "Atomically admit a first deployment only when entitlement and real capacity are available, while keeping retries and retained resources consistent.",
       "acceptance": [
-        "Concurrent first-deploy tests reserve at most the purchased slot count and record a retry-safe capacity hold before resource creation.",
+        "Concurrent HTTP E2E first-deploy requests reserve at most the purchased slot count in real PostgreSQL and persist a retry-safe capacity hold before resource creation; use explicit internal entitlement fixtures before billing exists.",
         "Drafts and previews reserve no slot; a failed deployment releases a reservation only after cleanup, while a retained database or hosted resource keeps the slot reserved.",
         "Redeploy and rollback preserve the same slot, overlap uses separate rollout headroom, and a platform-fault retry credits build usage exactly once.",
         "A reconciler converges interrupted entitlement, capacity, slot, and build-meter events without double reservation or accepting work from an in-memory-only state."
       ],
       "depends_on": [
-        "HOST-218"
-      ]
+        "HOST-242"
+      ],
+      "milestone": "M2",
+      "is_gate": false
     },
     {
       "key": "HOST-221",
@@ -138,46 +193,16 @@
       "title": "Implement bounded static compatibility analysis",
       "goal": "Analyze selected source without executing customer code and return actionable compatibility outcomes before payment or hosted capacity admission.",
       "acceptance": [
-        "Fixture tests inspect lockfiles, declared roots, commands, framework markers, and environment names without running install scripts, builds, migrations, or application code.",
-        "Reports distinguish the exact outcome `Looks compatible \u2014 deployment not yet verified`, Configuration needed, Database needed, Secrets needed, and Showcase-only unsupported outcomes with a reason and source location.",
+        "E2E repository-import and analysis requests inspect fixture lockfiles, roots, commands, framework markers and environment names through the running service; prove install scripts, builds, migrations and app code were not executed.",
+        "Reports distinguish the exact outcome `Looks compatible — deployment not yet verified`, Configuration needed, Database needed, Secrets needed, and Showcase-only unsupported outcomes with a reason and source location.",
         "The analyzer recognizes the selected Vite/static, single Node HTTP service, and documented Next.js patterns and rejects Docker Compose, custom servers, extra workers, and unsupported persistent-disk assumptions.",
         "A compatibility check creates no entitlement, hosted slot, deployment, or customer build allowance consumption."
       ],
       "depends_on": [
         "HOST-219"
-      ]
-    },
-    {
-      "key": "HOST-222",
-      "slug": "gvisor-runtime-controls",
-      "phase": "delivery",
-      "title": "Evaluate gVisor runtime isolation and enforce workload controls",
-      "goal": "Benchmark gVisor against the supported fixtures and implement explicit tenant runtime isolation, resource, egress, management, and no-idle-sleep controls.",
-      "acceptance": [
-        "A repeatable benchmark records gVisor compatibility, startup, CPU/memory overhead, failure behavior, and a documented fallback or deferral decision for the supported Node/Next.js fixtures.",
-        "Runtime tests deny tenant access to platform data, other tenants, management sockets, and build infrastructure while allowing only declared service egress and routing.",
-        "CPU, memory, scratch, process, connection, and restart-backoff policies emit a customer-visible reason on enforcement; an allocated app and database do not stop solely for inactivity.",
-        "The evaluated runtime is incapable of accepting customer work until the isolation policy and compatibility evidence are present in the admission check."
       ],
-      "depends_on": [
-        "HOST-220"
-      ]
-    },
-    {
-      "key": "HOST-223",
-      "slug": "tenant-postgres-lifecycle",
-      "phase": "delivery",
-      "title": "Provision tenant PostgreSQL with backup, restore, and export lifecycle",
-      "goal": "Give each hosted project an isolated PostgreSQL data boundary with tested backup, restore, export, migration preconditions, and recoverability evidence.",
-      "acceptance": [
-        "A project database has isolated roles, network access, connection limits, storage accounting, and a populated fixture separate from platform PostgreSQL; it does not expire from inactivity.",
-        "Encrypted tenant backups run daily and are retained for seven days; every migration requires a verified fresh pre-migration backup, with test targets of at most 24 hours of data loss and four hours to restore one project, explicitly treated as policy targets rather than an SLA.",
-        "Restore tests use an isolated replacement database, validate populated rows, relationships, ownership/grants, and a real application connection, then prove a portable dump export without cluster-wide roles.",
-        "Perform a restore drill and use clock-controlled scheduler tests to prove weekly rotating drills cover every active database at least monthly; record data-loss/restore timing without switching a live project to old data automatically."
-      ],
-      "depends_on": [
-        "HOST-220"
-      ]
+      "milestone": "M2",
+      "is_gate": false
     },
     {
       "key": "HOST-224",
@@ -193,7 +218,64 @@
       ],
       "depends_on": [
         "HOST-221"
-      ]
+      ],
+      "milestone": "M2",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-243",
+      "slug": "m2-onboarding-stop",
+      "phase": "milestone",
+      "title": "M2 stop — verify onboarding E2E and hand off",
+      "goal": "Stop after an owner can safely connect authorized source, inspect compatibility, preview a portfolio and exercise capacity admission without running untrusted prepurchase code.",
+      "acceptance": [
+        "All M2 implementation cards are complete; use M1 evidence and keep M3 work unclaimed.",
+        "Browser/HTTP E2E covers selected repository and branch access, signed/replayed/unauthorized events, unsupported repositories, configuration prompts, private-source boundaries and saved portfolio preview without payment or code execution.",
+        "Concurrent admission scenarios verify capacity holds and slot accounting through the running control API and PostgreSQL using explicit internal entitlements; external fixtures are declared.",
+        "Publish and clean-repeat the M2 TESTING.md bundle, record the handoff and STOP before M3."
+      ],
+      "depends_on": [
+        "HOST-224",
+        "HOST-220"
+      ],
+      "milestone": "M2",
+      "is_gate": true
+    },
+    {
+      "key": "HOST-222",
+      "slug": "gvisor-runtime-controls",
+      "phase": "delivery",
+      "title": "Evaluate gVisor runtime isolation and enforce workload controls",
+      "goal": "Benchmark gVisor against the supported fixtures and implement explicit tenant runtime isolation, resource, egress, management, and no-idle-sleep controls.",
+      "acceptance": [
+        "A repeatable benchmark records gVisor compatibility, startup, CPU/memory overhead, failure behavior, and a documented fallback or deferral decision for the supported Node/Next.js fixtures.",
+        "E2E probes inside actual owned-fixture sandboxes deny access to platform data, other tenants, management sockets and build infrastructure while allowing declared egress/routing; simulated isolation alone does not pass the gate.",
+        "CPU, memory, scratch, process, connection, and restart-backoff policies emit a customer-visible reason on enforcement; an allocated app and database do not stop solely for inactivity.",
+        "The evaluated runtime is incapable of accepting customer work until the isolation policy and compatibility evidence are present in the admission check."
+      ],
+      "depends_on": [
+        "HOST-243"
+      ],
+      "milestone": "M3",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-223",
+      "slug": "tenant-postgres-lifecycle",
+      "phase": "delivery",
+      "title": "Provision tenant PostgreSQL with backup, restore, and export lifecycle",
+      "goal": "Give each hosted project an isolated PostgreSQL data boundary with tested backup, restore, export, migration preconditions, and recoverability evidence.",
+      "acceptance": [
+        "A project database has isolated roles, network access, connection limits, storage accounting, and a populated fixture separate from platform PostgreSQL; it does not expire from inactivity.",
+        "Encrypted tenant backups run daily and are retained for seven days; every migration requires a verified fresh pre-migration backup, with test targets of at most 24 hours of data loss and four hours to restore one project, explicitly treated as policy targets rather than an SLA.",
+        "An E2E recovery invokes actual backup/export/restore commands into an isolated replacement PostgreSQL instance, validates populated rows, relationships and grants, and connects the real fixture app; record portable export and restore receipts without cluster-wide roles.",
+        "Perform a real fixture restore drill and use an explicit whole-system test clock to exercise weekly rotation and monthly coverage end to end; record loss/restore timing without automatically replacing live data."
+      ],
+      "depends_on": [
+        "HOST-243"
+      ],
+      "milestone": "M3",
+      "is_gate": false
     },
     {
       "key": "HOST-225",
@@ -205,12 +287,31 @@
         "A build job runs only for an authorized commit after compatibility and internal entitlement admission, with enforced CPU, memory, timeout, workspace, and output-size limits.",
         "The VM has no tenant-to-tenant, management-network, tenant-runtime, or production-database path, and no organization CI runner executes customer build code.",
         "Successful output is immutable and digest-addressed; timeout, oversized output, dependency failure, and policy rejection produce bounded reports and clean up the VM.",
-        "Integration fixtures prove the build receives only service-scoped credentials, consumes the account meter once, and leaves any current live release untouched on failure."
+        "E2E fixtures use the actual queue, disposable VM build and artifact path to prove scoped credentials, exactly-once usage accounting and that failed builds cannot mark a release healthy or activate a candidate; record VM cleanup evidence. Prove previous-release availability after release implementation in HOST-226 and HOST-233."
       ],
       "depends_on": [
-        "HOST-221",
-        "HOST-220"
-      ]
+        "HOST-243"
+      ],
+      "milestone": "M3",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-227",
+      "slug": "portfolio-approval-fact-sync",
+      "phase": "portfolio",
+      "title": "Implement owner approvals and deployment-fact synchronization",
+      "goal": "Keep private source, owner narratives, approved publication content, live deployment facts, and demo readiness as separate trust-boundary records.",
+      "acceptance": [
+        "The owner must approve the first publication's narrative, contribution, images, contact details, public source/demo links, and displayed deployment/status fields individually or through a recorded revision approval.",
+        "Background synchronization may update only previously approved destination, deployment time, and availability facts; an owner-edited link or narrative returns to review instead of being overwritten.",
+        "Every fact-only revision records the source deployment and audit event, while source commit hashes remain private unless explicitly approved for display.",
+        "A release or demo-access change marks the separate readiness attestation as needing recheck without erasing the last approved case study."
+      ],
+      "depends_on": [
+        "HOST-243"
+      ],
+      "milestone": "M3",
+      "is_gate": false
     },
     {
       "key": "HOST-226",
@@ -228,23 +329,48 @@
         "HOST-225",
         "HOST-222",
         "HOST-223"
-      ]
+      ],
+      "milestone": "M3",
+      "is_gate": false
     },
     {
-      "key": "HOST-227",
-      "slug": "portfolio-approval-fact-sync",
+      "key": "HOST-229",
+      "slug": "static-publisher-one-template",
       "phase": "portfolio",
-      "title": "Implement owner approvals and deployment-fact synchronization",
-      "goal": "Keep private source, owner narratives, approved publication content, live deployment facts, and demo readiness as separate trust-boundary records.",
+      "title": "Publish one independent static portfolio template",
+      "goal": "Render an owner-approved portfolio revision into a durable static artifact that survives dashboard, GitHub, and application outages and proves the first internal milestone.",
       "acceptance": [
-        "The owner must approve the first publication's narrative, contribution, images, contact details, public source/demo links, and displayed deployment/status fields individually or through a recorded revision approval.",
-        "Background synchronization may update only previously approved destination, deployment time, and availability facts; an owner-edited link or narrative returns to review instead of being overwritten.",
-        "Every fact-only revision records the source deployment and audit event, while source commit hashes remain private unless explicitly approved for display.",
-        "A release or demo-access change marks the separate readiness attestation as needing recheck without erasing the last approved case study."
+        "One template renders introduction, featured projects, skills, résumé/contact links, and project detail evidence from the approved structured revision and referenced deployment facts.",
+        "The publisher emits an immutable artifact and atomically advances a public pointer while retaining the last good artifact when rendering or upload fails.",
+        "A browser E2E loads the published artifact from the independent static server after dashboard, GitHub and tenant endpoints are unavailable; assert content and links, not merely an HTTP 200 or screenshot.",
+        "Portfolio publication and an external case study create no hosted project slot and cannot expose an unapproved private source field."
       ],
       "depends_on": [
-        "HOST-224"
-      ]
+        "HOST-227"
+      ],
+      "milestone": "M3",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-233",
+      "slug": "internal-journey-milestone",
+      "phase": "launch",
+      "title": "M3 stop — prove the working demo and portfolio E2E",
+      "goal": "Demonstrate the differentiating outcome with owned fixtures before any external pilot activity: exact source to isolated build, healthy release, project database, and reviewed static portfolio.",
+      "acceptance": [
+        "An owned fixture passes bounded compatibility, uses an internal entitlement, builds an exact commit in a disposable VM, and records the job, artifact, and meter evidence.",
+        "A fixture with one static frontend, one Node API, and PostgreSQL reaches a healthy coordinated release with migration and last-good-release evidence.",
+        "An owner manually approves one portfolio revision and its deployment facts; independently served static output and the fixture health result are verified.",
+        "The milestone runs without customer contact, external deployment, live charge, or public pilot admission and records all failures without hiding them behind a demo shortcut.",
+        "A failed candidate leaves the prior full-stack release available, and the approved static portfolio loads with dashboard, GitHub and tenant application endpoints unavailable.",
+        "Verify the M3 TESTING.md bundle and a clean repeat run using real disposable build/runtime/database boundaries; publish the handoff and STOP before claiming M4."
+      ],
+      "depends_on": [
+        "HOST-226",
+        "HOST-229"
+      ],
+      "milestone": "M3",
+      "is_gate": true
     },
     {
       "key": "HOST-228",
@@ -259,25 +385,10 @@
         "No live payment method, real price, or public checkout path is enabled by this task, and failed later releases do not restart the refund window."
       ],
       "depends_on": [
-        "HOST-224",
-        "HOST-220"
-      ]
-    },
-    {
-      "key": "HOST-229",
-      "slug": "static-publisher-one-template",
-      "phase": "portfolio",
-      "title": "Publish one independent static portfolio template",
-      "goal": "Render an owner-approved portfolio revision into a durable static artifact that survives dashboard, GitHub, and application outages and proves the first internal milestone.",
-      "acceptance": [
-        "One template renders introduction, featured projects, skills, r\u00e9sum\u00e9/contact links, and project detail evidence from the approved structured revision and referenced deployment facts.",
-        "The publisher emits an immutable artifact and atomically advances a public pointer while retaining the last good artifact when rendering or upload fails.",
-        "A page-load test succeeds with dashboard, GitHub, and tenant application endpoints unavailable, and the artifact is served from an independent publishing boundary.",
-        "Portfolio publication and an external case study create no hosted project slot and cannot expose an unapproved private source field."
+        "HOST-233"
       ],
-      "depends_on": [
-        "HOST-227"
-      ]
+      "milestone": "M4",
+      "is_gate": false
     },
     {
       "key": "HOST-230",
@@ -286,15 +397,16 @@
       "title": "Enforce resource limits and ship logs, health alerts, and metrics",
       "goal": "Make resource exhaustion bounded and visible while protecting live demos, tenant isolation, and operational recovery capacity.",
       "acceptance": [
-        "Integration tests enforce candidate CPU, memory, scratch, database storage/connections, build time/concurrency, artifact, transfer, portfolio asset, and log limits with stable customer-facing outcomes.",
+        "Running-system E2E scenarios enforce candidate CPU, memory, scratch, database storage/connections, build time/concurrency, artifact, transfer, portfolio asset and log limits with asserted customer-visible outcomes.",
         "Health checks, deployment failures, restarts, quota warnings, capacity headroom, and alert delivery produce structured metrics and logs with platform-known secret redaction.",
         "Log rotation never stops an application, traffic exhaustion retains authenticated export and app/data state, and no resource policy is implemented as inactivity sleep.",
-        "Concurrent tenant load tests show database, network, runtime, and build controls isolate tenants and preserve reserved rollout/recovery headroom."
+        "Concurrent end-to-end tenant load scenarios use actual workers/databases to prove isolation and reserved rollout/recovery headroom; produce machine-readable usage and health evidence."
       ],
       "depends_on": [
-        "HOST-226",
-        "HOST-229"
-      ]
+        "HOST-233"
+      ],
+      "milestone": "M4",
+      "is_gate": false
     },
     {
       "key": "HOST-231",
@@ -305,12 +417,14 @@
       "acceptance": [
         "Three layouts render the same approved fixture with consistent project links, evidence, approvals, and deployment-fact visibility, and each has a stable template identifier.",
         "Owners can configure typography, accent, project order, and section visibility without introducing a drag-and-drop page-builder model or bypassing approvals.",
-        "Preview and published artifact tests verify all three layouts remain static, retain the last good revision, and work when dashboard and application endpoints are unavailable.",
+        "Browser E2E scenarios switch and publish all three layouts through the product flow, verify static outputs and last-good retention, and reload them with dashboard and application endpoints unavailable.",
         "Accessibility checks cover keyboard navigation, heading structure, contrast, link names, and responsive rendering for every launch layout."
       ],
       "depends_on": [
-        "HOST-229"
-      ]
+        "HOST-233"
+      ],
+      "milestone": "M4",
+      "is_gate": false
     },
     {
       "key": "HOST-232",
@@ -319,34 +433,17 @@
       "title": "Implement cancellation, nonpayment, export, and deletion lifecycle",
       "goal": "Make service end-of-life predictable and recoverable across cancellation, failed renewal, refund, export, account deletion, and retention windows.",
       "acceptance": [
-        "Cancel-renewal tests keep included services through the paid-through date, while a seven-day failed-renewal grace blocks new deployments/provisioning and keeps existing demos running.",
+        "Running-system E2E cancellation scenarios keep service through the paid-through date; an explicit test clock drives seven-day failed-renewal grace while existing demos run and new provisioning/deployments are rejected.",
         "After paid service or grace ends, compute/database access and deployment changes stop, portfolio demo status becomes Demo offline, and the approved static portfolio remains through the disclosed recovery window.",
         "Authenticated export provides portfolio HTML/assets, structured content, and a portable database dump; any separate secret export requires reauthentication and is audited.",
         "Explicit deletion immediately revokes access and unpublishes content, removes primary data within seven days, expires backups within seven more, displays actual dates, and does not recycle the public slug during the pilot.",
-        "Clock-controlled tests retain recoverable data and the approved static portfolio for 30 days after service ends, expire ordinary backups within seven days after primary deletion, show reminder/deletion dates, and require entitlement and capacity checks before reactivation."
+        "E2E lifecycle scenarios using an explicit whole-system test clock retain recoverable data and static portfolios for 30 days, expire ordinary backups within seven days after primary deletion, verify reminder/deletion dates and require entitlement/capacity on reactivation."
       ],
       "depends_on": [
-        "HOST-226",
-        "HOST-229",
         "HOST-228"
-      ]
-    },
-    {
-      "key": "HOST-233",
-      "slug": "internal-journey-milestone",
-      "phase": "launch",
-      "title": "Prove the complete internal fixture journey",
-      "goal": "Demonstrate the differentiating outcome with owned fixtures before any external pilot activity: exact source to isolated build, healthy release, project database, and reviewed static portfolio.",
-      "acceptance": [
-        "An owned fixture passes bounded compatibility, uses an internal entitlement, builds an exact commit in a disposable VM, and records the job, artifact, and meter evidence.",
-        "A fixture with one static frontend, one Node API, and PostgreSQL reaches a healthy coordinated release with migration and last-good-release evidence.",
-        "An owner manually approves one portfolio revision and its deployment facts; independently served static output and the fixture health result are verified.",
-        "The milestone runs without customer contact, external deployment, live charge, or public pilot admission and records all failures without hiding them behind a demo shortcut."
       ],
-      "depends_on": [
-        "HOST-226",
-        "HOST-229"
-      ]
+      "milestone": "M4",
+      "is_gate": false
     },
     {
       "key": "HOST-234",
@@ -358,11 +455,33 @@
         "Screenshot capture stores an owner-approved image revision, target release, source URL, and publication permission; workers use the same network boundary as other untrusted-content visitors.",
         "A readiness check records owner, timestamp, release, demo URL, synthetic-data confirmation, restricted-access instructions, and the resulting Ready to share or Needs recheck state.",
         "Failed health checks cannot mark a demo ready, and a deployment or access change marks the existing readiness record Needs recheck without unpublishing the approved portfolio.",
-        "Tests block publication of a screenshot or visitor instruction until an owner approval record exists and preserve the last published approved image on capture failure."
+        "Browser/API E2E attempts cannot publish screenshots or visitor instructions without owner approval; a failed actual capture preserves the previously published approved image."
       ],
       "depends_on": [
         "HOST-230"
-      ]
+      ],
+      "milestone": "M4",
+      "is_gate": false
+    },
+    {
+      "key": "HOST-244",
+      "slug": "m4-product-behavior-stop",
+      "phase": "milestone",
+      "title": "M4 stop — verify product lifecycle E2E and hand off",
+      "goal": "Stop after launch feature behavior is proven across templates, demo readiness, resource limits, test-mode billing and retention/export/deletion.",
+      "acceptance": [
+        "All M4 cards are complete; preserve M3 evidence and keep M5 work unclaimed.",
+        "Running-system/browser E2E verifies three layouts, screenshot approval, readiness rechecks, quota enforcement, actionable health/logs and preservation of a live release when updates fail.",
+        "Test-mode payment and whole-system clock scenarios prove first-subscription refunds, grace periods, cancellation, 30-day recovery, export and explicit deletion against actual runtime/database/static outputs.",
+        "Publish and verify the M4 TESTING.md bundle with lifecycle receipts, checksums and a clean repeat run; record the handoff and STOP before M5."
+      ],
+      "depends_on": [
+        "HOST-231",
+        "HOST-232",
+        "HOST-234"
+      ],
+      "milestone": "M4",
+      "is_gate": true
     },
     {
       "key": "HOST-235",
@@ -374,12 +493,13 @@
         "A reproducible load run exercises full purchased slot use, tenant databases, builds, backups, traffic, payment fees, support allowance, rollout overlap, and spare/recovery capacity.",
         "The report records observed compatibility, enforcement thresholds, per-account cost, margin sensitivity, and metric variance for each candidate tier and resource allowance.",
         "Candidate limits remain labeled proposed until tests prove enforcement and isolation; unmeasured prices or allowances cannot be promoted by configuration alone.",
-        "The evidence package defines pilot metrics for activation, time to publish, demo durability, full-allowance cost, support load, r\u00e9sum\u00e9 use, and post-job-search retention."
+        "The evidence package defines pilot metrics for activation, time to publish, demo durability, full-allowance cost, support load, résumé use, and post-job-search retention."
       ],
       "depends_on": [
-        "HOST-230",
-        "HOST-228"
-      ]
+        "HOST-244"
+      ],
+      "milestone": "M5",
+      "is_gate": false
     },
     {
       "key": "HOST-236",
@@ -395,7 +515,9 @@
       ],
       "depends_on": [
         "HOST-235"
-      ]
+      ],
+      "milestone": "M5",
+      "is_gate": false
     },
     {
       "key": "HOST-237",
@@ -407,11 +529,13 @@
         "Checked-in adapters and configuration schemas cover management, build, runtime, tenant PostgreSQL, static publication, domain/TLS, backups, and recovery with secret references instead of credentials, customer data, or live provider identifiers.",
         "Synthetic staging and dry-run checks validate network paths, domain/TLS configuration, backup/restore steps, rollout, last-good release, export, and deletion runbooks without paid resources or production DNS.",
         "Runbooks specify operator preconditions, verification evidence, rollback, database restore approval, retention dates, and recovery-domain checks, and CI has no deploy permission.",
-        "Dry-run configuration tests refuse real provider calls, provisioning, migration or cutover without both the final readiness evidence and explicit owner authorization for the concrete action; CI never deploys."
+        "End-to-end dry-run scenarios exercise real configuration/command entrypoints and reject provisioning, migration or cutover without readiness evidence and explicit owner authorization; label unexercised provider behavior honestly and keep CI unable to deploy."
       ],
       "depends_on": [
         "HOST-236"
-      ]
+      ],
+      "milestone": "M5",
+      "is_gate": false
     },
     {
       "key": "HOST-238",
@@ -426,30 +550,127 @@
         "Customer checkout and pilot admission remain disabled until readiness evidence and explicit owner launch authorization are recorded; completing planning or implementation cards alone never opens live checkout."
       ],
       "depends_on": [
-        "HOST-236",
-        "HOST-233",
-        "HOST-232"
-      ]
+        "HOST-236"
+      ],
+      "milestone": "M5",
+      "is_gate": false
     },
     {
       "key": "HOST-239",
       "slug": "paid-pilot-readiness",
       "phase": "launch",
-      "title": "Record paid-pilot readiness without launching",
+      "title": "M5 stop — verify pilot readiness evidence without launching",
       "goal": "Assemble the evidence required for a small paid pilot while keeping contact, deployment, charging, and production changes explicitly outside this implementation task.",
       "acceptance": [
-        "A clean-source verification records the current pinned Rust/Node toolchains, both lockfiles, fresh source revisions, focused tests, and a passing make check result.",
+        "A clean-source verification records pinned toolchains, both lockfiles, source revisions, make check and passing milestone E2E bundles with verified checksums and clean-repeat results; static checks and legacy unit tests alone never satisfy readiness.",
         "The security gate links signed-repository authorization, disposable-build isolation, gVisor/runtime controls, tenant boundaries, secret redaction, and separate platform/application/portfolio domains.",
         "The recovery gate links populated platform and tenant migration checks, pre-upgrade backups, restore/export drills, cancellation/deletion evidence, and observed recovery timings.",
         "The economics and metrics gate links full-use cost evidence, the reviewed test catalog, capacity headroom, fixture-verified instrumentation, and a collection plan for activation, publishing, durability, support and retention; real pilot outcomes are measured after launch.",
-        "The resulting record is readiness only: it performs no customer contact, provider purchase, infrastructure deployment, DNS cutover, live charge, or external pilot admission."
+        "The resulting record is readiness only: it performs no customer contact, provider purchase, infrastructure deployment, DNS cutover, live charge, or external pilot admission.",
+        "Verify the M5 TESTING.md bundle and linked M1–M4 bundle hashes, reproduce required scenarios and cost/load evidence, and STOP with the readiness handoff; do not launch or silently widen scope."
       ],
       "depends_on": [
-        "HOST-231",
-        "HOST-234",
         "HOST-238",
         "HOST-237"
-      ]
+      ],
+      "milestone": "M5",
+      "is_gate": true
+    }
+  ],
+  "testing_policy": {
+    "behavioral_default": "Highly prefer E2E as the sole behavioral testing mechanism for complex features; exercise running Hostlet boundaries and produce a verifiable repeatable evidence bundle after every E2E run.",
+    "unit_test_rule": "NEVER write unit tests after implementation code.",
+    "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
+    "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
+    "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
+    "current_status": "Policy and planned acceptance only; the E2E runner and product milestone artifacts are not implemented yet. Existing make check includes legacy tests and is not product E2E evidence."
+  },
+  "milestones": [
+    {
+      "id": "M1",
+      "title": "Foundation",
+      "gate": "HOST-242",
+      "previous_gate": null,
+      "tasks": [
+        "HOST-241",
+        "HOST-209",
+        "HOST-210",
+        "HOST-215",
+        "HOST-216",
+        "HOST-217",
+        "HOST-218",
+        "HOST-242"
+      ],
+      "exit_evidence": "Account/ownership and durable-state E2E, restart/failure cases, populated migration and platform restore receipts.",
+      "artifact_path": "artifacts/e2e/M1/<run-id>/",
+      "stop_after_gate": true
+    },
+    {
+      "id": "M2",
+      "title": "Onboarding",
+      "gate": "HOST-243",
+      "previous_gate": "HOST-242",
+      "tasks": [
+        "HOST-219",
+        "HOST-220",
+        "HOST-221",
+        "HOST-224",
+        "HOST-243"
+      ],
+      "exit_evidence": "Selected-source, compatibility, private preview and concurrent slot-admission E2E without prepurchase customer code.",
+      "artifact_path": "artifacts/e2e/M2/<run-id>/",
+      "stop_after_gate": true
+    },
+    {
+      "id": "M3",
+      "title": "Working demo and portfolio",
+      "gate": "HOST-233",
+      "previous_gate": "HOST-243",
+      "tasks": [
+        "HOST-222",
+        "HOST-223",
+        "HOST-225",
+        "HOST-226",
+        "HOST-227",
+        "HOST-229",
+        "HOST-233"
+      ],
+      "exit_evidence": "Real isolated build/runtime/database journey, failed-update retention and independent approved static portfolio.",
+      "artifact_path": "artifacts/e2e/M3/<run-id>/",
+      "stop_after_gate": true
+    },
+    {
+      "id": "M4",
+      "title": "Complete product behavior",
+      "gate": "HOST-244",
+      "previous_gate": "HOST-233",
+      "tasks": [
+        "HOST-228",
+        "HOST-230",
+        "HOST-231",
+        "HOST-232",
+        "HOST-234",
+        "HOST-244"
+      ],
+      "exit_evidence": "Three layouts, screenshot/readiness, quotas and payment/retention/export/deletion E2E with an explicit test clock.",
+      "artifact_path": "artifacts/e2e/M4/<run-id>/",
+      "stop_after_gate": true
+    },
+    {
+      "id": "M5",
+      "title": "Pilot readiness",
+      "gate": "HOST-239",
+      "previous_gate": "HOST-244",
+      "tasks": [
+        "HOST-235",
+        "HOST-236",
+        "HOST-237",
+        "HOST-238",
+        "HOST-239"
+      ],
+      "exit_evidence": "Repeatable full-use evidence, reviewed test catalog, costed production dry-runs and recovery/security receipts; no launch.",
+      "artifact_path": "artifacts/e2e/M5/<run-id>/",
+      "stop_after_gate": true
     }
   ]
 }

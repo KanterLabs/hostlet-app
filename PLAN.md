@@ -258,41 +258,40 @@ graph and milestone ordering, mirrored from Helm; updating execution status does
 not require changing this plan. They preserve the existing `HOST-209` and
 `HOST-210` IDs.
 
-The numbered milestones describe dependency direction and can overlap wherever the
-Helm edges permit. Exact prerequisites are the edges in Helm, mirrored in
-`ROADMAP.md` and `roadmap.json`; a later milestone does not by itself block
-independently ready work.
+The five milestones are **agent stopping points**. Default execution scope is one
+milestone. Tasks within that milestone can run in parallel where Helm's actual
+prerequisite edges permit; every later milestone depends on the preceding stop
+gate. Completing a gate makes later work dependency-ready, but does not instruct
+an agent to claim it. Publish the evidence and handoff, then stop. Continue only
+on a later instruction or an explicit larger scope from Shane.
 
-1. Implement the typed standard-project compatibility/resource contract and
-   portfolio content/publication contract with owned fixtures (`HOST-209` and
-   `HOST-210`). This establishes the accepted slot, facts/narratives/readiness and
-   publication rules before dependent work proceeds.
-2. Implement authoritative persistence, identity, ownership checks, scoped secrets
-   and project/service records before accepting repository bindings or draft content.
-   Establish additive migrations, populated-data checks, tenant/platform backup
-   policies and restore/export safeguards with this foundation. This depends on the
-   typed contracts.
-3. Implement selected-repository binding, authorized branches, bounded static
-   compatibility analysis, configuration confirmation and an editable portfolio
-   preview before paid-compute activation. This depends on durable ownership and
-   contract fixtures.
-4. Prove an internal journey using owned fixtures: exact commit to disposable
-   isolated build, coordinated frontend/backend release with a project database,
-   health-checked last-good routing, owner-reviewed portfolio and one static
-   template. Keep customer admission, payment and public pilot activity disabled;
-   this depends on the first three stages.
-5. Complete paid-launch gates: all three templates and screenshot review, the
-   supported Node/Next.js patterns, independent demo-readiness state, capacity
-   reservation and slot billing, no-idle-sleep behavior, compatible migrations,
-   backup/restore/export drills, tenant isolation, and cancellation/retention
-   controls. Track each gate against its own prerequisites so template, billing
-   and enforcement work can overlap the internal journey where the dependency
-   edges permit; public pilot admission still requires the complete gate set.
-6. Prove the complete journey, recovery, isolation and full-use economics before
-   requesting public pilot authorization. Use a 20-account paid pilot as the
-   planning target and expand toward 30 only after observing support and capacity;
-   measure unaided activation, time to publish, demo durability, full-allowance
-   costs, résumé use and post-job-search retention.
+| Milestone | Deliverable at the stop |
+| --- | --- |
+| **M1 — Foundation** | First establish the real-process E2E runner and artifact contract; then typed project/portfolio contracts, authenticated ownership, durable PostgreSQL records, scoped secrets/jobs, additive migrations and platform recovery. |
+| **M2 — Onboarding** | Selected-repository and branch authorization, signed events, bounded compatibility analysis, editable private preview, capacity admission and slot accounting. No prepurchase execution of customer code. |
+| **M3 — Working demo and portfolio** | An owned fixture travels from exact commit through a disposable VM build and isolated runtime to a coordinated frontend/backend/database release, then an owner-approved independent static portfolio. Prove failed-update retention. |
+| **M4 — Complete product behavior** | Three templates, screenshot approval and demo readiness, resource enforcement and actionable health/logs, test-mode billing/refunds, cancellation, nonpayment, retention, export and deletion. |
+| **M5 — Pilot readiness** | Measured full-use economics, reviewed test catalog, costed provider/domain configuration and dry-run runbooks, linked security/recovery evidence and a final readiness handoff. Stop without launching. |
+
+[TESTING.md](TESTING.md) is binding for implementation and gate completion.
+Highly prefer E2E as the sole behavioral acceptance mechanism for complex
+features, using real running boundaries. Define scenarios and expected outcomes
+before implementation. **NEVER write unit tests after implementation code.** If
+isolation is necessary, first write all identified ways the system could fail
+and the expected outcomes, then write failing isolated cases, then implement.
+Record why E2E cannot exercise that property meaningfully.
+
+Every E2E run produces a verifiable, repeatable artifact with a readable report,
+machine assertions, exact commit/environment/fixtures and rerun command, relevant
+sanitized outputs, checksums and cleanup results. Gates require verified evidence
+and a clean repeat run before the agent hands off and stops. Current `make check`
+and legacy tests are routine scaffold checks, not E2E milestone evidence. The
+runner and milestone artifacts remain future implementation work.
+
+Use a 20-account paid pilot as the planning target after M5 and expand toward 30
+only after observing support and capacity. Measure unaided activation, time to
+publish, demo durability, full-allowance costs, résumé use and post-job-search
+retention. Real customer outcomes are collected after an authorized launch.
 
 The pilot target does not authorize external contact, charges, provider spend or
 production migration. Arbitrary Compose, GPUs, hosted development environments,

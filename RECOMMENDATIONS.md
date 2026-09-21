@@ -15,29 +15,36 @@ Keep the React/TypeScript/Vite dashboard for the first release; a Next.js
 dashboard migration is outside this baseline. Public portfolios should be
 generated static artifacts regardless of the dashboard framework.
 
-Build in this order:
+Build through the five stopping milestones in [ROADMAP.md](ROADMAP.md):
 
-1. Implement typed standard-project and portfolio contracts with owned fixtures in
-   `HOST-209` and `HOST-210` (preserve these existing IDs). The accepted answers
-   below are inputs to those contracts and their validation checks.
-2. Implement accounts, authentication, ownership checks and durable PostgreSQL
-   records before saving GitHub bindings, secrets or portfolio drafts. Add scoped
-   secrets, additive migrations, populated-data checks and backup/recovery tests.
-3. Add selected-repository access, authorized branches, static compatibility
-   analysis, configuration confirmation and an editable portfolio preview.
-4. Prove one complete internal journey using our own fixtures: exact commit to
-   isolated build, one static frontend plus Node API and database, healthy release,
-   owner-reviewed portfolio and one static template. Keep admission internal.
-5. Complete the paid-launch requirements: supported Next.js fixtures, all three
-   templates, screenshots, readiness checks, billing and capacity admission,
-   backups/restore/export, cancellation and tenant-isolation verification.
-6. Use a 20-account paid pilot as the launch target only after those checks and
-   measured full-use economics pass. Expand toward 30 after observing support and
-   capacity; external contact, charging and production use still require an
-   explicit go/no-go authorization.
+1. **M1 — Foundation:** E2E runner and evidence first, then typed project/portfolio
+   contracts (`HOST-209` and `HOST-210`), accounts, ownership, durable PostgreSQL
+   intent, scoped secrets/jobs, populated migrations and platform recovery.
+2. **M2 — Onboarding:** selected-repository and branch access, signed events,
+   bounded static compatibility, editable private preview and capacity/slot
+   admission without prepurchase execution of customer code.
+3. **M3 — Working demo and portfolio:** owned exact-commit fixtures, disposable
+   builds, isolated runtime, a coordinated frontend/API/database release and
+   one owner-approved static portfolio template. Keep admission internal.
+4. **M4 — Complete product behavior:** three layouts, screenshots/readiness,
+   resource enforcement, test-mode billing/refunds and cancellation, nonpayment,
+   retention, export and deletion, verified across the running system.
+5. **M5 — Pilot readiness:** full-use economics, reviewed test catalog, costed
+   production dry-runs, security/recovery evidence and a readiness handoff.
 
-The first milestone is a published portfolio with a working demo. One template
-is sufficient for that internal milestone; three remain required for paid launch.
+Every milestone ends with E2E evidence, a clean repeat run and an agent STOP.
+Parallel work is allowed within the current milestone where dependencies permit.
+A later milestone requires its preceding gate and a subsequent instruction or
+explicit larger assignment; follow [TESTING.md](TESTING.md). Never add unit tests
+after implementation. Necessary isolation checks require the failure inventory
+first, then failing cases, then code. Every E2E run produces a verifiable,
+repeatable artifact.
+
+The product activation milestone remains a published portfolio with a working
+demo; it appears at agent stop M3. One template suffices there, while all three
+remain required for paid launch. A 20-account pilot is the planning target after
+M5; expand toward 30 after observing support and capacity. External contact,
+charging and production use still require explicit go/no-go authorization.
 
 ## 2. What exactly uses a project slot?
 

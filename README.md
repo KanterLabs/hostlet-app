@@ -12,8 +12,9 @@ accounts, billing, project databases, builds and deployments are not implemented
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
 the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
 the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline
-and rationale. The [roadmap](ROADMAP.md) is the implementation ordering and
-dependency source. Prices, benchmark resource allowances and production
+and rationale. The [roadmap](ROADMAP.md) records five milestone stops and mirrors
+Helm's live prerequisite graph. [TESTING.md](TESTING.md) defines the E2E evidence
+and agent handoff policy. Prices, benchmark resource allowances and production
 provider/spend/domain placement still require validation or explicit authorization.
 
 The adopted baseline covers project slots, compatibility and payment, release
@@ -77,10 +78,22 @@ portfolio/       Content and independent static-publishing boundary
 make check
 ```
 
-This runs Rust formatting, Clippy, focused behavioral tests, TypeScript checks
+This runs Rust formatting, Clippy, existing Rust tests, TypeScript checks
 and a production web build. Dependency resolution is committed in `Cargo.lock`
 and `web/package-lock.json`; Rust validation uses `--locked` and web installs
 use `npm ci`.
+
+These routine checks are not product E2E evidence. The first implementation card
+establishes the E2E runner and repeatable artifact bundle; it is not implemented
+yet. Complex features require E2E acceptance, and every E2E run must retain a
+verifiable report, manifest, checksums and rerun instructions. Never write unit
+tests after implementation. Any necessary isolation check starts with a written
+failure inventory and failing cases before code, as specified in
+[TESTING.md](TESTING.md).
+
+Agents default to one milestone: finish its gate, verify a clean repeat run,
+record the artifact and handoff, and stop. Continue only on a later instruction
+or an explicit assignment covering a larger scope.
 
 GitHub Actions runs web checks on `homelab` and Rust checks on `homelab-heavy`.
 Fork pull requests are skipped pending a separate runner trust decision.

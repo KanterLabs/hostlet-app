@@ -6,6 +6,11 @@ implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`
 records the accepted planning rationale and detailed validation candidates. The
 supplied September 21 portfolio-and-demo brief is authoritative; the earlier
 generic-hosting plan is superseded. The current deliverable is a local scaffold.
+Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
+the E2E acceptance policy, the narrow test-first isolation exception, milestone
+stop points and the artifact contract. Helm owns live task, dependency and claim
+state; [ROADMAP.md](ROADMAP.md) and [roadmap.json](roadmap.json) are committed
+snapshots of the milestone and dependency ordering.
 
 - Author new code, tests, manifests and automation here. Other Hostlet repositories
   are references; do not import their history, runtime state or credentials.
@@ -32,6 +37,12 @@ generic-hosting plan is superseded. The current deliverable is a local scaffold.
   secrets, private operational inventories, customer data or provider identifiers.
 - Run `make check` before publishing changes. Pin toolchains and commit both locks.
   Prefer focused behavioral checks over tests that duplicate implementation.
+- Follow [TESTING.md](TESTING.md) for behavior validation: define E2E scenarios
+  and the milestone scope before implementation, use E2E as the acceptance
+  evidence for complex features, and stop at the assigned milestone gate with a
+  repeatable artifact and handoff. Do not add post-implementation unit tests;
+  use the documented failure-inventory and test-first exception only when an
+  isolation check cannot be covered at an E2E boundary.
 - Use `homelab` for lightweight GitHub Actions jobs and `homelab-heavy` for Rust
   workspace builds/tests, images and long integration/browser suites. CI cannot deploy.
 - Gitea is the canonical source; GitHub is the public mirror. Publish only content

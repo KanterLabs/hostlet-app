@@ -14,6 +14,8 @@ commands. The web application remains a status preview; it does not
 yet provide account or project-management screens. Customer hosting, GitHub
 integration, compatibility analysis, billing, tenant databases, builds, and
 portfolio publication belong to later milestones.
+The [M1 handoff](docs/M1-HANDOFF.md) records the two clean acceptance runs,
+exact tested commit, repeat commands, private evidence receipts and limitations.
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
 the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
 the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline

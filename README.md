@@ -13,6 +13,10 @@ The [product plan](PLAN.md) follows the brief supplied on September 21 and repla
 the provisional generic-hosting baseline. Prices and production placement remain
 unresolved proposals.
 
+The [recommended answers](RECOMMENDATIONS.md) propose concrete defaults for project
+slots, compatibility and payment, release recovery, portfolio lifecycle and build
+order. They are planning inputs, not current product capabilities or approved terms.
+
 ## Run locally
 
 Install Rust 1.96.0 with `rustfmt` and `clippy`, Node 22.22.1, npm and Make.

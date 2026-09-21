@@ -5,6 +5,11 @@ by Shane on 2026-09-21. This supersedes the provisional September generic-hostin
 baseline recorded in the initial scaffold commit. Older Hostlet documents and
 completed cards do not establish requirements or implementation evidence here.
 
+Concrete proposed answers to the review questions are recorded in
+[RECOMMENDATIONS.md](RECOMMENDATIONS.md). They cover implementation order, hosted
+slots, compatibility/payment, release recovery and portfolio/cancellation behavior.
+Their numeric limits and policies remain proposals until accepted and validated.
+
 > Your projects, live and ready to show.
 
 ## Customer and outcome
@@ -145,17 +150,20 @@ only deployment and postponing the differentiating portfolio experience.
    portfolio content/publication contract (`HOST-210`). Both are unclaimed Backlog
    cards for this new direction. Record unresolved values instead of treating
    recommendations as approvals.
-2. Implement selected-repository binding, bounded compatibility analysis and an
+2. Implement authoritative persistence, identity, ownership checks, scoped secrets
+   and project/service records before accepting repository bindings or draft content.
+   Establish populated-data migration and backup/recovery checks with this foundation.
+3. Implement selected-repository binding, bounded compatibility analysis and an
    editable portfolio preview before paid-compute activation.
-3. Implement authoritative persistence, identity, scoped secrets and project/service
-   snapshots; connect isolated builds/runtime and project database lifecycle.
-4. Add three portfolio templates, reviewed static publication, screenshots and
-   independent demo-readiness state without duplicating deployment truth.
-5. Add slot billing from the approved catalog, no-idle-sleep behavior, last-good
-   deployments, backup/restore/export and clear cancellation/retention controls.
-6. Prove a complete journey, essential isolation and restore/export behavior before
-   a small paid pilot. Measure unaided activation, time to publish, demo durability,
-   full-allowance costs, résumé use and post-job-search retention.
+4. Prove an internal journey using owned fixtures: an isolated build, coordinated
+   frontend/backend release, project database and reviewed static portfolio using
+   one template. Customer execution remains gated on entitlements and capacity.
+5. Complete all three templates, screenshots, independent demo-readiness state,
+   the supported Node/Next.js patterns, approved slot billing, no-idle-sleep behavior,
+   last-good releases, backup/restore/export and cancellation/retention controls.
+6. Prove the complete journey, tenant isolation, data recovery and full-use economics
+   before a small paid pilot. Measure unaided activation, time to publish, demo
+   durability, full-allowance costs, résumé use and post-job-search retention.
 
 A 20–30 person paid pilot is a proposal, not authorization to contact customers,
 charge accounts or spend money. Arbitrary Compose, GPUs, hosted dev environments,

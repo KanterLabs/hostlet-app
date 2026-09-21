@@ -1,20 +1,25 @@
-# Hostlet — recommended answers
+# Hostlet — adopted planning baseline
 
-Proposed on 2026-09-21 in response to the plan review. These are concrete defaults
-for discussion and implementation planning, **not approved prices, implemented
-features, availability guarantees or permission to provision infrastructure**.
-The supplied product brief and [PLAN.md](PLAN.md) remain authoritative. No older
-Hostlet cards, pricing catalog or deployment decisions are adopted here.
+Adopted on 2026-09-21 in response to the plan review. These answers are the
+working planning baseline and decision rationale for implementation. [PLAN.md](PLAN.md)
+is canonical when this document and the plan differ. The baseline records planned
+behavior, **not current capabilities, published prices, availability guarantees or
+permission to provision infrastructure**. Resource numbers are starting benchmark
+targets subject to validation; $5/$12/$20 are pricing hypotheses. No older Hostlet
+pricing catalog or deployment decision is adopted here.
 
 ## 1. What should we build first?
 
 Keep the existing Rust/Axum API, React/Vite dashboard and PostgreSQL direction.
-The dashboard does not currently need a Next.js migration. Public portfolios
-should be generated static artifacts regardless of the dashboard framework.
+Keep the React/TypeScript/Vite dashboard for the first release; a Next.js
+dashboard migration is outside this baseline. Public portfolios should be
+generated static artifacts regardless of the dashboard framework.
 
 Build in this order:
 
-1. Agree the standard-project and portfolio contracts in `HOST-209` and `HOST-210`.
+1. Implement typed standard-project and portfolio contracts with owned fixtures in
+   `HOST-209` and `HOST-210` (preserve these existing IDs). The accepted answers
+   below are inputs to those contracts and their validation checks.
 2. Implement accounts, authentication, ownership checks and durable PostgreSQL
    records before saving GitHub bindings, secrets or portfolio drafts. Add scoped
    secrets, additive migrations, populated-data checks and backup/recovery tests.
@@ -26,8 +31,10 @@ Build in this order:
 5. Complete the paid-launch requirements: supported Next.js fixtures, all three
    templates, screenshots, readiness checks, billing and capacity admission,
    backups/restore/export, cancellation and tenant-isolation verification.
-6. Start the proposed 20-person paid pilot only after those checks and measured
-   full-use economics pass. Expand toward 30 after observing support and capacity.
+6. Use a 20-account paid pilot as the launch target only after those checks and
+   measured full-use economics pass. Expand toward 30 after observing support and
+   capacity; external contact, charging and production use still require an
+   explicit go/no-go authorization.
 
 The first milestone is a published portfolio with a working demo. One template
 is sufficient for that internal milestone; three remain required for paid launch.
@@ -40,7 +47,7 @@ database**. Static-only and API-only projects also use one hosted slot. Separate
 frontend/backend repositories can be modeled later, but are outside initial
 onboarding. Extra workers, scheduled jobs and additional backends are unsupported.
 
-| State or action | Recommended slot behavior |
+| State or action | Adopted planning behavior |
 | --- | --- |
 | Draft, compatibility check, portfolio or external case study | No hosted slot |
 | First deploy accepted | Atomically reserve one slot and actual capacity before creating resources |
@@ -61,11 +68,11 @@ caused by a verified platform fault are credited back. Never double-reserve a sl
 
 ### Supported patterns and starting limits
 
-Recommend Node 24 LTS by default, Node 22 LTS as an explicitly tested alternative,
+Adopt Node 24 LTS by default, Node 22 LTS as an explicitly tested alternative,
 locked npm installs, Vite/static exports, a single Node HTTP service, and a tested
-Next.js 16 standalone pattern. This targets maintained Node lines; pin patched
-images by digest when implementing and recheck support before launch. The current
-dashboard toolchain is a separate choice. [Node release policy](https://nodejs.org/en/about/previous-releases)
+Next.js 16 standalone pattern as the initial customer compatibility baseline. This
+targets maintained Node lines; pin patched images by digest when implementing and
+recheck support before launch. [Node release policy](https://nodejs.org/en/about/previous-releases)
 
 Require a lockfile, declared service roots and commands, an HTTP health endpoint
 for application services, and PostgreSQL for durable application data. Initially
@@ -78,10 +85,11 @@ Document cache behavior and old-client handling before admitting a pattern. Publ
 environment values may be embedded during builds, while server secrets have a
 different lifecycle; previews must identify that distinction. [Next.js self-hosting](https://nextjs.org/docs/app/guides/self-hosting)
 
-These are **benchmark candidates**, not promised allowances. Do not publish the
-catalog until full-use tests establish both compatibility and enforcement.
+These are **adopted starting benchmark targets**, not promised allowances. Do not
+publish the catalog until full-use tests establish both compatibility and
+enforcement.
 
-| Resource | Proposed starting allowance | Behavior at the limit |
+| Resource | Starting benchmark target | Behavior at the limit |
 | --- | --- | --- |
 | Application memory/CPU | 512 MiB memory; 0.25 vCPU ceiling per hosted project | Throttle CPU; report memory termination and apply bounded restart backoff; never call this inactivity sleep |
 | Project database | PostgreSQL 18; 1 GiB including indexes; 10 application connections | Warn at 80%; prevent further growth safely at capacity while preserving reads/export; enforcement proof is a launch gate |
@@ -121,10 +129,10 @@ if payment settles after that hold is lost, refund rather than admit beyond capa
 Payment grants permission to enqueue an isolated build, not a guaranteed successful
 deployment. Only label a demo "Deployment verified" after its configured checks pass.
 
-Recommend a **seven-day, first-subscription refund window**: an owner who cannot
-get value from onboarding can cancel and request a full initial-payment refund
-without having to prove whose bug caused the failure. Stop renewal and apply the
-disclosed export/retention process. This is a proposed product policy, not a current
+Adopt a **seven-day, first-subscription refund window**: an owner who cannot get
+value from onboarding can cancel and request a full initial-payment refund without
+having to prove whose bug caused the failure. Stop renewal and apply the disclosed
+export/retention process. This is an implementation requirement, not a current
 offer; implement it before publishing checkout. Later failed updates preserve the
 last good release and do not independently restart the subscription/refund window.
 The seven elapsed days start with the first settled subscription charge that
@@ -158,13 +166,13 @@ migrations may remain applied. After promotion, rollback selects an eligible pri
 release against the current data; it never silently restores an older database.
 Configuration and required secret versions must still be valid for rollback.
 
-Recommend encrypted daily tenant-database backups retained for seven days plus a
-fresh backup before each migration. Target at most 24 hours of tenant-data loss
-from the latest usable routine backup and four hours to restore an individual
-project after recovery starts; these are test targets, not an SLA. For platform
-data, propose hourly backups retained 48 hours plus seven daily backups, targeting
-one hour of data loss and four hours to recovery. Back up required configuration
-and recovery keys separately; keep copies outside the production failure domain.
+Adopt encrypted daily tenant-database backups retained for seven days plus a fresh
+backup before each migration. Target at most 24 hours of tenant-data loss from the
+latest usable routine backup and four hours to restore an individual project after
+recovery starts; these are test targets, not an SLA. For platform data, adopt hourly
+backups retained 48 hours plus seven daily backups, targeting one hour of data loss
+and four hours to recovery. Back up required configuration and recovery keys
+separately; keep copies outside the production failure domain.
 
 Restore into an isolated replacement database first. Validate rows, relationships,
 ownership/grants and a real application connection; keep tenant role mappings
@@ -179,7 +187,8 @@ rotating drills covering every active database at least monthly.
 
 Publish immutable portfolio revisions with an atomic pointer update. The first
 publication requires owner approval of narrative, contributions, images, contact
-details, each public source/demo link and the displayed deployment/status fields.
+details, each public source/demo link and the displayed deployment, availability
+and status fields.
 Source access never implies publication.
 Rendering must not call the dashboard, GitHub or customer applications at page load.
 
@@ -198,7 +207,7 @@ time and the release it covered. A new release or demo-access change marks that
 check "Needs recheck" without erasing the published case study. Never convert an
 old attestation into a permanent green guarantee.
 
-| Event | Recommended behavior |
+| Event | Adopted planning behavior |
 | --- | --- |
 | Cancel renewal | Keep included services through the paid-through date; owner can undo cancellation before then |
 | Failed renewal | Seven-day payment grace with notices; keep existing demos running, block new deployments/provisioning |
@@ -215,18 +224,19 @@ data after entitlement and capacity checks. Do not recycle a deleted public slug
 to a different owner during the pilot. Abuse/security suspension is a separate,
 explained policy; ordinary inactivity is never a suspension reason.
 
-## Pricing and production recommendation
+## Pricing and production guardrails
 
 Keep **$5 / $12 / $20 for 1 / 3 / 5 projects** as the prices to test, with the
-three-project plan as the main offer. Do not turn them into an approved catalog
-until costs include full allocation, database service, builds, backups, traffic,
-payment fees, support and rollout/recovery capacity. Twenty fully used three-slot
-accounts already allocate 30 GiB of app memory and generate only $240/month at
-the proposed price, before those additional costs. If the numbers do not work,
-revise prices before checkout; don't remove backups or introduce idle sleeping.
+three-project plan as the main offer. These remain pricing hypotheses, not an
+approved catalog. Do not publish them until costs include full allocation,
+database service, builds, backups, traffic, payment fees, support and
+rollout/recovery capacity. Twenty fully used three-slot accounts already allocate
+30 GiB of app memory and generate only $240/month at the tested price, before
+those additional costs. If the numbers do not work, revise prices before checkout;
+don't remove backups or introduce idle sleeping.
 
 Use a datacenter/cloud deployment for the paid pilot. Keep homelab resources for
-development and testing. Recommend separate management/database, build and runtime
+development and testing. Use separate management/database, build and runtime
 capacity, disposable build VMs, and gVisor as the first runtime-isolation candidate
 to benchmark. gVisor's isolation still needs explicit network/resource policy and
 workload compatibility testing. [gVisor security model](https://gvisor.dev/docs/architecture_guide/intro/)
@@ -236,6 +246,7 @@ portfolios; defer customer custom domains initially.
 
 The next infrastructure decision should be a costed provider/region and isolation
 proof against these workloads. A provider name and spend cap without that evidence
-would be premature. No provider, domain purchase or production migration is selected
-by this proposal. `HOST-209` and `HOST-210` remain unclaimed contract work; this
-document supplies proposed answers, not evidence that those contracts are finished.
+would be premature. No provider, domain purchase or production migration is
+authorized by this baseline. `HOST-209` and `HOST-210` are the retained typed-contract
+implementation cards; this document supplies their planning inputs, not evidence
+that the contracts or validation gates are finished.

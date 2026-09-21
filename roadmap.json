@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-21",
+  "project": "HOST",
+  "repository": "KanterLabs/hostlet-app",
+  "release": "Hostlet 0.1 \u2014 paid pilot readiness",
+  "release_status": "planned",
+  "tasks": [
+    {
+      "key": "HOST-209",
+      "slug": "standard-project-contract",
+      "phase": "contracts",
+      "title": "Implement standard project typed contract and fixtures",
+      "goal": "Implement the versioned standard-project contract for one repository or monorepo, up to one static frontend, one long-running application service, and one optional PostgreSQL database, including static-only and API-only cases, supported patterns and customer-visible limits.",
+      "acceptance": [
+        "Versioned types and fixtures represent accounts, projects, services, deployments, repository roots, configuration revisions, and the one-slot resource relationship.",
+        "The contract lists initial Node/Vite/Next.js patterns and lockfile rules, requires commands and an HTTP health endpoint only for application services, and provides stable rejection reasons for unsupported patterns.",
+        "Every proposed CPU, memory, database, storage, build, artifact, transfer, and log allowance has units, enforcement behavior, and a benchmark-candidate label; none is marked as an approved promise.",
+        "Focused contract tests accept static-only and API-only bundles while rejecting extra services, unbounded resource requests, and application services missing commands or health checks with versioned errors."
+      ],
+      "depends_on": []
+    },
+    {
+      "key": "HOST-210",
+      "slug": "portfolio-publication-contract",
+      "phase": "contracts",
+      "title": "Implement portfolio publication typed contract and fixtures",
+      "goal": "Define the shared content, approval, deployment-fact, publication, and demo-readiness contract used by editable portfolios and independent static artifacts.",
+      "acceptance": [
+        "Versioned types and fixtures cover profile, introduction, target role, skills, r\u00e9sum\u00e9 and contact links, ordered project references, contributions, technical decisions, evidence, visibility, and readiness state.",
+        "Drafts, immutable approved revisions, authorized deployment facts, and owner edits are represented as separate states with an audit trail.",
+        "Contract tests require explicit approval for narrative, contribution, source/demo links, screenshots, contact details, and deployment fields; private repository access alone cannot make content public.",
+        "The contract states that static publication has no dashboard, GitHub, or application page-load dependency and that portfolios and external case studies consume no hosted project slot."
+      ],
+      "depends_on": []
+    },
+    {
+      "key": "HOST-215",
+      "slug": "identity-ownership-postgres",
+      "phase": "foundation",
+      "title": "Implement authenticated identity, ownership, and durable platform persistence",
+      "goal": "Replace scaffold-only state with authenticated accounts, ownership checks, and PostgreSQL-backed platform records that cannot accept customer work through memory alone.",
+      "acceptance": [
+        "A local PostgreSQL integration test creates account, identity, ownership, and intent records, restarts the API, and reads the same durable rows.",
+        "A shared ownership guard is applied to every route introduced in this foundation and onboarding slice; two-account tests allow the owner and deny the non-owner for each read and write.",
+        "Readiness reports the platform as unavailable when PostgreSQL is unavailable, and each accepted intent or job write commits durable truth before returning success.",
+        "Audit records and structured logs contain no provider credential or secret value, while authentication and ownership events remain queryable for recovery."
+      ],
+      "depends_on": [
+        "HOST-209",
+        "HOST-210"
+      ]
+    },
+    {
+      "key": "HOST-216",
+      "slug": "project-service-deployment-model",
+      "phase": "foundation",
+      "title": "Add project, service, deployment, and slot-state records",
+      "goal": "Implement the authoritative project graph and release records so drafts, hosted resources, deployment facts, and portfolio references remain distinct.",
+      "acceptance": [
+        "PostgreSQL records implement Account \u2192 Project \u2192 Service \u2192 Deployment ownership and support one repository or monorepo with the contract's service-count rules.",
+        "Deployment records retain source commit, configuration revision, artifact references, health result, and database migration revision without secret values.",
+        "Drafts, compatibility checks, portfolios, and external case studies have no hosted slot; first deployment, retained database failure, rollback, and removal states have explicit transitions.",
+        "Idempotency tests cover duplicate project, service, and deployment intent writes and persisted lifecycle transitions without duplicate rows or dropped updates."
+      ],
+      "depends_on": [
+        "HOST-215"
+      ]
+    },
+    {
+      "key": "HOST-217",
+      "slug": "jobs-and-scoped-secrets",
+      "phase": "foundation",
+      "title": "Persist job lifecycle and service-scoped secret references",
+      "goal": "Create durable queued-job state, retry fences, and explicit service-scoped credential injection for builds, releases, and runtime operations.",
+      "acceptance": [
+        "Persisted job states cover queued, running, succeeded, failed, canceled, and retriable outcomes with an idempotency key and lease/fence owner.",
+        "Secret records are scoped to an account, project, service, and operation; release records, logs, and job reports contain only secret-version references or redacted values.",
+        "A build receives only the selected commit's declared credentials, while production database credentials and management credentials are rejected by policy.",
+        "Recovery tests fence an expired worker, prevent duplicate execution, and prove that a retry cannot read another project's secret reference."
+      ],
+      "depends_on": [
+        "HOST-216"
+      ]
+    },
+    {
+      "key": "HOST-218",
+      "slug": "additive-migrations-backup-recovery",
+      "phase": "foundation",
+      "title": "Establish additive migrations and populated platform backup recovery",
+      "goal": "Make platform schema changes recoverable and compatible with retained binaries before any persistent environment can accept the new records.",
+      "acceptance": [
+        "Numbered additive migrations are serialized, checked in, and fail closed on reset/recreate or an out-of-order version.",
+        "A populated disposable database containing accounts, projects, jobs, secrets, deployments, and portfolio revisions upgrades while preserving rows, ownership, and relationships.",
+        "An upgrade test verifies a fresh pre-upgrade backup before migration and reads the upgraded data with both the retained binary and the new binary.",
+        "Platform backups run hourly with 48-hour retention plus seven daily backups, target at most one hour of data loss and four hours to recovery, and are treated as explicit recovery policy rather than an unmeasured candidate; restore tests validate ownership and audit relationships with separately controlled recovery configuration and keys."
+      ],
+      "depends_on": [
+        "HOST-217"
+      ]
+    },
+    {
+      "key": "HOST-219",
+      "slug": "authorized-github-webhooks",
+      "phase": "onboarding",
+      "title": "Bind selected GitHub repositories and signed events",
+      "goal": "Implement least-privilege GitHub App access for selected repositories and branches, with webhook authenticity and authorization checks.",
+      "acceptance": [
+        "An owner can list and bind only repositories granted to the Hostlet App, with an explicit authorized branch or ref recorded in PostgreSQL.",
+        "Fetches resolve an exact authorized commit and never accept an arbitrary repository URL, ref, or credential from a client request.",
+        "Signed webhook tests reject invalid signatures, unauthorized repositories or branches, replayed delivery IDs, and events for an unbound project.",
+        "Private source access is represented as a scoped credential and does not create a publication approval or public source link."
+      ],
+      "depends_on": [
+        "HOST-218"
+      ]
+    },
+    {
+      "key": "HOST-220",
+      "slug": "entitlement-slot-admission",
+      "phase": "onboarding",
+      "title": "Implement entitlement, capacity hold, slot reservation, and build meter reconciliation",
+      "goal": "Atomically admit a first deployment only when entitlement and real capacity are available, while keeping retries and retained resources consistent.",
+      "acceptance": [
+        "Concurrent first-deploy tests reserve at most the purchased slot count and record a retry-safe capacity hold before resource creation.",
+        "Drafts and previews reserve no slot; a failed deployment releases a reservation only after cleanup, while a retained database or hosted resource keeps the slot reserved.",
+        "Redeploy and rollback preserve the same slot, overlap uses separate rollout headroom, and a platform-fault retry credits build usage exactly once.",
+        "A reconciler converges interrupted entitlement, capacity, slot, and build-meter events without double reservation or accepting work from an in-memory-only state."
+      ],
+      "depends_on": [
+        "HOST-218"
+      ]
+    },
+    {
+      "key": "HOST-221",
+      "slug": "bounded-static-compatibility",
+      "phase": "onboarding",
+      "title": "Implement bounded static compatibility analysis",
+      "goal": "Analyze selected source without executing customer code and return actionable compatibility outcomes before payment or hosted capacity admission.",
+      "acceptance": [
+        "Fixture tests inspect lockfiles, declared roots, commands, framework markers, and environment names without running install scripts, builds, migrations, or application code.",
+        "Reports distinguish the exact outcome `Looks compatible \u2014 deployment not yet verified`, Configuration needed, Database needed, Secrets needed, and Showcase-only unsupported outcomes with a reason and source location.",
+        "The analyzer recognizes the selected Vite/static, single Node HTTP service, and documented Next.js patterns and rejects Docker Compose, custom servers, extra workers, and unsupported persistent-disk assumptions.",
+        "A compatibility check creates no entitlement, hosted slot, deployment, or customer build allowance consumption."
+      ],
+      "depends_on": [
+        "HOST-219"
+      ]
+    },
+    {
+      "key": "HOST-222",
+      "slug": "gvisor-runtime-controls",
+      "phase": "delivery",
+      "title": "Evaluate gVisor runtime isolation and enforce workload controls",
+      "goal": "Benchmark gVisor against the supported fixtures and implement explicit tenant runtime isolation, resource, egress, management, and no-idle-sleep controls.",
+      "acceptance": [
+        "A repeatable benchmark records gVisor compatibility, startup, CPU/memory overhead, failure behavior, and a documented fallback or deferral decision for the supported Node/Next.js fixtures.",
+        "Runtime tests deny tenant access to platform data, other tenants, management sockets, and build infrastructure while allowing only declared service egress and routing.",
+        "CPU, memory, scratch, process, connection, and restart-backoff policies emit a customer-visible reason on enforcement; an allocated app and database do not stop solely for inactivity.",
+        "The evaluated runtime is incapable of accepting customer work until the isolation policy and compatibility evidence are present in the admission check."
+      ],
+      "depends_on": [
+        "HOST-220"
+      ]
+    },
+    {
+      "key": "HOST-223",
+      "slug": "tenant-postgres-lifecycle",
+      "phase": "delivery",
+      "title": "Provision tenant PostgreSQL with backup, restore, and export lifecycle",
+      "goal": "Give each hosted project an isolated PostgreSQL data boundary with tested backup, restore, export, migration preconditions, and recoverability evidence.",
+      "acceptance": [
+        "A project database has isolated roles, network access, connection limits, storage accounting, and a populated fixture separate from platform PostgreSQL; it does not expire from inactivity.",
+        "Encrypted tenant backups run daily and are retained for seven days; every migration requires a verified fresh pre-migration backup, with test targets of at most 24 hours of data loss and four hours to restore one project, explicitly treated as policy targets rather than an SLA.",
+        "Restore tests use an isolated replacement database, validate populated rows, relationships, ownership/grants, and a real application connection, then prove a portable dump export without cluster-wide roles.",
+        "Perform a restore drill and use clock-controlled scheduler tests to prove weekly rotating drills cover every active database at least monthly; record data-loss/restore timing without switching a live project to old data automatically."
+      ],
+      "depends_on": [
+        "HOST-220"
+      ]
+    },
+    {
+      "key": "HOST-224",
+      "slug": "free-portfolio-preview",
+      "phase": "onboarding",
+      "title": "Provide free compatibility and editable portfolio preview",
+      "goal": "Let an owner inspect compatibility, resolve configuration, and preview a portfolio before paid compute is activated.",
+      "acceptance": [
+        "An owner can save an editable preview containing owner-written profile and project content, approved placeholders, project order, and configuration questions without a subscription.",
+        "The preview identifies public build-time values separately from server secrets and never asks the compatibility step to infer or persist a secret value.",
+        "Preview and compatibility requests work without reserving a hosted slot or executing customer code, and unsupported repositories remain showcase-only with a visible reason.",
+        "Cross-account preview reads and writes are denied, and private README/source content is not copied into public preview fields without an approval action."
+      ],
+      "depends_on": [
+        "HOST-221"
+      ]
+    },
+    {
+      "key": "HOST-225",
+      "slug": "isolated-disposable-vm-builds",
+      "phase": "delivery",
+      "title": "Run bounded builds in disposable virtual machines",
+      "goal": "Build an authorized exact commit in a disposable, resource-bounded VM with scoped credentials and artifacts isolated from organization CI and production systems.",
+      "acceptance": [
+        "A build job runs only for an authorized commit after compatibility and internal entitlement admission, with enforced CPU, memory, timeout, workspace, and output-size limits.",
+        "The VM has no tenant-to-tenant, management-network, tenant-runtime, or production-database path, and no organization CI runner executes customer build code.",
+        "Successful output is immutable and digest-addressed; timeout, oversized output, dependency failure, and policy rejection produce bounded reports and clean up the VM.",
+        "Integration fixtures prove the build receives only service-scoped credentials, consumes the account meter once, and leaves any current live release untouched on failure."
+      ],
+      "depends_on": [
+        "HOST-221",
+        "HOST-220"
+      ]
+    },
+    {
+      "key": "HOST-226",
+      "slug": "coordinated-release-reconciler",
+      "phase": "delivery",
+      "title": "Coordinate frontend, backend, migration, and last-good releases",
+      "goal": "Promote immutable application releases as one checked unit and preserve the last healthy version through failed builds, health checks, or compatible migration work.",
+      "acceptance": [
+        "A release record includes source commit, frontend and backend artifact digests, configuration revision, database migration revision, secret-version references, health results, and promotion time.",
+        "A candidate stages both sides, verifies old/new frontend/API compatibility during a bounded drain, and atomically switches routing only after health checks pass.",
+        "A populated database migration requires a verified fresh backup, runs once as a controlled job, and is accepted only when the current and every retained rollback binary can read the resulting schema.",
+        "Failed pre-promotion candidates leave the last good release serving; rollback selects an eligible prior binary against current data and never silently restores an older database."
+      ],
+      "depends_on": [
+        "HOST-225",
+        "HOST-222",
+        "HOST-223"
+      ]
+    },
+    {
+      "key": "HOST-227",
+      "slug": "portfolio-approval-fact-sync",
+      "phase": "portfolio",
+      "title": "Implement owner approvals and deployment-fact synchronization",
+      "goal": "Keep private source, owner narratives, approved publication content, live deployment facts, and demo readiness as separate trust-boundary records.",
+      "acceptance": [
+        "The owner must approve the first publication's narrative, contribution, images, contact details, public source/demo links, and displayed deployment/status fields individually or through a recorded revision approval.",
+        "Background synchronization may update only previously approved destination, deployment time, and availability facts; an owner-edited link or narrative returns to review instead of being overwritten.",
+        "Every fact-only revision records the source deployment and audit event, while source commit hashes remain private unless explicitly approved for display.",
+        "A release or demo-access change marks the separate readiness attestation as needing recheck without erasing the last approved case study."
+      ],
+      "depends_on": [
+        "HOST-224"
+      ]
+    },
+    {
+      "key": "HOST-228",
+      "slug": "billing-testmode-seven-day-refund",
+      "phase": "launch",
+      "title": "Implement test-mode billing and the first-subscription seven-day refund",
+      "goal": "Exercise subscription entitlement and refund behavior in payment test mode before any catalog or live checkout is approved.",
+      "acceptance": [
+        "Test-mode billing creates idempotent subscription and entitlement events, starts the seven-day window only after the first settled charge activates service, and records the account once.",
+        "An eligible first-subscription cancellation/refund stops renewal and starts the disclosed export/retention process; renewals, plan changes, and reactivation do not reset the window.",
+        "A payment that settles after its capacity hold is lost receives an automatic refund without admitting beyond capacity and without consuming the first-subscription window.",
+        "No live payment method, real price, or public checkout path is enabled by this task, and failed later releases do not restart the refund window."
+      ],
+      "depends_on": [
+        "HOST-224",
+        "HOST-220"
+      ]
+    },
+    {
+      "key": "HOST-229",
+      "slug": "static-publisher-one-template",
+      "phase": "portfolio",
+      "title": "Publish one independent static portfolio template",
+      "goal": "Render an owner-approved portfolio revision into a durable static artifact that survives dashboard, GitHub, and application outages and proves the first internal milestone.",
+      "acceptance": [
+        "One template renders introduction, featured projects, skills, r\u00e9sum\u00e9/contact links, and project detail evidence from the approved structured revision and referenced deployment facts.",
+        "The publisher emits an immutable artifact and atomically advances a public pointer while retaining the last good artifact when rendering or upload fails.",
+        "A page-load test succeeds with dashboard, GitHub, and tenant application endpoints unavailable, and the artifact is served from an independent publishing boundary.",
+        "Portfolio publication and an external case study create no hosted project slot and cannot expose an unapproved private source field."
+      ],
+      "depends_on": [
+        "HOST-227"
+      ]
+    },
+    {
+      "key": "HOST-230",
+      "slug": "resource-enforcement-observability",
+      "phase": "delivery",
+      "title": "Enforce resource limits and ship logs, health alerts, and metrics",
+      "goal": "Make resource exhaustion bounded and visible while protecting live demos, tenant isolation, and operational recovery capacity.",
+      "acceptance": [
+        "Integration tests enforce candidate CPU, memory, scratch, database storage/connections, build time/concurrency, artifact, transfer, portfolio asset, and log limits with stable customer-facing outcomes.",
+        "Health checks, deployment failures, restarts, quota warnings, capacity headroom, and alert delivery produce structured metrics and logs with platform-known secret redaction.",
+        "Log rotation never stops an application, traffic exhaustion retains authenticated export and app/data state, and no resource policy is implemented as inactivity sleep.",
+        "Concurrent tenant load tests show database, network, runtime, and build controls isolate tenants and preserve reserved rollout/recovery headroom."
+      ],
+      "depends_on": [
+        "HOST-226",
+        "HOST-229"
+      ]
+    },
+    {
+      "key": "HOST-231",
+      "slug": "three-launch-portfolio-templates",
+      "phase": "portfolio",
+      "title": "Complete the three launch portfolio layouts",
+      "goal": "Deliver three accessible layouts over the same approved content model while keeping publication independent and configuration intentionally bounded.",
+      "acceptance": [
+        "Three layouts render the same approved fixture with consistent project links, evidence, approvals, and deployment-fact visibility, and each has a stable template identifier.",
+        "Owners can configure typography, accent, project order, and section visibility without introducing a drag-and-drop page-builder model or bypassing approvals.",
+        "Preview and published artifact tests verify all three layouts remain static, retain the last good revision, and work when dashboard and application endpoints are unavailable.",
+        "Accessibility checks cover keyboard navigation, heading structure, contrast, link names, and responsive rendering for every launch layout."
+      ],
+      "depends_on": [
+        "HOST-229"
+      ]
+    },
+    {
+      "key": "HOST-232",
+      "slug": "cancellation-retention-export-deletion",
+      "phase": "launch",
+      "title": "Implement cancellation, nonpayment, export, and deletion lifecycle",
+      "goal": "Make service end-of-life predictable and recoverable across cancellation, failed renewal, refund, export, account deletion, and retention windows.",
+      "acceptance": [
+        "Cancel-renewal tests keep included services through the paid-through date, while a seven-day failed-renewal grace blocks new deployments/provisioning and keeps existing demos running.",
+        "After paid service or grace ends, compute/database access and deployment changes stop, portfolio demo status becomes Demo offline, and the approved static portfolio remains through the disclosed recovery window.",
+        "Authenticated export provides portfolio HTML/assets, structured content, and a portable database dump; any separate secret export requires reauthentication and is audited.",
+        "Explicit deletion immediately revokes access and unpublishes content, removes primary data within seven days, expires backups within seven more, displays actual dates, and does not recycle the public slug during the pilot.",
+        "Clock-controlled tests retain recoverable data and the approved static portfolio for 30 days after service ends, expire ordinary backups within seven days after primary deletion, show reminder/deletion dates, and require entitlement and capacity checks before reactivation."
+      ],
+      "depends_on": [
+        "HOST-226",
+        "HOST-229",
+        "HOST-228"
+      ]
+    },
+    {
+      "key": "HOST-233",
+      "slug": "internal-journey-milestone",
+      "phase": "launch",
+      "title": "Prove the complete internal fixture journey",
+      "goal": "Demonstrate the differentiating outcome with owned fixtures before any external pilot activity: exact source to isolated build, healthy release, project database, and reviewed static portfolio.",
+      "acceptance": [
+        "An owned fixture passes bounded compatibility, uses an internal entitlement, builds an exact commit in a disposable VM, and records the job, artifact, and meter evidence.",
+        "A fixture with one static frontend, one Node API, and PostgreSQL reaches a healthy coordinated release with migration and last-good-release evidence.",
+        "An owner manually approves one portfolio revision and its deployment facts; independently served static output and the fixture health result are verified.",
+        "The milestone runs without customer contact, external deployment, live charge, or public pilot admission and records all failures without hiding them behind a demo shortcut."
+      ],
+      "depends_on": [
+        "HOST-226",
+        "HOST-229"
+      ]
+    },
+    {
+      "key": "HOST-234",
+      "slug": "screenshot-and-demo-readiness",
+      "phase": "portfolio",
+      "title": "Add approved screenshots and separate demo-readiness checks",
+      "goal": "Give owners an explicit reviewable readiness state for the demo page, synthetic data, access restrictions, and visitor instructions without conflating it with process health.",
+      "acceptance": [
+        "Screenshot capture stores an owner-approved image revision, target release, source URL, and publication permission; workers use the same network boundary as other untrusted-content visitors.",
+        "A readiness check records owner, timestamp, release, demo URL, synthetic-data confirmation, restricted-access instructions, and the resulting Ready to share or Needs recheck state.",
+        "Failed health checks cannot mark a demo ready, and a deployment or access change marks the existing readiness record Needs recheck without unpublishing the approved portfolio.",
+        "Tests block publication of a screenshot or visitor instruction until an owner approval record exists and preserve the last published approved image on capture failure."
+      ],
+      "depends_on": [
+        "HOST-230"
+      ]
+    },
+    {
+      "key": "HOST-235",
+      "slug": "benchmark-limits-full-use-economics",
+      "phase": "launch",
+      "title": "Measure benchmark limits and full-use unit economics",
+      "goal": "Turn proposed limits and prices into measured launch evidence that includes full slot use, recovery headroom, and the costs the brief requires.",
+      "acceptance": [
+        "A reproducible load run exercises full purchased slot use, tenant databases, builds, backups, traffic, payment fees, support allowance, rollout overlap, and spare/recovery capacity.",
+        "The report records observed compatibility, enforcement thresholds, per-account cost, margin sensitivity, and metric variance for each candidate tier and resource allowance.",
+        "Candidate limits remain labeled proposed until tests prove enforcement and isolation; unmeasured prices or allowances cannot be promoted by configuration alone.",
+        "The evidence package defines pilot metrics for activation, time to publish, demo durability, full-allowance cost, support load, r\u00e9sum\u00e9 use, and post-job-search retention."
+      ],
+      "depends_on": [
+        "HOST-230",
+        "HOST-228"
+      ]
+    },
+    {
+      "key": "HOST-236",
+      "slug": "costed-cloud-placement-domain-boundaries",
+      "phase": "launch",
+      "title": "Produce costed cloud placement and domain-boundary decision",
+      "goal": "Select a costed production candidate and explicit platform, application, build, database, and portfolio trust boundaries from measured workload evidence without provisioning it.",
+      "acceptance": [
+        "A decision record compares provider/region options for management, build, runtime, tenant database, object storage/CDN, capacity headroom, recovery copies, and measured full-use cost.",
+        "The selected candidate documents isolation assumptions, network paths, recovery domain, spend sensitivity, and why residential connectivity is not a paid-availability dependency.",
+        "Separate registrable domains and routing boundaries are specified for authenticated platform UI, tenant applications, and independent portfolios; customer custom domains remain deferred.",
+        "The task produces no provider purchase, infrastructure migration, DNS cutover, or production deployment; those actions remain behind the final readiness gate."
+      ],
+      "depends_on": [
+        "HOST-235"
+      ]
+    },
+    {
+      "key": "HOST-237",
+      "slug": "provider-adapters-and-recovery-runbooks",
+      "phase": "launch",
+      "title": "Prepare provider adapters, domain/TLS configuration, and recovery runbooks",
+      "goal": "Translate the costed placement and domain decision into versioned adapters, configuration schemas, and dry-run deployment and recovery procedures without provisioning paid infrastructure.",
+      "acceptance": [
+        "Checked-in adapters and configuration schemas cover management, build, runtime, tenant PostgreSQL, static publication, domain/TLS, backups, and recovery with secret references instead of credentials, customer data, or live provider identifiers.",
+        "Synthetic staging and dry-run checks validate network paths, domain/TLS configuration, backup/restore steps, rollout, last-good release, export, and deletion runbooks without paid resources or production DNS.",
+        "Runbooks specify operator preconditions, verification evidence, rollback, database restore approval, retention dates, and recovery-domain checks, and CI has no deploy permission.",
+        "Dry-run configuration tests refuse real provider calls, provisioning, migration or cutover without both the final readiness evidence and explicit owner authorization for the concrete action; CI never deploys."
+      ],
+      "depends_on": [
+        "HOST-236"
+      ]
+    },
+    {
+      "key": "HOST-238",
+      "slug": "approved-catalog-billing-gate",
+      "phase": "launch",
+      "title": "Promote measured tiers to an approved test checkout catalog",
+      "goal": "Create the first approved catalog only after measured economics, placement evidence, internal journey proof, and test-mode payment behavior pass their gates.",
+      "acceptance": [
+        "Each enabled tier records approved price, project-slot count, resource limits, refund window, grace period, retention, and customer-visible enforcement behavior with links to measured evidence.",
+        "Test-mode checkout provisions only the approved entitlement and capacity hold, handles refund/cancellation idempotently, and rejects every unmeasured or unsupported pattern before payment.",
+        "The catalog omits the superseded legacy price catalog and keeps any remaining hypotheses clearly labeled rather than silently publishing them.",
+        "Customer checkout and pilot admission remain disabled until readiness evidence and explicit owner launch authorization are recorded; completing planning or implementation cards alone never opens live checkout."
+      ],
+      "depends_on": [
+        "HOST-236",
+        "HOST-233",
+        "HOST-232"
+      ]
+    },
+    {
+      "key": "HOST-239",
+      "slug": "paid-pilot-readiness",
+      "phase": "launch",
+      "title": "Record paid-pilot readiness without launching",
+      "goal": "Assemble the evidence required for a small paid pilot while keeping contact, deployment, charging, and production changes explicitly outside this implementation task.",
+      "acceptance": [
+        "A clean-source verification records the current pinned Rust/Node toolchains, both lockfiles, fresh source revisions, focused tests, and a passing make check result.",
+        "The security gate links signed-repository authorization, disposable-build isolation, gVisor/runtime controls, tenant boundaries, secret redaction, and separate platform/application/portfolio domains.",
+        "The recovery gate links populated platform and tenant migration checks, pre-upgrade backups, restore/export drills, cancellation/deletion evidence, and observed recovery timings.",
+        "The economics and metrics gate links full-use cost evidence, the reviewed test catalog, capacity headroom, fixture-verified instrumentation, and a collection plan for activation, publishing, durability, support and retention; real pilot outcomes are measured after launch.",
+        "The resulting record is readiness only: it performs no customer contact, provider purchase, infrastructure deployment, DNS cutover, live charge, or external pilot admission."
+      ],
+      "depends_on": [
+        "HOST-231",
+        "HOST-234",
+        "HOST-238",
+        "HOST-237"
+      ]
+    }
+  ]
+}

@@ -1,7 +1,10 @@
 # Hostlet development
 
-This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md` and
-`README.md` before implementation. The supplied September 21 portfolio-and-demo brief is authoritative; the earlier
+This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
+`README.md` and the adopted planning baseline in `RECOMMENDATIONS.md` before
+implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`
+records the accepted planning rationale and detailed validation candidates. The
+supplied September 21 portfolio-and-demo brief is authoritative; the earlier
 generic-hosting plan is superseded. The current deliverable is a local scaffold.
 
 - Author new code, tests, manifests and automation here. Other Hostlet repositories
@@ -20,7 +23,11 @@ generic-hosting plan is superseded. The current deliverable is a local scaffold.
 - Keep live deployment facts distinct from owner-approved narratives and demo readiness.
 - Project databases, backups and tested restore/export belong to the new launch scope.
   Do not carry forward the old no-backup exception or pricing catalog.
-- Proposed prices, limits, Next.js migration and production placement are not approvals.
+- The adopted plan settles product scope and lifecycle defaults for implementation.
+  Keep the dashboard on React/TypeScript/Vite and defer a Next.js dashboard
+  migration. Prices ($5/$12/$20) remain pricing hypotheses; resource numbers are
+  starting benchmark targets. Production provider/spend/domain placement remains
+  a validation or authorization gate, not approval to publish, purchase or migrate.
 - Add credentials only through explicit service-scoped injection. Do not commit
   secrets, private operational inventories, customer data or provider identifiers.
 - Run `make check` before publishing changes. Pin toolchains and commit both locks.
@@ -31,6 +38,10 @@ generic-hosting plan is superseded. The current deliverable is a local scaffold.
   suitable for public release. Authenticate Gitea through the Infisical helper.
 - Track substantive work in the Hostlet Helm project. Older completed cards are
   evidence for older repositories, not implementation evidence for this new tree.
+- Use Helm's live prerequisite links before claiming implementation work. Keep
+  future cards unclaimed until their prerequisites are complete; synchronize
+  `ROADMAP.md` and `roadmap.json` when task scope or dependencies change. The
+  planned release is a readiness boundary, not an automatic launch instruction.
 - The primary agent owns integration and final verification. Delegate bounded,
   independent work to `luna_worker` with explicit file ownership; workers must not
   spawn agents or revert concurrent edits. Serialize locks, migrations and builds.

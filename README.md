@@ -10,12 +10,15 @@ portfolio around working demos.
 and the web shell reports its actual status. Portfolios, compatibility analysis,
 accounts, billing, project databases, builds and deployments are not implemented.
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
-the provisional generic-hosting baseline. Prices and production placement remain
-unresolved proposals.
+the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
+the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline
+and rationale. The [roadmap](ROADMAP.md) is the implementation ordering and
+dependency source. Prices, benchmark resource allowances and production
+provider/spend/domain placement still require validation or explicit authorization.
 
-The [recommended answers](RECOMMENDATIONS.md) propose concrete defaults for project
-slots, compatibility and payment, release recovery, portfolio lifecycle and build
-order. They are planning inputs, not current product capabilities or approved terms.
+The adopted baseline covers project slots, compatibility and payment, release
+recovery, portfolio lifecycle and build order. It describes planned behavior, not
+current product capabilities or a published pricing catalog.
 
 ## Run locally
 

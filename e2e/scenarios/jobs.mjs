@@ -587,6 +587,7 @@ export async function runJobScenarios({
       expectScenario(lockExit.code === 0, "job row-lock holder exits cleanly", { exit_status: lockExit.code });
       const expiredWhileBlocked = await blockedRenew;
       assertCode(expiredWhileBlocked, 409, "job_fenced", "lease expiry while renew waits on row lock");
+      await waitForState(raceJob.id, ["retriable"]);
       const raceReplacement = spawnBuilder("e2e-worker-lock-clock-replacement", "lock-clock-replacement", ["--once"]);
       const raceReplacementExit = await raceReplacement.exited;
       expectScenario(raceReplacementExit.code === 0, "lock-clock replacement worker", {
@@ -599,7 +600,7 @@ export async function runJobScenarios({
       const running = await waitForState(job.id, ["running"]);
       const oldAttempt = { id: running.current_attempt_id, fence: running.current_fence };
       await context.stopManaged(killed, "intentional E2E worker death after lease claim");
-      await context.delay(2_500);
+      await waitForState(job.id, ["retriable"]);
       const replacement = spawnBuilder(manifest.workers.replacement, "replacement", ["--once"]);
       const replacementExit = await replacement.exited;
       expectScenario(replacementExit.code === 0, "replacement worker exits successfully", {

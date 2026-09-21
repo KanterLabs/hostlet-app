@@ -542,7 +542,7 @@ async function runCommand(
     state.processes.push(record);
     let resolveExited;
     const exited = new Promise((resolveExit) => { resolveExited = resolveExit; });
-    const managedProcess = { name, child, exited, record, stopped: false };
+    const managedProcess = { name, child, exited, record, stopped: false, cleanupCommand: cleanup };
     managed.push(managedProcess);
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -906,6 +906,10 @@ async function shutdown(reason) {
   shutdownStarted = true;
   const performShutdown = async () => {
     for (const item of [...managed].reverse()) {
+      // An extension's finally block can already be removing its resources
+      // when abort reaches this snapshot. Let its registered cleanup promise
+      // finish before reaping those helpers in the second pass.
+      if (item.cleanupCommand) continue;
       try {
         await boundedCleanup(item.name, () => stopManaged(item, reason));
       } catch (error) {

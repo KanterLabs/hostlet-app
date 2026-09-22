@@ -7,10 +7,9 @@ The onboarding module uses disposable PostgreSQL 18, authenticated HTTP, an
 owned synthetic GitHub HTTP provider and actual dump/restore commands. It does
 not replace Hostlet internals with mocks or execute repository/customer code.
 The current acceptance inventory is
-[M2-SCENARIOS.md](../docs/M2-SCENARIOS.md). The M2 modules are implementation in
-progress: their presence and a local pass are not milestone acceptance. M2
-requires a clean gate run, complete artifact and separate handoff before it can
-be claimed.
+[M2-SCENARIOS.md](../docs/M2-SCENARIOS.md). The [M2 handoff](../docs/M2-HANDOFF.md)
+records two clean acceptance runs with 48 assertions each, verified receipts,
+exact tested source and limits. A local dirty run is diagnostic evidence only.
 
 [The M1 handoff](../docs/M1-HANDOFF.md) is the historical acceptance record. Its
 clean runs tested exactly
@@ -123,9 +122,9 @@ a clean committed tree and an unchanged source check at the end of the run.
 
 `onboarding.mjs` composes all current M2 modules into one persistence history.
 Together with the scaffold and runner-integrity checks, the runner now requires
-47 named assertions, including the four private-preview assertions. The full
-composed diagnostic passes. Clean HOST-243 repeats and a linked handoff are
-required before an M2 acceptance claim.
+47 baseline assertions, including the four private-preview assertions. A clean
+gate adds the unchanged-source assertion for 48 total. Both clean M2 repeats
+passed; their receipts are in [the handoff](../docs/M2-HANDOFF.md).
 
 | Area | Running boundary and intended evidence |
 | --- | --- |

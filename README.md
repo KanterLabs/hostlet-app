@@ -6,7 +6,7 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: M2 onboarding is under acceptance verification.** The dashboard supports
+**Status: M2 complete — onboarding and private preview.** The dashboard supports
 accounts, selected GitHub repositories and branches, bounded compatibility checks,
 and an editable private portfolio preview before paid hosting. The control API
 persists immutable source, configuration, report and draft history, and provides
@@ -15,6 +15,8 @@ Customer admission and workload execution remain disabled. Customer builds,
 live hosting, payment collection and public portfolio publication belong to later
 milestones.
 
+The [M2 handoff](docs/M2-HANDOFF.md) records two clean 48-assertion acceptance
+runs, exact repeat commands, private receipts and limits.
 The [M1 handoff](docs/M1-HANDOFF.md) records the verified foundation, backup and
 recovery baseline. The [M2 API contract](docs/M2-API.md) describes onboarding
 routes, preview validation, provider boundaries and internal admission controls.

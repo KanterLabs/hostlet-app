@@ -1,0 +1,12 @@
+{
+  "manifest_schema_version": 1,
+  "role": "schema-v5-retained-m2-control",
+  "source_commit": "a70b49664ebfab1bb44a3b9077c535b244a9dfb9",
+  "binary_sha256": "3a3b95a5e4418aea5c980b6e960dbc51602c710d7bd2ed760dff25a1435893b5",
+  "cache_path": ".local/retained/a70b49664ebfab1bb44a3b9077c535b244a9dfb9/hostlet-control",
+  "cargo_package": "hostlet-control",
+  "cargo_binary": "hostlet-control",
+  "database_schema_version": 5,
+  "minimum_reader_version": 4,
+  "provenance": "Clean locked-dependency build from the completed M2 baseline before M3 production or schema changes; detached rebuilds are source-pinned and may differ because Rust debug paths are embedded."
+}

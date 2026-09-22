@@ -744,5 +744,13 @@
     "active_task": null,
     "assigned_stop": "HOST-243",
     "stopped_at": "HOST-243"
+  },
+  "assignment": {
+    "milestone": "M3",
+    "stop_gate": "HOST-233",
+    "workers": "gpt-5.6-sol medium",
+    "authorized_at": "2026-09-22",
+    "tracking": "Helm resume HOST-222 rejected HTTP 507 agent mutation resource budget exhausted; live states unchanged; local implementation authorized",
+    "data_preservation": "Retained clean M2 binary and source/hash manifest before M3 code changes; fresh verified backup, populated additive upgrade and actual retained-binary compatibility required"
   }
 }

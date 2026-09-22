@@ -19,7 +19,7 @@ graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**M2 is complete at HOST-243. Stop before M3.** All eight M1 cards and all
+**M2 is complete at HOST-243. M3 is assigned through HOST-233; stop before M4.** All eight M1 cards and all
 five M2 cards are complete. Two clean M2 runs each passed 48 assertions on the
 same unchanged implementation commit, including real-browser source/preview
 flows, concurrent admission, bounded compatibility, populated upgrade/restore
@@ -34,7 +34,7 @@ in [the M1 handoff](docs/M1-HANDOFF.md). The upfront M2 inventory remains
 
 The next milestone is **M3 — Working demo and portfolio**, ending at HOST-233.
 HOST-222, HOST-223, HOST-225 and HOST-227 now have completed prerequisites, but
-remain unclaimed in Backlog. Claimability is not an instruction to start M3.
+remain unclaimed in Backlog because Helm rejected the September 22 claim with HTTP 507 (agent mutation resource budget exhausted). The user explicitly assigned M3 with Sol Medium workers. Local work follows the verified dependency ordering; no live claim or completion is implied. See [M3 scenarios](docs/M3-SCENARIOS.md) for the upfront acceptance inventory.
 The planned paid-pilot readiness release remains planned; M2 does not authorize
 customer execution, live payments, provider purchases or a production launch.
 

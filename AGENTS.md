@@ -8,7 +8,7 @@ supplied September 21 portfolio-and-demo brief is authoritative; the earlier
 generic-hosting plan is superseded. M1 is complete at HOST-242; read
 `docs/M1-HANDOFF.md` for verified evidence and limits. M2 acceptance is complete
 through HOST-243 using Sol Medium workers; read `docs/M2-HANDOFF.md` for the two
-clean runs and limits. Stop here; do not claim M3 without a new assignment.
+clean runs and limits. The September 22 assignment authorizes M3 with Sol Medium workers through HOST-233. Stop before M4; read docs/M3-SCENARIOS.md before implementation.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim

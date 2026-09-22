@@ -5,7 +5,7 @@ use axum::{
     extract::{Request, State},
     http::StatusCode,
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use serde::Serialize;
@@ -27,6 +27,7 @@ pub struct FoundationState {
     pub secret_key: Option<Arc<crate::crypto::SecretKey>>,
     pub recovery_key: Option<Arc<crate::recovery::RecoveryKey>>,
     pub worker_lease_seconds: i64,
+    pub(crate) github: Option<Arc<crate::github_provider::GitHubProvider>>,
 }
 
 pub struct FoundationServeError {
@@ -82,8 +83,13 @@ pub fn router(state: FoundationState) -> Router {
         .route("/v1/audit", get(auth::audit))
         .merge(graph::routes())
         .merge(crate::portfolio_drafts::routes())
+        .merge(crate::portfolio_preview::routes())
         .merge(crate::secrets::routes())
         .merge(crate::jobs::routes())
+        .merge(crate::github::routes())
+        .merge(crate::github_webhooks::routes())
+        .merge(crate::admission::routes())
+        .merge(crate::compatibility::routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), require_ready));
     Router::new()
         .route("/healthz", get(crate::healthz))
@@ -97,7 +103,10 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
     let (api_bind, worker_bind, database_url, prerequisites) = config.into_runtime_parts();
     let pool = db::lazy_pool(&database_url)
         .map_err(|_| FoundationServeError::new("database_configuration_invalid"))?;
-    let state = FoundationState::new(pool, prerequisites);
+    let mut state = FoundationState::new(pool, prerequisites);
+    state.github = crate::github_provider::GitHubProvider::from_env()
+        .map_err(|_| FoundationServeError::new("github_configuration_invalid"))?
+        .map(Arc::new);
     let api_listener = TcpListener::bind(api_bind)
         .await
         .map_err(|_| FoundationServeError::new("api_bind_failed"))?;
@@ -105,6 +114,7 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
         .await
         .map_err(|_| FoundationServeError::new("worker_bind_failed"))?;
     let worker_router = crate::jobs::internal_routes()
+        .merge(crate::admission::internal_routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), require_ready))
         .with_state(state.clone());
     let api_server = axum::serve(api_listener, router(state.clone()))
@@ -119,6 +129,7 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
                 // Safe errors are observable through job state/readiness; no raw
                 // SQL error chains or job credentials enter process logs.
                 let _ = crate::jobs::reap_expired(&state.pool).await;
+                let _ = crate::admission::reconcile(&state.pool).await;
             }
         }
     });
@@ -137,6 +148,7 @@ impl FoundationState {
             secret_key: prerequisites.secret_key,
             recovery_key: prerequisites.recovery_key,
             worker_lease_seconds: prerequisites.worker_lease_seconds,
+            github: None,
         }
     }
 
@@ -164,6 +176,7 @@ impl FoundationState {
             .as_deref()
             .ok_or_else(ApiError::foundation_unavailable)?;
         crate::secrets::check_keyring(&self.pool, secret_key).await?;
+        crate::github::check_keyring(&self.pool, secret_key).await?;
         crate::recovery::check_keyring(&self.pool, recovery_key)
             .await
             .map_err(|error| {
@@ -239,12 +252,14 @@ async fn require_ready(
     State(state): State<FoundationState>,
     request: Request,
     next: Next,
-) -> Result<Response, ApiError> {
-    state.ensure_ready().await?;
-    let mut response = next.run(request).await;
+) -> Response {
+    let mut response = match state.ensure_ready().await {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
+    };
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
+        axum::http::HeaderValue::from_static("private, no-store"),
     );
-    Ok(response)
+    response
 }

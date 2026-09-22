@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Query, State, rejection::QueryRejection},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -39,6 +39,27 @@ type DeploymentRow = (
     Value,
 );
 type ArtifactRow = (String, Uuid, String);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectListQuery {
+    after: Option<Uuid>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ProjectSummary {
+    id: Uuid,
+    name: String,
+    mode: String,
+    revision: i64,
+    current_configuration_revision_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+struct ProjectListResponse {
+    projects: Vec<ProjectSummary>,
+    next_cursor: Option<Uuid>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -185,7 +206,7 @@ impl IntoResponse for GraphError {
 
 pub fn routes() -> Router<FoundationState> {
     Router::new()
-        .route("/v1/projects", post(create_project))
+        .route("/v1/projects", post(create_project).get(list_projects))
         .route(
             "/v1/projects/{project_id}",
             get(get_project).patch(update_project),
@@ -628,6 +649,40 @@ async fn get_service(
         .ok_or_else(ApiError::not_found)?;
     transaction.commit().await?;
     Ok(Json(service))
+}
+
+// The private picker survives reloads without storing a second project model
+// in the browser. UUID keyset pagination bounds each response to fifty summaries.
+async fn list_projects(
+    State(state): State<FoundationState>,
+    authenticated: Authenticated,
+    query: Result<Query<ProjectListQuery>, QueryRejection>,
+) -> Result<Response, GraphError> {
+    let Query(query) = query.map_err(|_| {
+        ApiError::bad_request("invalid_project_cursor", "use a valid project cursor")
+    })?;
+    let mut projects: Vec<ProjectSummary> = sqlx::query_as(
+        "SELECT id,name,mode,revision,current_configuration_revision_id FROM projects \
+         WHERE account_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT 51",
+    )
+    .bind(authenticated.account_id()?)
+    .bind(query.after)
+    .fetch_all(&state.pool)
+    .await?;
+    let next_cursor = if projects.len() > 50 {
+        projects.truncate(50);
+        projects.last().map(|project| project.id)
+    } else {
+        None
+    };
+    Ok((
+        [(header::CACHE_CONTROL, "private, no-store")],
+        Json(ProjectListResponse {
+            projects,
+            next_cursor,
+        }),
+    )
+        .into_response())
 }
 
 async fn create_project(

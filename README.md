@@ -6,16 +6,18 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: M1 complete — local control foundation.** The API persists authenticated accounts,
-owner-scoped projects, immutable configurations, deployment intents, and portfolio
-drafts in PostgreSQL. It also supports fenced bookkeeping jobs, service-scoped
-encrypted secrets, and verified platform backup, additive upgrade, and restore
-commands. The web application remains a status preview; it does not
-yet provide account or project-management screens. Customer hosting, GitHub
-integration, compatibility analysis, billing, tenant databases, builds, and
-portfolio publication belong to later milestones.
-The [M1 handoff](docs/M1-HANDOFF.md) records the two clean acceptance runs,
-exact tested commit, repeat commands, private evidence receipts and limitations.
+**Status: M2 onboarding is under acceptance verification.** The dashboard supports
+accounts, selected GitHub repositories and branches, bounded compatibility checks,
+and an editable private portfolio preview before paid hosting. The control API
+persists immutable source, configuration, report and draft history, and provides
+synthetic entitlement, capacity, project-slot and build-meter reconciliation.
+Customer admission and workload execution remain disabled. Customer builds,
+live hosting, payment collection and public portfolio publication belong to later
+milestones.
+
+The [M1 handoff](docs/M1-HANDOFF.md) records the verified foundation, backup and
+recovery baseline. The [M2 API contract](docs/M2-API.md) describes onboarding
+routes, preview validation, provider boundaries and internal admission controls.
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
 the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
 the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline
@@ -52,6 +54,9 @@ The API accepts `HOSTLET_API_BIND` as an explicit socket address. If you change
 its port, update the development proxy in `web/vite.config.ts` to match. No
 environment file, database or provider credential is needed for this status-only
 mode. Setting `DATABASE_URL` selects the durable foundation mode described below.
+The sign-up and private-preview screens need that durable mode. GitHub additionally
+requires the explicit provider configuration in [M2-API.md](docs/M2-API.md); the
+service defaults to GitHub disabled and does not register an App automatically.
 
 | Endpoint | Behavior |
 | --- | --- |
@@ -80,10 +85,12 @@ backup procedure; it never resets the database. See the
 The [job contract](docs/M1-JOBS-API.md) and
 [secret metadata/version API](docs/M1-SECRETS.md) describe worker leases and
 scoped credential access. The [recovery runbook](docs/M1-RECOVERY.md) documents
-encrypted PostgreSQL backups, the backup-gated schema-3-to-4 upgrade, retained
-binary compatibility, separate empty-target restore, and the hourly scheduler
-tick. M1 recovery has a 64 MiB plaintext dump limit and does not install a host
-timer or perform a production cutover.
+encrypted PostgreSQL backups, backup-gated additive upgrades, retained binary
+compatibility, separate empty-target restore, and the hourly scheduler tick.
+M2 adds schema 5 with minimum reader 4; the owned acceptance drill exercises
+populated schema-4-to-5 upgrades and both retained and current binaries. Recovery
+has a 64 MiB plaintext dump limit and does not install a host timer or perform
+a production cutover.
 
 The builder and runtime offer `--version` and `--check-config`; their default
 execution continues to refuse customer work.

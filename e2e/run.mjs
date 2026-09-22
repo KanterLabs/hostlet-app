@@ -52,7 +52,7 @@ Options:
   --scenario-module PATH    Append a scenario module exporting a scenario object
   --require-clean           Fail unless the source tree is clean
   --inject-failure          Deliberately falsify one browser oracle and fail
-  --rebuild-retained        Force a fresh retained schema-3 binary build
+  --rebuild-retained        Force a fresh retained predecessor binary build
   --help                    Show this help without creating a run
 `;
 }
@@ -796,6 +796,7 @@ async function loadScenarioExtensions() {
 function extensionContext() {
   return Object.freeze({
     repo: REPO,
+    chromiumPath: args.chromium,
     artifactDir,
     logDir,
     tempDir,

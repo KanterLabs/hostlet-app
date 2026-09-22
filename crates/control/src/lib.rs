@@ -1,15 +1,21 @@
 //! Minimal Hostlet control API scaffold.
 
+mod admission;
 mod auth;
+mod compatibility;
 pub mod config;
 mod crypto;
 pub mod db;
 mod error;
 mod foundation;
+mod github;
+mod github_provider;
+mod github_webhooks;
 mod graph;
 mod intent;
 mod jobs;
 mod portfolio_drafts;
+mod portfolio_preview;
 pub mod recovery;
 mod secrets;
 

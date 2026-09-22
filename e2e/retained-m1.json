@@ -1,0 +1,12 @@
+{
+  "manifest_schema_version": 1,
+  "role": "schema-v4-retained-m1-control",
+  "source_commit": "b17a48dc0dceac426b96d92824e16e8462752848",
+  "binary_sha256": "a544f8b3e24e9375f4be7b04a4711329ae9cfce1a4d70eba9bdfdc472c7306a1",
+  "cache_path": ".local/retained/b17a48dc0dceac426b96d92824e16e8462752848/hostlet-control",
+  "cargo_package": "hostlet-control",
+  "cargo_binary": "hostlet-control",
+  "database_schema_version": 4,
+  "minimum_reader_version": 3,
+  "provenance": "Cached digest identifies the clean locked-dependency build made from the adopted M2 scenario baseline before schema 5 changes; detached fallback builds are source-pinned but may differ because Rust debug output embeds build paths"
+}

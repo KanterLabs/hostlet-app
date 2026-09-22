@@ -6,8 +6,8 @@ implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`
 records the accepted planning rationale and detailed validation candidates. The
 supplied September 21 portfolio-and-demo brief is authoritative; the earlier
 generic-hosting plan is superseded. M1 is complete at HOST-242; read
-`docs/M1-HANDOFF.md` for verified evidence and limits. Stop before M2 unless the
-user assigns it.
+`docs/M1-HANDOFF.md` for verified evidence and limits. M2 is now assigned through HOST-243 using Sol Medium workers. Stop at that
+gate after verified E2E evidence and handoff; do not claim M3.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim

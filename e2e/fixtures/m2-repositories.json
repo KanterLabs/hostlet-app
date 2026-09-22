@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "fixture_name": "hostlet-owned-m2-github-repositories",
+  "owner": {
+    "id": 21001,
+    "login": "synthetic-student"
+  },
+  "installation": {
+    "id": 41001,
+    "account_id": 21001,
+    "repository_selection": "selected"
+  },
+  "sentinels": {
+    "directory_environment": "HOSTLET_E2E_SENTINEL_DIR",
+    "network_environment": "HOSTLET_E2E_SENTINEL_URL",
+    "expected_files": [
+      "package-preinstall.executed",
+      "package-build.executed",
+      "package-start.executed",
+      "package-migrate.executed",
+      "module-import.executed"
+    ],
+    "expected_network_paths": [
+      "/package-preinstall",
+      "/package-build",
+      "/package-start",
+      "/package-migrate",
+      "/module-import"
+    ]
+  },
+  "repositories": [
+    {
+      "id": 61001,
+      "name": "vite-portfolio",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "looks_compatible",
+      "expected_reasons": ["vite_static_export"],
+      "branches": {
+        "main": "1111111111111111111111111111111111111111",
+        "refresh-candidate": "1111111111111111111111111111111111111112"
+      },
+      "commits": {
+        "1111111111111111111111111111111111111111": {
+          "tree": "a111111111111111111111111111111111111111",
+          "message": "synthetic private fixture metadata",
+          "files": {
+            "package.json": "{\n  \"name\": \"vite-portfolio\",\n  \"private\": true,\n  \"scripts\": { \"build\": \"vite build\" },\n  \"dependencies\": { \"vite\": \"6.1.0\" }\n}\n",
+            "package-lock.json": "{\"name\":\"vite-portfolio\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "index.html": "<main id=\"root\"></main>\n",
+            "src/main.ts": "document.querySelector('#root')!.textContent = 'owned synthetic fixture';\n"
+          }
+        },
+        "1111111111111111111111111111111111111112": {
+          "tree": "a111111111111111111111111111111111111112",
+          "message": "moved synthetic branch candidate",
+          "files": {
+            "package.json": "{\n  \"name\": \"vite-portfolio\",\n  \"private\": true,\n  \"scripts\": { \"build\": \"vite build\" },\n  \"dependencies\": { \"vite\": \"6.1.0\" }\n}\n",
+            "package-lock.json": "{\"name\":\"vite-portfolio\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "index.html": "<main id=\"root\"></main>\n",
+            "src/main.ts": "document.querySelector('#root')!.textContent = 'new immutable candidate';\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61002,
+      "name": "node-http-service",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "looks_compatible",
+      "expected_reasons": ["single_node_http_service", "health_endpoint_declared"],
+      "branches": { "main": "2222222222222222222222222222222222222222" },
+      "commits": {
+        "2222222222222222222222222222222222222222": {
+          "tree": "a222222222222222222222222222222222222222",
+          "message": "synthetic Node service",
+          "files": {
+            "package.json": "{\n  \"name\": \"node-http-service\",\n  \"private\": true,\n  \"scripts\": { \"start\": \"node server.mjs\" },\n  \"engines\": { \"node\": \"24.x\" }\n}\n",
+            "package-lock.json": "{\"name\":\"node-http-service\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "hostlet.json": "{\"serviceRoot\":\".\",\"healthPath\":\"/healthz\"}\n",
+            "server.mjs": "import http from 'node:http'; http.createServer((req,res)=>{res.end(req.url === '/healthz' ? 'ok' : 'fixture')}).listen(process.env.PORT);\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61003,
+      "name": "next16-monorepo",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "looks_compatible",
+      "expected_reasons": ["nextjs_16_standalone", "monorepo_service_root"],
+      "branches": { "main": "3333333333333333333333333333333333333333" },
+      "commits": {
+        "3333333333333333333333333333333333333333": {
+          "tree": "a333333333333333333333333333333333333333",
+          "message": "synthetic Next standalone monorepo",
+          "files": {
+            "package.json": "{\"name\":\"next16-monorepo\",\"private\":true,\"workspaces\":[\"apps/*\"]}\n",
+            "package-lock.json": "{\"name\":\"next16-monorepo\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "hostlet.json": "{\"serviceRoot\":\"apps/web\",\"healthPath\":\"/api/health\"}\n",
+            "apps/web/package.json": "{\"name\":\"web\",\"private\":true,\"scripts\":{\"build\":\"next build\",\"start\":\"node .next/standalone/server.js\"},\"dependencies\":{\"next\":\"16.0.0\",\"react\":\"19.1.0\",\"react-dom\":\"19.1.0\"}}\n",
+            "apps/web/next.config.mjs": "export default { output: 'standalone' };\n",
+            "apps/web/app/api/health/route.ts": "export function GET() { return Response.json({ ok: true }); }\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61004,
+      "name": "postgres-service",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "database_needed",
+      "expected_reasons": ["postgresql_connection_required"],
+      "branches": { "main": "4444444444444444444444444444444444444444" },
+      "commits": {
+        "4444444444444444444444444444444444444444": {
+          "tree": "a444444444444444444444444444444444444444",
+          "message": "synthetic database metadata",
+          "files": {
+            "package.json": "{\"name\":\"postgres-service\",\"private\":true,\"scripts\":{\"start\":\"node server.mjs\"},\"dependencies\":{\"pg\":\"8.13.1\"}}\n",
+            "package-lock.json": "{\"name\":\"postgres-service\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "hostlet.json": "{\"healthPath\":\"/healthz\",\"database\":\"postgresql\"}\n",
+            "server.mjs": "import pg from 'pg'; void new pg.Pool({ connectionString: process.env.DATABASE_URL });\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61005,
+      "name": "environment-contract",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "secrets_needed",
+      "expected_reasons": ["server_secret_names_declared", "public_build_values_separate"],
+      "branches": { "main": "5555555555555555555555555555555555555555" },
+      "commits": {
+        "5555555555555555555555555555555555555555": {
+          "tree": "a555555555555555555555555555555555555555",
+          "message": "synthetic variable names only",
+          "files": {
+            "package.json": "{\"name\":\"environment-contract\",\"private\":true,\"scripts\":{\"build\":\"vite build\"},\"dependencies\":{\"vite\":\"6.1.0\"}}\n",
+            "package-lock.json": "{\"name\":\"environment-contract\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            ".env.example": "VITE_PUBLIC_SITE_NAME=\nSESSION_SIGNING_KEY=\nEXTERNAL_API_TOKEN=\n",
+            "hostlet.json": "{\"publicBuildVariables\":[\"VITE_PUBLIC_SITE_NAME\"],\"serverSecrets\":[\"SESSION_SIGNING_KEY\",\"EXTERNAL_API_TOKEN\"]}\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61006,
+      "name": "missing-lockfile",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "configuration_needed",
+      "expected_reasons": ["lockfile_missing"],
+      "branches": { "main": "6666666666666666666666666666666666666666" },
+      "commits": {
+        "6666666666666666666666666666666666666666": {
+          "tree": "a666666666666666666666666666666666666666",
+          "message": "synthetic missing lockfile",
+          "files": {
+            "package.json": "{\"name\":\"missing-lockfile\",\"private\":true,\"scripts\":{\"start\":\"node server.mjs\"}}\n",
+            "server.mjs": "export const fixture = true;\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61007,
+      "name": "compose-stack",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "showcase_only",
+      "expected_reasons": ["docker_compose_unsupported", "multiple_backends_unsupported"],
+      "branches": { "main": "7777777777777777777777777777777777777777" },
+      "commits": {
+        "7777777777777777777777777777777777777777": {
+          "tree": "a777777777777777777777777777777777777777",
+          "message": "synthetic Compose fixture",
+          "files": {
+            "compose.yaml": "services:\n  api:\n    image: synthetic/api\n  worker:\n    image: synthetic/worker\n",
+            "package.json": "{\"name\":\"compose-stack\",\"private\":true}\n",
+            "package-lock.json": "{\"name\":\"compose-stack\",\"lockfileVersion\":3,\"packages\":{}}\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61008,
+      "name": "custom-server-framework",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "showcase_only",
+      "expected_reasons": ["unsupported_custom_server"],
+      "branches": { "main": "8888888888888888888888888888888888888888" },
+      "commits": {
+        "8888888888888888888888888888888888888888": {
+          "tree": "a888888888888888888888888888888888888888",
+          "message": "synthetic unsupported custom server",
+          "files": {
+            "package.json": "{\"name\":\"custom-server-framework\",\"private\":true,\"scripts\":{\"start\":\"node custom-server.mjs\"},\"dependencies\":{\"next\":\"16.0.0\"}}\n",
+            "package-lock.json": "{\"name\":\"custom-server-framework\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "custom-server.mjs": "import { createServer } from 'node:http'; import next from 'next'; void createServer(next({ dev: false }).getRequestHandler());\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61009,
+      "name": "local-disk-state",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "showcase_only",
+      "expected_reasons": ["persistent_local_disk_assumption"],
+      "branches": { "main": "9999999999999999999999999999999999999999" },
+      "commits": {
+        "9999999999999999999999999999999999999999": {
+          "tree": "a999999999999999999999999999999999999999",
+          "message": "synthetic local disk fixture",
+          "files": {
+            "package.json": "{\"name\":\"local-disk-state\",\"private\":true,\"scripts\":{\"start\":\"node server.mjs\"}}\n",
+            "package-lock.json": "{\"name\":\"local-disk-state\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "hostlet.json": "{\"healthPath\":\"/healthz\",\"persistentPaths\":[\"./uploads\"]}\n",
+            "server.mjs": "import { appendFileSync } from 'node:fs'; appendFileSync('./uploads/state.log', 'state\\n');\n"
+          }
+        }
+      }
+    },
+    {
+      "id": 61010,
+      "name": "execution-sentinels",
+      "private": true,
+      "default_branch": "main",
+      "grant": "default",
+      "expected_advisory": "configuration_needed",
+      "expected_reasons": ["commands_are_inert_metadata"],
+      "branches": { "main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "commits": {
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+          "tree": "baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "message": "synthetic execution sentinels",
+          "files": {
+            "package.json": "{\n  \"name\": \"execution-sentinels\",\n  \"private\": true,\n  \"scripts\": {\n    \"preinstall\": \"node sentinel.mjs package-preinstall\",\n    \"build\": \"node sentinel.mjs package-build\",\n    \"start\": \"node sentinel.mjs package-start\",\n    \"migrate\": \"node sentinel.mjs package-migrate\"\n  }\n}\n",
+            "package-lock.json": "{\"name\":\"execution-sentinels\",\"lockfileVersion\":3,\"packages\":{}}\n",
+            "hostlet.json": "{\"healthPath\":\"/healthz\",\"migrationCommand\":\"npm run migrate\"}\n",
+            "sentinel.mjs": "import { writeFileSync } from 'node:fs'; import { join } from 'node:path'; const name = process.argv[2]; writeFileSync(join(process.env.HOSTLET_E2E_SENTINEL_DIR, `${name}.executed`), 'executed\\n'); await fetch(`${process.env.HOSTLET_E2E_SENTINEL_URL}/${name}`); throw new Error(`sentinel ${name} executed`);\n",
+            "src/application.mjs": "import { writeFileSync } from 'node:fs'; import { join } from 'node:path'; writeFileSync(join(process.env.HOSTLET_E2E_SENTINEL_DIR, 'module-import.executed'), 'executed\\n'); await fetch(`${process.env.HOSTLET_E2E_SENTINEL_URL}/module-import`); throw new Error('application module imported');\n"
+          }
+        }
+      }
+    }
+  ]
+}

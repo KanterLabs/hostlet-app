@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Onboarding } from "./Onboarding";
 
 type VersionPayload = {
   service: string;
@@ -369,10 +370,13 @@ export function App() {
           <h1 id="page-title">Your projects, live and ready to show.</h1>
           <p className="hero__copy">
             Connect GitHub, turn supported projects into live demos, and publish a portfolio you’re
-            proud to share. You’ll review every project story before it goes live. GitHub connection,
-            hosting and publishing are not available in this development preview yet.
+            proud to share. You’ll review every project story before it goes live. Start by saving a
+            repository and exact branch source; hosting and publishing remain unavailable in this
+            development preview.
           </p>
         </section>
+
+        <Onboarding enabled={readiness.status === "ready"} />
 
         <section
           className="panel status-panel"
@@ -453,8 +457,8 @@ export function App() {
             <p className="eyebrow">Your portfolio</p>
             <h2 id="empty-title">Nothing to publish yet.</h2>
             <p>
-              Project selection and portfolio publishing will appear here in a later milestone.
-              This preview does not connect to a GitHub account or display saved projects.
+              Saved portfolio work remains a private preview. A connected repository, compatibility
+              result, or saved narrative is never publication approval.
             </p>
           </div>
         </section>

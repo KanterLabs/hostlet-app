@@ -1,6 +1,6 @@
 # Hostlet implementation roadmap
 
-Planning baseline updated on 2026-09-21. [PLAN.md](PLAN.md) defines the product;
+Execution snapshot updated on 2026-09-22. [PLAN.md](PLAN.md) defines the product;
 [RECOMMENDATIONS.md](RECOMMENDATIONS.md) records adopted answers and benchmark
 targets. [TESTING.md](TESTING.md) defines the required E2E evidence and agent
 stopping rules. [Helm](https://tc.shanekanterman.dev/p/hostlet) owns live task,
@@ -12,22 +12,27 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 cards (eight complete, none active, 23 in Backlog),
+The snapshot contains **31 cards (twelve complete, one active, 18 in Backlog),
 38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**M1 is complete at HOST-242. Stop here.** All eight M1 cards are complete.
+**M2 is assigned through HOST-243 and is in progress.** M1 is complete at HOST-242. All eight M1 cards are complete.
 Two clean full runs each passed 54 assertions, including populated upgrades,
 retained-binary compatibility, separate-target restore and real backup retention.
 The second run rebuilt the retained binary from its pinned source commit.
 [The M1 handoff](docs/M1-HANDOFF.md) records the exact implementation commit,
 commands, private artifact paths, receipt hashes, cleanup and limits.
 
-HOST-219 and HOST-220 are dependency-ready but remain unclaimed. M2 requires a
-new assignment; no later milestone is active.
+HOST-219, HOST-220, HOST-221 and HOST-224 are complete with a passing
+47-assertion diagnostic, including real browser authoring and selection,
+concurrent admission, bounded static analysis, non-execution sentinels,
+populated recovery and retained-M1 compatibility. HOST-243 is active for clean
+repeated acceptance and handoff. Sol Medium workers implemented M2; the primary
+agent owns final verification. The upfront inventory is
+[M2 scenarios](docs/M2-SCENARIOS.md). Stop at HOST-243; no later milestone is assigned.
 
 Keep future cards unclaimed until their prerequisites are complete and their
 milestone is in the assigned scope. Consult Helm for current claimability.

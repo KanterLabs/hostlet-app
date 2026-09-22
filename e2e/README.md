@@ -1,19 +1,25 @@
 # Hostlet E2E runner
 
-`make e2e` runs the API/web shell scenarios and the M1 foundation module. The
+`make e2e` runs the API/web shell scenarios and the M2 onboarding module. The
 shell scenarios start real Rust and Vite processes on run-owned loopback ports,
 call HTTP endpoints, load Chromium, then stop the API to prove the offline UI.
-The foundation module uses disposable PostgreSQL 18, authenticated HTTP, real
-bookkeeping worker processes, and actual dump/restore commands. It does not mock
-Hostlet code, replace durable storage with memory, or execute customer workloads.
-The acceptance inventory is [M1-SCENARIOS.md](../docs/M1-SCENARIOS.md).
-[The M1 handoff](../docs/M1-HANDOFF.md) records the verified clean runs, exact
-tested commit and external receipts. Changes after that commit need fresh evidence. The
-presence of these scenarios is not a final M1 acceptance claim; the milestone
-still requires a verified clean gate run and handoff.
+The onboarding module uses disposable PostgreSQL 18, authenticated HTTP, an
+owned synthetic GitHub HTTP provider and actual dump/restore commands. It does
+not replace Hostlet internals with mocks or execute repository/customer code.
+The current acceptance inventory is
+[M2-SCENARIOS.md](../docs/M2-SCENARIOS.md). The M2 modules are implementation in
+progress: their presence and a local pass are not milestone acceptance. M2
+requires a clean gate run, complete artifact and separate handoff before it can
+be claimed.
 
-Every invocation creates `artifacts/e2e/M1/<run-id>/` before prerequisite checks
-or builds. The directory is private and ignored by Git. A handled pass, failure,
+[The M1 handoff](../docs/M1-HANDOFF.md) is the historical acceptance record. Its
+clean runs tested exactly
+`5d72bd0b5af60576d6e4bd71d932847cfe1976eb`. The schema-5 HEAD cannot run the
+old `foundation.mjs` relationship as though its current binary were schema 4;
+rerun M1 only from a full-history isolated checkout of that tested commit.
+
+Every invocation creates `artifacts/e2e/<milestone>/<run-id>/` before
+prerequisite checks or builds. The directory is private and ignored by Git. A handled pass, failure,
 timeout, signal, or missing prerequisite contains `REPORT.md`, `manifest.json`,
 `assertions.json`, retained sanitized logs and browser evidence, and an external
 `SHA256SUMS` receipt that excludes itself. Hard kills may leave an incomplete
@@ -37,13 +43,20 @@ fact. `make e2e-gate` adds `--require-clean` and fails before process setup when
 tracked or untracked source changes exist. `make e2e-failure` uses
 `--inject-failure`; that integrity self-check deliberately falsifies one browser
 oracle, must return nonzero, and retains the full failed evidence bundle.
-`make e2e-scaffold` is the smaller API/web check; it cannot complete M1.
+`make e2e-scaffold` is the smaller API/web check; it completes neither M1 nor M2.
 
 To prove an omitted required assertion also fails, run
-`node e2e/run.mjs --scenario-module e2e/faults/missing-required.mjs`.
+
+```sh
+node e2e/run.mjs --milestone M2 --task HOST-243 \
+  --scenario-module e2e/scenarios/onboarding.mjs \
+  --scenario-module e2e/faults/missing-required.mjs --run-timeout 900000
+```
+
 This deliberate fault must exit nonzero and must never be included in an
-acceptance run. Use `--task HOST-242` to label the final milestone gate bundle.
-Pass `--rebuild-retained` to force the retained schema-3 control binary to be
+acceptance run. `make e2e` and `make e2e-gate` label current bundles as
+M2/HOST-243.
+Pass `--rebuild-retained` to force the retained schema-4 M1 control binary to be
 built from its recorded detached source worktree even when its private cache is
 valid. The manifest records whether this option was enabled.
 
@@ -52,8 +65,8 @@ kill, run this diagnostic command from the repository root:
 
 ```sh
 node --require ./e2e/faults/crash-before-receipt.cjs e2e/run.mjs \
-  --scenario-module e2e/scenarios/foundation.mjs --run-timeout 900000 \
-  --task HOST-242
+  --milestone M2 --task HOST-243 \
+  --scenario-module e2e/scenarios/onboarding.mjs --run-timeout 900000
 ```
 
 The preload intercepts only the current runner's terminal `SHA256SUMS` write
@@ -68,14 +81,20 @@ must never include this preload.
 Install the pinned Rust and Node toolchains, locked web dependencies, Make,
 Chromium (default `/snap/bin/chromium`), Git with full history, and a reachable
 Docker daemon. Full history is required because the compatibility drill verifies
-and checks out the schema-3 commit named in `retained-foundation.json`. A cached
+and checks out the schema-4 commit named in `retained-m1.json`. A cached
 binary is accepted only from its manifest-defined private path with the pinned
-SHA-256 digest. If that cache is absent or invalid, or `--rebuild-retained` is
-set, the runner creates a clean detached worktree at the pinned commit and uses
-locked dependencies to build a run-local binary. The evidence records the source
-identity, acquisition path, and binary digest.
+SHA-256 digest. The current retained source is
+`b17a48dc0dceac426b96d92824e16e8462752848`; its private cache pin is
+`a544f8b3e24e9375f4be7b04a4711329ae9cfce1a4d70eba9bdfdc472c7306a1`.
+If that cache is absent or invalid, or `--rebuild-retained` is set, the runner
+creates a clean detached worktree at the pinned commit and uses locked
+dependencies to build a run-local binary. The evidence records the source
+identity, acquisition path, actual rebuilt SHA-256 and expected cached SHA-256.
+Rust debug binaries can embed build paths, so a detached fallback is verified by
+its exact source commit, clean worktree and locked dependencies; it is not
+required to have the cache binary's bytes.
 
-The foundation uses the exact PostgreSQL 18 image digest in
+The onboarding harness uses the exact PostgreSQL 18 image digest in
 `postgres-image.txt`. Each run creates a uniquely labeled container and named
 volume and removes only those resources. Backup and restore invoke matching
 PostgreSQL 18 tools through that explicitly named run-owned container; the runner
@@ -87,7 +106,8 @@ is not a reset.
 Verify a finished bundle from its own directory with `sha256sum --check
 SHA256SUMS`, then compare `sha256sum SHA256SUMS` with the handoff receipt. Check
 the manifest's status, assertions, source identity and cleanup results as well:
-a valid checksum proves file integrity, not that a failed scenario passed.
+a valid checksum proves file integrity, not that a failed scenario passed or
+that an in-progress milestone was accepted.
 
 Run `node e2e/run.mjs --help` for optional paths, timeouts, milestone flags, and
 the repeatable `--scenario-module` extension hook. A module exports
@@ -99,19 +119,39 @@ a harness-tree digest. Dirty runs are diagnostic evidence; their hashes identify
 changes but do not preserve those changes. Reproducible gate evidence comes from
 a clean committed tree and an unchanged source check at the end of the run.
 
-## Implemented M1 foundation coverage
+## Current M2 onboarding modules
 
-The foundation module composes the scenario files under `e2e/scenarios/` into
-one persistence history. Later checks therefore operate on accounts, projects,
-secrets, and jobs created through the earlier public APIs.
+`onboarding.mjs` composes all current M2 modules into one persistence history.
+Together with the scaffold and runner-integrity checks, the runner now requires
+47 named assertions, including the four private-preview assertions. The full
+composed diagnostic passes. Clean HOST-243 repeats and a linked handoff are
+required before an M2 acceptance claim.
 
-| Area | Real boundary and evidence |
+| Area | Running boundary and intended evidence |
 | --- | --- |
-| Authentication and persistence | Account creation, opaque sessions, owner isolation, profile concurrency and replay, audit records, PostgreSQL restart durability, dependency loss, schema drift, and credential-free artifacts are checked through HTTP plus independent SQL. |
-| Project graph and portfolio | Standard project contracts, immutable configuration revisions, stable services, deployment/lifecycle intents, release references, and private portfolio drafts are persisted with owner-scoped reads and concurrency checks. Explicit trusted SQL observations model reserved and retained-resource states because M1 has no capacity provider or customer deployment execution. |
-| Jobs and scoped secrets | Secret versions are encrypted at rest and references are constrained by account, project, service, operation, and credential kind. Real bookkeeping workers exercise authenticated claim, credential resolution, renew, completion, cancellation, retry, lease expiry, competing workers, fencing, process kill/replacement, and restart durability without running repository code or a customer command. |
-| Upgrade and recovery | A populated schema-3 database is backed up with a real PostgreSQL 18 dump, encrypted and verified, upgraded additively to schema 4, read and written by both the current and retained schema-3 binaries, and restored into a distinct empty recovery database. Missing, stale, wrong-key, wrong-target, corrupt, occupied-target, and unsafe-path cases fail closed. |
-| Scheduling and objectives | The scheduler creates real encrypted dumps, deduplicates a UTC hour, retains all 49 hourly boundary points in the inclusive current-to-48-hours window, and retains the latest point from each of the seven completed UTC calendar dates strictly before the date containing that cutoff. Manual backups remain outside scheduled pruning. The run records observed snapshot age and restore duration against the one-hour RPO and four-hour RTO targets; accelerated scheduling and a passing observation are not production availability guarantees. |
+| Populated upgrade and recovery | A retained schema-4 M1 binary creates meaningful account, project, configuration, service, portfolio draft, secret and completed bookkeeping-job data through HTTP. The current binary must refuse a populated 4-to-5 migration without a fresh verified encrypted backup, preserve rows, IDs and relationships during the additive migration, and restore a fully populated schema-5 backup into a distinct run-owned empty database. Current and retained M1 binaries then exercise compatible reads, writes and restarts without rewinding the database. |
+| GitHub connection and immutable source | `m2-github.mjs` crosses real loopback HTTP to an owned synthetic provider fixture for OAuth, installation tokens, repository/ref/content reads and signed webhooks. The fixture owns only the external GitHub boundary, records sanitized observations and rejects wrong credentials, scope, installation, repository and endpoint use. No real GitHub account, App, private repository or credential is used. |
+| Real-browser onboarding | `m2-browser.mjs` drives installed Chromium through the Vite UI and real loopback OAuth redirects. A new user signs up, signs back in, selects an authorized repository and branch, and saves one exact immutable source. Independent PostgreSQL reads prove persistence while job, deployment and hosted-slot counts prove that onboarding does not execute or host customer code. |
+| Admission and accounting | `m2-admission.mjs` uses the authenticated public API plus an explicit synthetic internal entitlement/capacity/resource-observation boundary. It checks durable slot and rollout-hold accounting, observation generations and reservation epochs, build-meter debit and verified platform-fault credit, contention, restart convergence and reconciliation intent. Admission records work for later execution; it does not launch a build, provision a runtime, run repository commands, contact a payment provider or claim a settled charge/refund. |
+| Bounded compatibility | `m2-compatibility.mjs` reads one authorized immutable commit through the synthetic provider and performs conservative, bounded static inspection. It checks exact source/configuration binding, safe owner-private facts, stable `candidate`, `configuration_needed`, `database_needed`, `secrets_needed` and `showcase_only` results, and bounded malformed/unavailable inputs. The analyzer never runs repository commands, package managers, builds, migrations or application code, and `candidate` does not verify a deployment. |
+| Private editable preview | `m2-preview.mjs` is composed with four required assertions for authenticated browser authoring, immutable revision and concurrency behavior, privacy, owner isolation, safe placeholders, inherited M1 drafts, and no execution or publication effects. It also verifies fresh revision-zero saves, actual keyset pagination, preservation of unsaved edits during source binding, and configuration/source/report reruns through the real UI. |
+
+The 47-assertion dirty diagnostic run
+`2026-09-22T020704-126Z-2950768-9ccbb6` passed the scaffold, populated
+upgrade, GitHub, real-browser, admission, compatibility and all four private
+preview assertions. Its external `SHA256SUMS` receipt is
+`690bed5bc45c2cd69ea69ac12f0d58d6e7add1cdff461d936c07b6dd2c76211f`.
+This is implementation diagnostic evidence, not an M2 gate or handoff.
+
+## Historical M1 evidence
+
+M1 foundation coverage remains documented in
+[M1-HANDOFF.md](../docs/M1-HANDOFF.md), including authentication, project and
+portfolio persistence, jobs and scoped secrets, schema 3-to-4 recovery, and
+scheduled backup retention. Those are accepted results for the exact tested M1
+commit, not fresh evidence for schema-5 HEAD. Use the commands recorded in that
+handoff only after checking out its pinned implementation commit in an isolated
+full-history worktree.
 
 ## Scaffold scenarios
 
@@ -123,10 +163,11 @@ secrets, and jobs created through the earlier public APIs.
 | `browser-connected` | Start Vite on another dynamic loopback port with its proxy targeting the run API; load it in installed Chromium. | Rendered DOM reports Online, Healthy, Not ready, the API version, protocol, and readiness reason; a screenshot and DOM are retained. | Browser is one-shot; terminate the owned Vite process group. |
 | `browser-offline` | Stop and reap the API while leaving Vite running, then load a fresh Chromium page. | Rendered DOM reports three Offline states and the three endpoint-specific unreachable messages. | Terminate Vite and delete browser profiles; retain only sanitized evidence. |
 
-`make e2e-scaffold` runs only this smaller compatibility surface. The M1
-foundation coverage above adds PostgreSQL and worker fixtures while retaining
-the same public-boundary assertions, run-owned cleanup, durable-data checks, and
-artifact contract. It does not create a parallel unit-test suite.
+`make e2e-scaffold` runs only this smaller API/web shell surface. The M1
+historical runner and current M2 onboarding runner add their own PostgreSQL and
+external-boundary fixtures while retaining the same run-owned cleanup,
+durable-data checks and artifact contract. The scaffold alone proves neither
+milestone and does not create a parallel unit-test suite.
 
 ## Failure inventory
 
@@ -150,9 +191,9 @@ HTTP, browser, or artifact boundary.
 | Deliberately corrupted oracle | `--inject-failure` makes a real expected value wrong, producing a named failed assertion and nonzero exit while retaining evidence. | Integrity self-check. |
 | Sensitive environment values in evidence | Environment variables and process environments are never dumped; logs are scrubbed for common credential/token/authorization forms and local absolute paths. | Artifact writer. |
 | Concurrent runners | Unique run IDs and dynamic ports isolate files/processes; each runner only signals PIDs/process groups it started. | Ownership model. |
-| PostgreSQL unavailable, transaction/migration failure, duplicate or concurrent delivery, restart recovery, worker lease expiry, fencing, cancellation, scoped-secret denial, backup corruption, occupied restore target, or retained-binary incompatibility | The relevant named foundation assertion fails, no forbidden effect is reported, run-owned resources are cleaned, and the failed evidence bundle is retained. These checks are outside the smaller scaffold-only promise. | Foundation authentication, graph, jobs/secrets, and recovery scenarios. |
+| PostgreSQL or provider unavailable, transaction/migration failure, invalid or duplicate webhook delivery, browser onboarding failure, admission contention, stale observation generation, meter exhaustion, bounded compatibility rejection, preview validation or revision conflict, restart recovery, backup verification or restore failure, or retained-binary incompatibility | The relevant named onboarding assertion fails, no forbidden execution is reported, run-owned resources are cleaned, and the failed evidence bundle is retained. These checks are outside the smaller scaffold-only promise. | M2 upgrade, GitHub, browser, admission, compatibility and preview scenarios. |
 
 The runner itself is infrastructure, so the failure inventory also covers
 timeouts, cancellation, partial failure, resource leaks, recovery of incomplete
-records, and concurrency. Authentication and durable persistence are verified
-by the foundation module; the smaller scaffold-only command cannot prove them.
+records, and concurrency. The smaller scaffold-only command cannot prove
+authentication, provider behavior, admission accounting or durable persistence.

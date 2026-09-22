@@ -40,34 +40,6 @@ const ENVELOPE_AAD_DOMAIN: &[u8] = b"hostlet-backup-envelope/v1\0";
 const BACKUP_EXTENSION: &str = "hostlet-backup";
 const RECEIPT_SUFFIX: &str = "receipt.json";
 
-const COUNTED_RELATIONS: &[&str] = &[
-    "accounts",
-    "audit_events",
-    "configuration_revisions",
-    "database_identity",
-    "deployment_artifact_refs",
-    "deployments",
-    "hosting_state_events",
-    "idempotency_records",
-    "job_attempts",
-    "job_effects",
-    "job_secret_refs",
-    "jobs",
-    "password_identities",
-    "platform_schema_compatibility",
-    "portfolio_draft_revisions",
-    "portfolio_project_references",
-    "projects",
-    "project_lifecycle_intents",
-    "repositories",
-    "repository_configurations",
-    "secret_versions",
-    "secrets",
-    "service_configurations",
-    "services",
-    "sessions",
-];
-
 pub struct RecoveryKey {
     bytes: [u8; 32],
     key_id: String,
@@ -752,30 +724,28 @@ async fn inspect_database_target(database_url: &str) -> Result<InspectedTarget, 
 async fn relation_counts(
     connection: &mut PgConnection,
 ) -> Result<BTreeMap<String, u64>, RecoveryError> {
+    // Count every platform relation in the same exported snapshot as the dump.
+    // Additive onboarding tables must be included without weakening old-schema
+    // backup verification. The migration ledger has its own checksum evidence.
+    let relations: Vec<String> = sqlx::query_scalar(
+        "SELECT tablename::text FROM pg_catalog.pg_tables \
+         WHERE schemaname = 'public' AND tablename <> '_sqlx_migrations' ORDER BY tablename",
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(|_| RecoveryError::new("backup_relation_count_failed"))?;
     let mut counts = BTreeMap::new();
-    for relation in COUNTED_RELATIONS {
-        let query = format!("SELECT COUNT(*)::bigint FROM public.{relation}");
+    for relation in relations {
+        // Identifiers come from PostgreSQL's catalog, not caller input. Quote
+        // them nevertheless so every legal identifier has one SQL meaning.
+        let quoted = relation.replace('"', "\"\"");
+        let query = format!("SELECT COUNT(*)::bigint FROM public.\"{quoted}\"");
         let count: i64 = sqlx::query_scalar(&query)
             .fetch_one(&mut *connection)
             .await
             .map_err(|_| RecoveryError::new("backup_relation_count_failed"))?;
-        let count = u64::try_from(count)
-            .map_err(|_| RecoveryError::new("backup_relation_count_invalid"))?;
-        counts.insert((*relation).to_owned(), count);
-    }
-    let receipt_table_present: bool =
-        sqlx::query_scalar("SELECT to_regclass('public.platform_backup_receipts') IS NOT NULL")
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(|_| RecoveryError::new("backup_relation_count_failed"))?;
-    if receipt_table_present {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM public.platform_backup_receipts")
-                .fetch_one(&mut *connection)
-                .await
-                .map_err(|_| RecoveryError::new("backup_relation_count_failed"))?;
         counts.insert(
-            "platform_backup_receipts".to_owned(),
+            relation,
             u64::try_from(count)
                 .map_err(|_| RecoveryError::new("backup_relation_count_invalid"))?,
         );

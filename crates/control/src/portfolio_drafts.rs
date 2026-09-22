@@ -120,7 +120,7 @@ fn as_u64(value: i64) -> Result<u64, PortfolioError> {
     u64::try_from(value).map_err(|_| ApiError::internal().into())
 }
 
-fn m1_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation> {
+pub(crate) fn m1_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation> {
     let mut issues = draft
         .validate()
         .err()

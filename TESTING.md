@@ -57,7 +57,7 @@ assertions, assertions that only inspect fixtures, or an assertion that can
 never fail. Keep setup, seed data and test-mode switches explicit so that a
 green run demonstrates the product path rather than a test harness shortcut.
 
-The foundation harness runs with `make e2e`; `make e2e-gate` requires a clean
+The current M2 onboarding harness runs with `make e2e`; `make e2e-gate` requires a clean
 source tree and `make e2e-failure` deliberately fails one assertion to verify
 failed-run evidence. See [e2e/README.md](e2e/README.md) for prerequisites and
 scenario coverage. `make e2e-scaffold` runs only the original API/web shell

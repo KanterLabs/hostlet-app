@@ -10,7 +10,9 @@ records the adopted planning rationale and detailed validation candidates, while
 
 M1 is complete at HOST-242. The verified local control foundation and its limits
 are described in [README.md](README.md) and the [M1 handoff](docs/M1-HANDOFF.md).
-Later milestones remain unclaimed and require a new assignment. The product and
+M2 is assigned through HOST-243. GitHub onboarding, synthetic admission,
+bounded static compatibility and private preview pass the composed diagnostic;
+the clean milestone gate and handoff are in progress. M3 and later remain unclaimed. The product and
 lifecycle defaults below are adopted planning requirements for implementation;
 they are not current capabilities, a published price catalog or permission to
 provision infrastructure. Resource numbers are starting benchmark targets, and

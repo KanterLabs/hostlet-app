@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "updated": "2026-09-21",
+  "updated": "2026-09-22",
   "project": "HOST",
   "repository": "KanterLabs/hostlet-app",
   "release": "Hostlet 0.1 \u2014 paid pilot readiness",
@@ -183,8 +183,8 @@
       ],
       "milestone": "M2",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-220",
@@ -203,8 +203,8 @@
       ],
       "milestone": "M2",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-221",
@@ -223,8 +223,8 @@
       ],
       "milestone": "M2",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-224",
@@ -243,8 +243,8 @@
       ],
       "milestone": "M2",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-243",
@@ -264,8 +264,8 @@
       ],
       "milestone": "M2",
       "is_gate": true,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "active",
+      "dependency_state": "owned"
     },
     {
       "key": "HOST-222",
@@ -736,13 +736,13 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 11546,
-    "read_at": "2026-09-21T23:41:18.368494667Z",
-    "completed": 8,
-    "active": 0,
-    "backlog": 23,
-    "active_task": null,
-    "assigned_stop": "HOST-242",
-    "stopped_at": "M1"
+    "project_revision": 11655,
+    "read_at": "2026-09-22T02:10:15.407602409Z",
+    "completed": 12,
+    "active": 1,
+    "backlog": 18,
+    "active_task": "HOST-243",
+    "assigned_stop": "HOST-243",
+    "stopped_at": null
   }
 }

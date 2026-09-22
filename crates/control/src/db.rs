@@ -5,7 +5,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-pub const READER_SCHEMA_VERSION: i64 = 4;
+pub const READER_SCHEMA_VERSION: i64 = 5;
 pub(crate) const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
@@ -37,6 +37,24 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "public.job_secret_refs",
     "public.job_effects",
     "public.platform_backup_receipts",
+    "public.github_oauth_attempts",
+    "public.github_user_authorizations",
+    "public.github_installations",
+    "public.github_repository_bindings",
+    "public.github_webhook_deliveries",
+    "public.github_source_revisions",
+    "public.admission_fixture_receipts",
+    "public.admission_capacity_pools",
+    "public.admission_entitlements",
+    "public.admission_source_proofs",
+    "public.capacity_holds",
+    "public.slot_reservations",
+    "public.admission_resource_observations",
+    "public.build_usage_events",
+    "public.admission_reconciliation_intents",
+    "public.compatibility_reports",
+    "public.portfolio_preview_contexts",
+    "public.portfolio_preview_project_contexts",
 ];
 
 pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
@@ -182,6 +200,7 @@ async fn inspect_prefix(connection: &mut PgConnection) -> Result<SchemaPrefix, S
         1 => 7,
         2 => 19,
         3 => 25,
+        4 => 26,
         _ => REQUIRED_RELATIONS.len(),
     };
     let relations_present: bool = sqlx::query_scalar(

@@ -264,8 +264,8 @@
       ],
       "milestone": "M2",
       "is_gate": true,
-      "status": "active",
-      "dependency_state": "owned"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-222",
@@ -285,7 +285,7 @@
       "milestone": "M3",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-223",
@@ -305,7 +305,7 @@
       "milestone": "M3",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-225",
@@ -325,7 +325,7 @@
       "milestone": "M3",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-227",
@@ -345,7 +345,7 @@
       "milestone": "M3",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-226",
@@ -736,13 +736,13 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 11655,
-    "read_at": "2026-09-22T02:10:15.407602409Z",
-    "completed": 12,
-    "active": 1,
+    "project_revision": 11667,
+    "read_at": "2026-09-22T02:19:03.729765954Z",
+    "completed": 13,
+    "active": 0,
     "backlog": 18,
-    "active_task": "HOST-243",
+    "active_task": null,
     "assigned_stop": "HOST-243",
-    "stopped_at": null
+    "stopped_at": "HOST-243"
   }
 }

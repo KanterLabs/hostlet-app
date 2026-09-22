@@ -12,27 +12,31 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 cards (twelve complete, one active, 18 in Backlog),
+The snapshot contains **31 cards (thirteen complete, none active, 18 in Backlog),
 38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**M2 is assigned through HOST-243 and is in progress.** M1 is complete at HOST-242. All eight M1 cards are complete.
-Two clean full runs each passed 54 assertions, including populated upgrades,
-retained-binary compatibility, separate-target restore and real backup retention.
-The second run rebuilt the retained binary from its pinned source commit.
-[The M1 handoff](docs/M1-HANDOFF.md) records the exact implementation commit,
-commands, private artifact paths, receipt hashes, cleanup and limits.
+**M2 is complete at HOST-243. Stop before M3.** All eight M1 cards and all
+five M2 cards are complete. Two clean M2 runs each passed 48 assertions on the
+same unchanged implementation commit, including real-browser source/preview
+flows, concurrent admission, bounded compatibility, populated upgrade/restore
+and retained-M1 compatibility. The second rebuilt M1 from its pinned clean source.
+[The M2 handoff](docs/M2-HANDOFF.md) records exact commands, private artifact paths,
+receipt hashes, CI, cleanup and limits. Sol Medium workers implemented M2;
+the primary agent integrated and verified their work.
 
-HOST-219, HOST-220, HOST-221 and HOST-224 are complete with a passing
-47-assertion diagnostic, including real browser authoring and selection,
-concurrent admission, bounded static analysis, non-execution sentinels,
-populated recovery and retained-M1 compatibility. HOST-243 is active for clean
-repeated acceptance and handoff. Sol Medium workers implemented M2; the primary
-agent owns final verification. The upfront inventory is
-[M2 scenarios](docs/M2-SCENARIOS.md). Stop at HOST-243; no later milestone is assigned.
+M1's two clean runs each passed 54 assertions; its historical evidence remains
+in [the M1 handoff](docs/M1-HANDOFF.md). The upfront M2 inventory remains
+[M2 scenarios](docs/M2-SCENARIOS.md).
+
+The next milestone is **M3 — Working demo and portfolio**, ending at HOST-233.
+HOST-222, HOST-223, HOST-225 and HOST-227 now have completed prerequisites, but
+remain unclaimed in Backlog. Claimability is not an instruction to start M3.
+The planned paid-pilot readiness release remains planned; M2 does not authorize
+customer execution, live payments, provider purchases or a production launch.
 
 Keep future cards unclaimed until their prerequisites are complete and their
 milestone is in the assigned scope. Consult Helm for current claimability.
@@ -74,7 +78,7 @@ the agent handoff. Helm claimability alone is not an instruction to continue.
 - Every E2E run, including a failed run, produces verifiable repeatable
   evidence. Missing, incomplete or failed evidence cannot pass a gate.
 - Existing `make check` runs formatting, linting, builds and legacy tests.
-  It is not E2E evidence. M1 completion is established by the linked clean-run receipts.
+  It is not E2E evidence. M1 and M2 completion is established by the linked clean-run receipts.
 
 The full contract, artifact fields, interruption handling and isolation
 exception are in [TESTING.md](TESTING.md).

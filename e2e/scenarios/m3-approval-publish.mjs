@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -15,6 +16,24 @@ export const M3_APPROVAL_PUBLISH_REQUIRED_ASSERTIONS = Object.freeze([
   "M3-PUBLISH-02",
   "M3-PUBLISH-03",
 ]);
+
+function rawPathStatus(port, path, signal) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      hostname: "127.0.0.1",
+      port,
+      path,
+      method: "GET",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+    }, (response) => {
+      const status = response.statusCode;
+      response.destroy();
+      resolve({ status });
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
 
 function hostEnvironment(overrides = {}) {
   const environment = {};
@@ -1334,10 +1353,7 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
             cache: "no-store",
             signal: AbortSignal.timeout(10_000),
           });
-          const encodedTraversalResponse = await fetch(`${staticBase}${slug}/%2e%2e/${slug}/index.html`, {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          });
+          const encodedTraversalResponse = await rawPathStatus(staticPort, `/${slug}/%2e%2e/${slug}/index.html`, context.abortSignal);
           const unknownHostResponse = await fetch(publicUrl, {
             cache: "no-store",
             headers: { Host: "evil.example.test" },

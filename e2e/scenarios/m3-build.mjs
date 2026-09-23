@@ -903,15 +903,39 @@ function createBuildUnitGuard(m3, setup) {
       tracked.attemptIds.add(attemptId);
       const attemptDir = join(tracked.workRoot, jobId, attemptId);
       const socketDir = join("/tmp", `hostlet-build-${attemptId}`);
+      const proveVanishedUnit = async () => {
+        const vanished = await command(
+          `M3 build unit vanished proof ${jobId} ${attemptId}`, tracked.profile.systemctl,
+          ["show", unit, "--property=LoadState", "--property=ActiveState", "--property=ControlGroup"],
+        );
+        const vanishedProperties = Object.fromEntries(vanished.stdout.trim().split("\n").filter(Boolean).map((line) => {
+          const split = line.indexOf("=");
+          return split < 0 ? [line, ""] : [line.slice(0, split), line.slice(split + 1)];
+        }));
+        let cgroupAbsent;
+        try {
+          lstatSync(join("/sys/fs/cgroup/system.slice", unit));
+          cgroupAbsent = false;
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          cgroupAbsent = true;
+        }
+        return vanished.code === 0 && vanishedProperties.LoadState === "not-found" &&
+          vanishedProperties.ActiveState === "inactive" &&
+          vanishedProperties.ControlGroup === "" && cgroupAbsent;
+      };
       const shown = await command(
         `M3 build unit ownership ${jobId} ${attemptId}`, tracked.profile.systemctl,
-        ["show", unit, "--property=Description", "--property=BindPaths", "--property=ActiveState", "--property=KillMode", "--property=RuntimeMaxUSec", "--property=TimeoutStopUSec"],
+        ["show", unit, "--property=LoadState", "--property=Description", "--property=BindPaths", "--property=ActiveState", "--property=KillMode", "--property=RuntimeMaxUSec", "--property=TimeoutStopUSec"],
       );
       const properties = Object.fromEntries(shown.stdout.trim().split("\n").map((line) => {
         const split = line.indexOf("=");
         return split < 0 ? [line, ""] : [line.slice(0, split), line.slice(split + 1)];
       }));
-      if (shown.code !== 0) throw new Error(`failed to inspect exact run-owned systemd unit: ${unit}`);
+      if (shown.code !== 0 || properties.LoadState === "not-found") {
+        if (await proveVanishedUnit()) continue;
+        throw new Error(`failed to inspect exact run-owned systemd unit: ${unit}`);
+      }
       const bindPaths = properties.BindPaths?.trim().split(/\s+/).filter(Boolean) ?? [];
       const expectedBindPaths = [attemptDir, socketDir];
       const bindPathsMatch = bindPaths.length === expectedBindPaths.length && bindPaths.every((value, index) => {
@@ -932,7 +956,10 @@ function createBuildUnitGuard(m3, setup) {
           `M3 build unit stop ${jobId} ${attemptId}`, tracked.profile.sudo,
           ["-n", tracked.profile.systemctl, "stop", unit],
         );
-        if (stoppedResult.code !== 0) throw new Error(`failed to stop exact run-owned systemd unit: ${unit}`);
+        if (stoppedResult.code !== 0) {
+          if (await proveVanishedUnit()) continue;
+          throw new Error(`failed to stop exact run-owned systemd unit: ${unit}`);
+        }
         stopped += 1;
       }
       await command(

@@ -865,7 +865,21 @@ fn execute_migration_probe(
     let _ = fs::remove_file(&request_path);
     let _ = wipe_remove(&credential_path);
     let result = result.map_err(|_| "release_migration_probe_unavailable")?;
-    if !result.status.success() || result.stdout.len() > 64 * 1024 {
+    if !result.status.success() {
+        if let Ok(reason) = std::str::from_utf8(&result.stderr) {
+            let reason = reason.trim();
+            if reason.starts_with("migration_probe_")
+                && reason.len() <= 96
+                && reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                let _ = writeln!(error, "release_migration_probe_failure reason={reason}");
+            }
+        }
+        return Err("release_migration_probe_failed");
+    }
+    if result.stdout.len() > 64 * 1024 {
         return Err("release_migration_probe_failed");
     }
     let output: serde_json::Value = serde_json::from_slice(&result.stdout)

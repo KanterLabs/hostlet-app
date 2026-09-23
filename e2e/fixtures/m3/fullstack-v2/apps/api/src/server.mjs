@@ -3,6 +3,10 @@ import pg from "pg";
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
 const releaseId = "api-v2";
+const healthErrorCodes = new Set([
+  "42P01", "42501", "28P01", "3D000", "08001", "08006", "57P03", "53300",
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "EHOSTUNREACH", "ENOTFOUND", "EACCES",
+]);
 
 async function body(request) {
   const chunks = [];
@@ -39,7 +43,11 @@ const server = createServer(async (request, response) => {
       json(response, 201, { api_version: releaseId, item: result.rows[0] });
     } else json(response, 404, { error: "not_found" });
   } catch (error) {
-    json(response, error.message === "body_too_large" ? 413 : 500, { error: "request_failed" });
+    const status = error.message === "body_too_large" ? 413 : 500;
+    const diagnosticCode = healthErrorCodes.has(error?.code) ? error.code : "unknown";
+    json(response, status, request.method === "GET" && request.url === "/healthz"
+      ? { error: "request_failed", diagnostic_code: diagnosticCode }
+      : { error: "request_failed" });
   }
 });
 

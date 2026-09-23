@@ -30,6 +30,10 @@ CHECK_KINDS = {
     "cached_old_frontend_candidate_api",
     "candidate_frontend_retained_api",
 }
+HEALTH_ERROR_CODES = {
+    "42P01", "42501", "28P01", "3D000", "08001", "08006", "57P03", "53300",
+    "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "EHOSTUNREACH", "ENOTFOUND", "EACCES",
+}
 
 
 class ProbeFailure(Exception):
@@ -125,20 +129,47 @@ def store_cas(root, value):
     digest = sha256(data)
     hexdigest = digest[7:]
     directory = root / "evidence" / "sha256" / hexdigest[:2]
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
+    owner = root.stat()
+    for path in (root / "evidence", root / "evidence" / "sha256", directory):
+        try:
+            path.mkdir(mode=0o700)
+            os.chown(path, owner.st_uid, owner.st_gid)
+        except FileExistsError:
+            metadata = path.lstat()
+            if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != owner.st_uid or
+                    metadata.st_gid != owner.st_gid or stat.S_IMODE(metadata.st_mode) & 0o077):
+                fail("migration_probe_evidence_owner_invalid")
     path = directory / f"{hexdigest[2:]}.json"
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except FileExistsError:
-        if path.is_symlink() or path.read_bytes() != data:
+        metadata = path.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != owner.st_uid or
+                metadata.st_gid != owner.st_gid or stat.S_IMODE(metadata.st_mode) & 0o077 or
+                path.read_bytes() != data):
             fail("migration_probe_evidence_collision")
         return digest
     with os.fdopen(descriptor, "wb") as output:
+        os.fchown(output.fileno(), owner.st_uid, owner.st_gid)
         output.write(data)
         output.flush()
         os.fsync(output.fileno())
     return digest
+
+
+def health_error_code(gateway_namespace, address, port, path):
+    url = f"http://{address}:{port}{path}"
+    try:
+        result = subprocess.run(
+            ["ip", "netns", "exec", gateway_namespace, "curl", "--silent", "--show-error",
+             "--max-time", "2", "--max-filesize", "512", url], capture_output=True, timeout=3,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, check=False)
+        if result.returncode != 0 or len(result.stdout) > 512:
+            return "unknown"
+        code = json.loads(result.stdout).get("diagnostic_code")
+        return code.lower() if code in HEALTH_ERROR_CODES else "unknown"
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
+        return "unknown"
 
 
 def run(command, *, stdin=None, timeout=60, code="migration_probe_command_failed"):
@@ -465,21 +496,28 @@ def main():
         attached = True
         _, _ = invoke("start")
         started = True
+        gateway_namespace = f"hostlet-gateway-{request['probe_execution_id']}-1"
+
+        def health_timeout():
+            code = health_error_code(gateway_namespace, application4, executor["health_port"],
+                                     executor["health_path"])
+            fail(f"migration_probe_health_timeout_{code}")
+
         health_deadline = time.monotonic() + 5.0
         while True:
             remaining = health_deadline - time.monotonic()
             if remaining <= 0:
-                fail("migration_probe_health_timeout")
+                health_timeout()
             try:
                 health_receipt, candidate_executor_digest = invoke(
                     "inspect", timeout=max(0.001, remaining), allow_failed=True)
             except ProbeFailure as error:
                 if str(error) == "migration_probe_executor_inspect_timeout":
-                    fail("migration_probe_health_timeout")
+                    health_timeout()
                 raise
             observed = time.monotonic()
             if observed > health_deadline:
-                fail("migration_probe_health_timeout")
+                health_timeout()
             if (health_receipt.get("status") != "running" or
                     health_receipt.get("runsc_status") != "running"):
                 fail("migration_probe_health_stopped")
@@ -492,7 +530,6 @@ def main():
         if not MARKER_NAME.fullmatch(marker_name):
             fail("migration_probe_marker_invalid")
         write_value = {"name": marker_name, "client_release": request["check_kind"]}
-        gateway_namespace = f"hostlet-gateway-{request['probe_execution_id']}-1"
         url = f"http://{application4}:{executor['application_port']}/api/items"
         began = int(time.time() * 1000)
         post = run(["ip", "netns", "exec", gateway_namespace, "curl", "--silent", "--show-error",

@@ -424,6 +424,27 @@ remove_verified_peer_registry() {
   peer_registry_lock_fd=
 }
 
+probe_work_root="$state_root/.migration-probes"
+probe_work_root_present=false
+if [[ -e "$probe_work_root" || -L "$probe_work_root" ]]; then
+  [[ -d "$probe_work_root" && ! -L "$probe_work_root" ]] || fail migration_probe_root_not_directory
+  [[ "$(realpath -e -- "$probe_work_root")" == "$probe_work_root" ]] || fail migration_probe_root_path_changed
+  [[ "$(stat -c '%u:%a' -- "$probe_work_root")" =~ ^0:(700|755)$ ]] || fail migration_probe_root_not_owned
+  probe_work_entries=("$probe_work_root"/*)
+  [[ "${#probe_work_entries[@]}" == 0 ]] || fail migration_probe_state_retained
+  probe_work_root_present=true
+fi
+
+remove_empty_probe_work_root() {
+  [[ "$probe_work_root_present" == true ]] || return 0
+  [[ -d "$probe_work_root" && ! -L "$probe_work_root" ]] || fail migration_probe_root_not_directory
+  [[ "$(realpath -e -- "$probe_work_root")" == "$probe_work_root" ]] || fail migration_probe_root_path_changed
+  [[ "$(stat -c '%u:%a' -- "$probe_work_root")" =~ ^0:(700|755)$ ]] || fail migration_probe_root_not_owned
+  probe_work_entries=("$probe_work_root"/*)
+  [[ "${#probe_work_entries[@]}" == 0 ]] || fail migration_probe_state_retained
+  rmdir -- "$probe_work_root" || fail migration_probe_root_remove_failed
+}
+
 # Validate every retained generation before mutating any of them. A generation
 # can be left behind only as its root-owned OWNERSHIP.json marker; all runtime
 # payload, namespaces, mounts and sandboxes must already be gone. Removing the
@@ -436,7 +457,7 @@ for child in "$state_root"/*; do
   [[ -e "$child" || -L "$child" ]] || continue
   name=${child##*/}
   case "$name" in
-    .hostlet-runtime-owned|.hostlet-runtime-cleanup-runsc.log|requests|runtime-relays|secret-input|runtime-cgroup-tombstones|runtime-peer-registry|runsc)
+    .hostlet-runtime-owned|.hostlet-runtime-cleanup-runsc.log|.migration-probes|requests|runtime-relays|secret-input|runtime-cgroup-tombstones|runtime-peer-registry|runsc)
       continue
       ;;
   esac
@@ -478,6 +499,7 @@ if [[ "$runsc_root_absent" == true ]]; then
   fi
   remove_verified_cgroup_tombstones
   remove_verified_peer_registry
+  remove_empty_probe_work_root
   exit 0
 fi
 
@@ -541,3 +563,4 @@ rmdir -- "$runsc_root" || fail runsc_root_not_empty
 [[ ! -e "$runsc_root" && ! -L "$runsc_root" ]] || fail runsc_root_retained
 remove_verified_cgroup_tombstones
 remove_verified_peer_registry
+remove_empty_probe_work_root

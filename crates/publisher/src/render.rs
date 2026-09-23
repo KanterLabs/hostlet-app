@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -408,10 +408,11 @@ fn project_html(
             body.push_str("\">Open demo</a></dd>");
         }
         if let Some(time) = deployment.deployed_at {
+            let approved_time = time.to_rfc3339_opts(SecondsFormat::AutoSi, true);
             body.push_str("<dt>Deployed</dt><dd><time datetime=\"");
-            body.push_str(&escape_attr(&time.to_rfc3339()));
+            body.push_str(&escape_attr(&approved_time));
             body.push_str("\">");
-            body.push_str(&escape(&time.to_rfc3339()));
+            body.push_str(&escape(&approved_time));
             body.push_str("</time></dd>");
         }
         if let Some(status) = deployment.status_label.clone().or_else(|| {

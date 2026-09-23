@@ -193,17 +193,16 @@ async function runStaticReleaseDiagnostic(context, m3) {
     const inputPath = join(context.tempDir, "m3-release-static-stage-input.json");
     writeFileSync(inputPath, `${JSON.stringify({ candidate })}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
     const coordinator = join(context.repo, "scripts", "release", "hostlet-release-coordinator.py");
-    const environment = {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
+    const environment = m3.componentEnvironment("runtime", {
       LANG: "C",
       LC_ALL: "C",
       TZ: "UTC",
       PYTHONHASHSEED: "0",
-    };
-    const commandArgs = [coordinator, "stage", "--input-file", inputPath, "--state-root", stateRoot, "--artifact-root", artifactRoot];
+    });
+    const commandArgs = ["stage", "--input-file", inputPath, "--state-root", stateRoot, "--artifact-root", artifactRoot];
     const first = await context.runCommand(
       "M3 static release coordinator stage",
-      "python3",
+      coordinator,
       commandArgs,
       { cwd: context.repo, env: environment, timeoutMs: 30_000, logName: "m3-release-static-coordinator-01.log" },
     );
@@ -218,7 +217,7 @@ async function runStaticReleaseDiagnostic(context, m3) {
 
     const second = await context.runCommand(
       "M3 static release coordinator repeated stage",
-      "python3",
+      coordinator,
       commandArgs,
       { cwd: context.repo, env: environment, timeoutMs: 30_000, logName: "m3-release-static-coordinator-02.log" },
     );

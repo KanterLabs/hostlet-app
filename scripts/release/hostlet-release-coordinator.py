@@ -120,7 +120,7 @@ def extract_static(root, state, artifact):
                     output.flush(); os.fsync(output.fileno())
                 os.chmod(target, mode)
             if observed != total or handle.read(1): die("release_artifact_invalid")
-        owned.write_text(archive_digest + "\n"); os.chmod(owned, 0o600)
+        atomic_bytes(temporary / ".hostlet-release-static-owned", (archive_digest + "\n").encode(), 0o600)
         os.rename(temporary, destination)
         directory=os.open(destination.parent,os.O_RDONLY|os.O_DIRECTORY)
         try: os.fsync(directory)

@@ -34,11 +34,15 @@ if [[ "$kind" == health ]]; then
   [[ "$status" == 200 ]] && { passed=true; reason=runtime_health_passed; }
   assertions=$(jq -cn --argjson passed "$passed" '[{name:"expected_http_response",passed:$passed,observed_sha256:null}]')
 else
-  jq -e '.method=="POST" and (.write_body|type=="object") and (.write_body.name|test("^[A-Za-z0-9._-]{1,128}$")) and (.write_body.client_release|test("^[A-Za-z0-9._-]{1,128}$")) and (.verify_path|type=="string" and startswith("/") and (contains("?")|not) and (contains("#")|not))' "$request" >/dev/null || { echo probe_request_invalid >&2; exit 2; }
+  jq -e '.method=="POST" and (.write_body|type=="object") and (.write_body.name|test("^[A-Za-z0-9._-]{1,79}$")) and (.write_body.client_release|test("^[A-Za-z0-9._-]{1,128}$")) and (.verify_path|type=="string" and startswith("/") and (contains("?")|not) and (contains("#")|not))' "$request" >/dev/null || { echo probe_request_invalid >&2; exit 2; }
   jq -c .write_body "$request" > "$write_body"; verify_path=$(jq -r .verify_path "$request"); name=$(jq -r .write_body.name "$request"); client_release=$(jq -r .write_body.client_release "$request")
   write_status=$(ip netns exec "$gateway" curl --silent --show-error --max-time 5 --request POST --header 'content-type: application/json' --data-binary "@$write_body" --output /dev/null --write-out '%{http_code}' "http://${target}:${port}${path}" || true)
   status=$(ip netns exec "$gateway" curl --silent --show-error --max-time 5 --output "$body" --write-out '%{http_code}' "http://${target}:${port}${verify_path}" || true)
-  visible=false; [[ "$status" == 200 ]] && jq -e --arg name "$name" --arg client "$client_release" '..|objects|select(.name==$name and .client_release==$client)' "$body" >/dev/null 2>&1 && visible=true
+  visible=false
+  if [[ "$status" == 200 ]]; then
+    match_count=$(jq -r --arg name "$name" 'if (.items|type)=="array" then [.items[] | select(type=="object" and .name==$name)] | length else 0 end' "$body" 2>/dev/null || printf '0')
+    [[ "$match_count" == 1 ]] && visible=true
+  fi
   write_ok=false; [[ "$write_status" =~ ^2[0-9][0-9]$ ]] && write_ok=true
   [[ "$write_ok" == true && "$visible" == true ]] && passed=true
   method=POST; observed_path=$verify_path; reason=runtime_current_data_failed

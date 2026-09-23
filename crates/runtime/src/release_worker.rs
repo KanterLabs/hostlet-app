@@ -538,14 +538,11 @@ fn execute_probe(
         serde_json::Value::Null,
     );
     if kind != "health" {
-        let release_prefix = request
-            .get("release_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .chars()
-            .take(8)
-            .collect::<String>();
-        object.insert("write_body".to_owned(),serde_json::json!({"name":format!("release-probe-{release_prefix}"),"client_release":kind}));
+        let marker_name = format!("release-probe-{}", Uuid::new_v4());
+        object.insert(
+            "write_body".to_owned(),
+            serde_json::json!({"name":marker_name,"client_release":kind}),
+        );
         object.insert(
             "verify_path".to_owned(),
             serde_json::Value::String("/api/items".to_owned()),

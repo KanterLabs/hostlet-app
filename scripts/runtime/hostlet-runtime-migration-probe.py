@@ -24,6 +24,7 @@ PROBE_SCHEMA = "hostlet.runtime.probe-receipt/v2"
 APPLICATION_SCHEMA = "hostlet.runtime.application-probe-receipt/v1"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 SAFE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
+MARKER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,78}")
 CHECK_KINDS = {
     "current_data",
     "cached_old_frontend_candidate_api",
@@ -223,14 +224,11 @@ def remove_private_tree(path, secret_names=()):
         fail("migration_probe_credential_cleanup_failed")
 
 
-def recursive_match(value, name, client):
-    if isinstance(value, dict):
-        if value.get("name") == name and value.get("client_release") == client:
-            return True
-        return any(recursive_match(item, name, client) for item in value.values())
-    if isinstance(value, list):
-        return any(recursive_match(item, name, client) for item in value)
-    return False
+def unique_marker_match(value, name):
+    if not isinstance(value, dict) or not isinstance(value.get("items"), list):
+        return False
+    return sum(1 for item in value["items"]
+               if isinstance(item, dict) and item.get("name") == name) == 1
 
 
 def main():
@@ -396,19 +394,27 @@ def main():
     secret_root = state_root / "secret-input" / request["probe_execution_id"] / str(request["release_fence"])
     prepared = attached = started = False
     cleanup_digest = executor_digest = application_digest = None
+    invoke_sequence = 0
 
-    def invoke(operation):
+    def invoke(operation, *, timeout=90, allow_failed=False):
+        nonlocal invoke_sequence
+        invoke_sequence += 1
         runtime_request = dict(runtime_request_base)
         runtime_request["operation"] = operation
         runtime_request["observed_at_unix_ms"] = int(time.time() * 1000)
-        path = work_root / f"executor-{operation}.json"
+        path = work_root / f"executor-{operation}-{invoke_sequence:04d}.json"
         data = canonical(runtime_request)
         write_private(path, data)
-        completed = subprocess.run([str(runtime_binary), "owned-fixture", "--request-file", str(path),
-                                    "--launcher", str(launcher), "--state-root", str(state_root),
-                                    "--artifact-root", str(artifact_root), "--runsc", str(runsc)],
-                                   capture_output=True, timeout=90,
-                                   env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, check=False)
+        try:
+            completed = subprocess.run([str(runtime_binary), "owned-fixture", "--request-file", str(path),
+                                        "--launcher", str(launcher), "--state-root", str(state_root),
+                                        "--artifact-root", str(artifact_root), "--runsc", str(runsc)],
+                                       capture_output=True, timeout=timeout,
+                                       env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, check=False)
+        except subprocess.TimeoutExpired:
+            fail(f"migration_probe_executor_{operation}_timeout")
+        except OSError:
+            fail(f"migration_probe_executor_{operation}_unavailable")
         receipt = None
         for line in reversed(completed.stdout.splitlines()):
             try:
@@ -418,8 +424,17 @@ def main():
                 continue
         if not isinstance(receipt, dict):
             fail(f"migration_probe_executor_{operation}_failed")
+        if (receipt.get("operation") != operation or
+                receipt.get("allocation_id") != request["probe_execution_id"] or
+                receipt.get("generation") != 1 or
+                receipt.get("fence") != request["release_fence"]):
+            fail("migration_probe_executor_identity_mismatch")
         digest = store_cas(evidence_root, receipt)
-        if completed.returncode != 0 or receipt.get("result") != "passed":
+        if completed.returncode != 0:
+            fail(f"migration_probe_executor_{operation}_failed")
+        if receipt.get("result") != "passed":
+            if allow_failed and operation == "inspect":
+                return receipt, digest
             fail(f"migration_probe_executor_{operation}_failed")
         return receipt, digest
 
@@ -450,10 +465,32 @@ def main():
         attached = True
         _, _ = invoke("start")
         started = True
-        health_receipt, executor_digest = invoke("inspect")
-        if not health_receipt.get("health", {}).get("passing"):
-            fail("migration_probe_health_failed")
-        marker_name = "migration-probe-" + request["probe_execution_id"][:8]
+        health_deadline = time.monotonic() + 5.0
+        while True:
+            remaining = health_deadline - time.monotonic()
+            if remaining <= 0:
+                fail("migration_probe_health_timeout")
+            try:
+                health_receipt, candidate_executor_digest = invoke(
+                    "inspect", timeout=max(0.001, remaining), allow_failed=True)
+            except ProbeFailure as error:
+                if str(error) == "migration_probe_executor_inspect_timeout":
+                    fail("migration_probe_health_timeout")
+                raise
+            observed = time.monotonic()
+            if observed > health_deadline:
+                fail("migration_probe_health_timeout")
+            if (health_receipt.get("status") != "running" or
+                    health_receipt.get("runsc_status") != "running"):
+                fail("migration_probe_health_stopped")
+            if (health_receipt.get("result") == "passed" and
+                    health_receipt.get("health", {}).get("passing") is True):
+                executor_digest = candidate_executor_digest
+                break
+            time.sleep(min(0.1, max(0, health_deadline - time.monotonic())))
+        marker_name = "migration-probe-" + request["probe_execution_id"]
+        if not MARKER_NAME.fullmatch(marker_name):
+            fail("migration_probe_marker_invalid")
         write_value = {"name": marker_name, "client_release": request["check_kind"]}
         gateway_namespace = f"hostlet-gateway-{request['probe_execution_id']}-1"
         url = f"http://{application4}:{executor['application_port']}/api/items"
@@ -471,7 +508,7 @@ def main():
         except (ValueError, TypeError):
             fail("migration_probe_application_read_failed")
         try:
-            visible = recursive_match(json.loads(get_output), marker_name, request["check_kind"])
+            visible = unique_marker_match(json.loads(get_output), marker_name)
         except (UnicodeDecodeError, json.JSONDecodeError):
             visible = False
         post_status = post.decode("ascii", "strict")

@@ -67,7 +67,7 @@ export function startReleaseWorker(m3, {
     if (error.code !== "EEXIST" || readFileSync(tokenFile, "utf8").trim() !== tokenValue) throw error;
   }
   chmodSync(tokenFile, 0o600);
-  const privileged = process.getuid?.() === 0 ? [] : ["--privileged-command", "/usr/bin/sudo"];
+  const privileged = process.getuid?.() === 0 ? [] : ["--privileged-command", realpathSync("/usr/bin/sudo")];
   const child = m3.context.spawnManaged(
     "M3 coordinated release worker",
     binary,

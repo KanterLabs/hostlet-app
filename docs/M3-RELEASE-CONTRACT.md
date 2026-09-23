@@ -136,6 +136,37 @@ objects and the complete fenced identity before accepting the application
 evidence. Summary booleans and reuse of a live allocation as the isolated
 execution identity are rejected.
 
+### Owned-fixture application probe adapter
+
+The hosted and isolated adapters keep `check_kind` as request metadata in the
+`client_release` field sent with each application write. They do not require
+that metadata to be echoed by the application. The owned fullstack v1 and v2
+APIs return no response `client_release` field, so application compatibility is
+proved by a fresh marker instead: hosted probes write
+`release-probe-<UUID>`, while isolated probes write
+`migration-probe-<probe_execution_id>`. Each marker is generated or bound for
+that invocation, uses the full UUID identity, and is below the 80-character API
+limit.
+
+For a non-health probe, the write must return a 2xx status and the following
+read must return exactly status 200. The response must contain a top-level
+`items` array with exactly one object whose `name` equals the fresh marker.
+The receipt records these HTTP and named assertion results; the fenced release,
+allocation, database, migration and executor identities remain independently
+required. This adapter proves application write/read persistence through the
+owned fixture API, not a response schema field that the fixture does not
+implement.
+
+After an isolated executor starts, the migration adapter polls inspection with
+a monotonic five-second deadline. Every executor request has a unique private
+request filename because the runtime helper creates request files exclusively;
+each inspection subprocess receives only the remaining deadline. A result
+arriving after the deadline is rejected, and a stopped or non-running runtime
+is rejected immediately. Every inspection receipt is stored in evidence CAS,
+but only the final inspection that is `passed`, running and health-passing is
+referenced as the executor receipt. Prepare, start, stop and cleanup retain
+their normal 90-second subprocess limit.
+
 Completion is:
 
 ```json

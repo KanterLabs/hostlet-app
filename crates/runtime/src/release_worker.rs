@@ -9,7 +9,7 @@
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
@@ -109,6 +109,37 @@ fn reconcile_once<W: Write, E: Write>(
         return 0;
     }
     if response.status() != reqwest::StatusCode::OK {
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let code = if response.take(2049).read_to_end(&mut body).is_ok() && body.len() <= 2048 {
+            serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(
+                    |value| match value.pointer("/error/code").and_then(|v| v.as_str()) {
+                        Some("authentication_required") => Some("authentication_required"),
+                        Some("database_unavailable") => Some("database_unavailable"),
+                        Some("foundation_unavailable") => Some("foundation_unavailable"),
+                        Some("internal_error") => Some("internal_error"),
+                        Some("not_found") => Some("not_found"),
+                        Some("release_reconciliation_ineligible") => {
+                            Some("release_reconciliation_ineligible")
+                        }
+                        Some("rollback_target_ineligible") => Some("rollback_target_ineligible"),
+                        Some("release_runtime_ineligible") => Some("release_runtime_ineligible"),
+                        Some("release_artifact_drift") => Some("release_artifact_drift"),
+                        Some("release_runtime_artifact_mismatch") => {
+                            Some("release_runtime_artifact_mismatch")
+                        }
+                        Some("release_route_changed") => Some("release_route_changed"),
+                        Some("release_secret_ineligible") => Some("release_secret_ineligible"),
+                        _ => None,
+                    },
+                )
+                .unwrap_or("unknown")
+        } else {
+            "unknown"
+        };
+        let _ = writeln!(error, "release_lease_rejection status={status} code={code}");
         return fail(error, "release_lease_rejected", 1);
     }
     let lease: serde_json::Value = match response.json() {
@@ -174,7 +205,8 @@ fn reconcile_once<W: Write, E: Write>(
         (None, None)
     };
     let probes = match lease.get("required_probes").and_then(|v| v.as_array()) {
-        Some(value) if !value.is_empty() && value.len() <= 16 => value,
+        // Four versions require health + 4 current-data + 4 * 3 ordered pairs.
+        Some(value) if !value.is_empty() && value.len() <= 17 => value,
         Some(value) if value.is_empty() && phase == "prepare_trial" => value,
         _ => {
             let _ = complete(

@@ -30,10 +30,14 @@ async function currentPresentation(m3) {
     sourceReleaseId: release.id, managedDemoUrl: release.managed_demo_url, sourceCommit: release.source_commit });
 }
 
-export async function runM3Journey(context, { developmentBuildsOnly = false } = {}) {
+export async function runM3Journey(context, { developmentBuildsOnly = false, downstreamDevelopment = false } = {}) {
+  if (downstreamDevelopment && context.state.configuration.scenarios.includes("m3-journey")) {
+    throw new Error("the full M3 journey cannot use downstream development diagnostic mode");
+  }
   if (developmentBuildsOnly && context.state.configuration.scenarios.includes("m3-journey")) {
     throw new Error("the full M3 journey cannot omit build acceptance cases");
   }
+  if (downstreamDevelopment) developmentBuildsOnly = true;
   context.registerFixture("M3 full journey compositor", "e2e/scenarios/m3-journey.mjs");
   registerM3BuildFixtures(context);
   registerM3DataFixtures(context);
@@ -64,7 +68,10 @@ export async function runM3Journey(context, { developmentBuildsOnly = false } = 
       },
       tenantPeers: m3.state.tenantPeers,
     };
-    await phase("actual runtime isolation and continuity", () => runM3RuntimeScenarios(context, m3));
+    await phase(
+      downstreamDevelopment ? "actual runtime capability evaluation for downstream diagnostic" : "actual runtime isolation and continuity",
+      () => runM3RuntimeScenarios(context, m3, { releaseDiagnostic: downstreamDevelopment }),
+    );
     await phase("application database access", () => data.verifyProvisioning());
 
     const tls = await prepareM3Tls(context);

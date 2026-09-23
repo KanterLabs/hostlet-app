@@ -14,6 +14,9 @@ const DATABASE_WORKER_KINDS_WITHOUT_LIVE_APPLY = Object.freeze([
   "provision", "backup_daily", "backup_pre_migration", "export", "restore_drill",
   "observe_storage", "migration_trial", "archive_expire",
 ]);
+const RELEASE_STATES = new Set(["staged", "healthy", "failed", "retired"]);
+const RECONCILIATION_STATES = new Set(["queued", "running", "awaiting_trial", "awaiting_live_apply", "prepared", "retriable", "succeeded", "failed"]);
+const ATTEMPT_STATES = new Set(["running", "succeeded", "failed", "retriable", "expired"]);
 
 function validReleaseDigest(value) {
   return typeof value === "string" && RELEASE_DIGEST.test(value);
@@ -286,6 +289,99 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
   const live = new Map();
   const releaseRuntimes = new Map();
   const migrationFences = new Map();
+  let failureEvidenceSequence = 0;
+
+  function evidenceUuid(value) {
+    return RELEASE_UUID.test(value ?? "") ? value : null;
+  }
+  function evidenceState(value, allowed) {
+    return allowed.has(value) ? value : null;
+  }
+  function evidenceCode(value) {
+    return typeof value === "string" && /^[a-z0-9_]{1,96}$/.test(value) ? value : null;
+  }
+  function evidenceInteger(value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+    return Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : null;
+  }
+  function workerProcessEvidence() {
+    const child = worker?.process?.child;
+    if (!child) return { present: false, running: false, exit_code: null, signal: null };
+    const exitCode = Number.isSafeInteger(child.exitCode) ? child.exitCode : null;
+    const signal = typeof child.signalCode === "string" ? child.signalCode.slice(0, 32) : null;
+    return { present: true, running: exitCode === null && signal === null, exit_code: exitCode, signal };
+  }
+  async function writeReleaseFailureEvidence({ projectId, releaseId, reconciliationId, waitKind }) {
+    const artifactSequence = ++failureEvidenceSequence;
+    const artifactReleaseId = evidenceUuid(releaseId);
+    const artifactReconciliationId = evidenceUuid(reconciliationId);
+    const evidence = {
+      schema: "hostlet.release-failure-evidence/v1",
+      wait_kind: waitKind,
+      release: { id: artifactReleaseId, state: null, failure_code: null },
+      reconciliation: { id: artifactReconciliationId, state: null, terminal_code: null,
+        attempt_count: null, current_attempt_id: null, current_fence: null },
+      attempts: { count: 0, entries: [] },
+      worker_process: workerProcessEvidence(),
+      current_route: { release_id: null, generation: null },
+    };
+    try {
+      if (evidenceUuid(projectId) && artifactReleaseId && artifactReconciliationId) {
+        const sqlUuid = (value) => `'${value}'::uuid`;
+        const observed = await m3.postgres.psqlJson(`m3-release-failure-evidence-${artifactSequence}`, `SELECT json_build_object(
+          'release',(SELECT json_build_object('id',release.id::text,'state',release.state,'failure_code',release.failure_code)
+            FROM application_releases release WHERE release.id=${sqlUuid(releaseId)} AND release.project_id=${sqlUuid(projectId)}),
+          'reconciliation',(SELECT json_build_object('id',reconciliation.id::text,'state',reconciliation.state,
+            'terminal_code',reconciliation.terminal_code,'attempt_count',reconciliation.attempt_count,
+            'current_attempt_id',reconciliation.current_attempt_id::text,'current_fence',reconciliation.current_fence)
+            FROM release_reconciliations reconciliation
+            WHERE reconciliation.id=${sqlUuid(reconciliationId)} AND reconciliation.project_id=${sqlUuid(projectId)}),
+          'attempts',COALESCE((SELECT json_agg(json_build_object('id',attempt.id::text,'attempt_number',attempt.attempt_number,
+            'state',attempt.state,'fence',attempt.fence,'terminal_code',attempt.terminal_code)
+            ORDER BY attempt.attempt_number,attempt.id) FROM (
+              SELECT id,attempt_number,state,fence,terminal_code FROM release_reconciliation_attempts
+              WHERE reconciliation_id=${sqlUuid(reconciliationId)} AND project_id=${sqlUuid(projectId)}
+              ORDER BY attempt_number,id LIMIT 6
+            ) attempt),'[]'::json),
+          'attempt_count',(SELECT count(*)::int FROM release_reconciliation_attempts
+            WHERE reconciliation_id=${sqlUuid(reconciliationId)} AND project_id=${sqlUuid(projectId)}),
+          'current_route',(SELECT json_build_object('release_id',route.release_id::text,'generation',route.generation)
+            FROM project_release_routes route WHERE route.project_id=${sqlUuid(projectId)}));`);
+        const release = observed?.release;
+        const reconciliation = observed?.reconciliation;
+        evidence.release.state = evidenceState(release?.state, RELEASE_STATES);
+        evidence.release.failure_code = evidenceCode(release?.failure_code);
+        evidence.reconciliation.state = evidenceState(reconciliation?.state, RECONCILIATION_STATES);
+        evidence.reconciliation.terminal_code = evidenceCode(reconciliation?.terminal_code);
+        evidence.reconciliation.attempt_count = evidenceInteger(reconciliation?.attempt_count, { minimum: 0, maximum: 6 });
+        evidence.reconciliation.current_attempt_id = evidenceUuid(reconciliation?.current_attempt_id);
+        evidence.reconciliation.current_fence = evidenceInteger(reconciliation?.current_fence);
+        const attempts = Array.isArray(observed?.attempts) ? observed.attempts.slice(0, 6) : [];
+        evidence.attempts = {
+          count: evidenceInteger(observed?.attempt_count, { minimum: 0, maximum: 6 }) ?? attempts.length,
+          entries: attempts.map((attempt) => ({
+            id: evidenceUuid(attempt?.id), attempt_number: evidenceInteger(attempt?.attempt_number, { minimum: 1, maximum: 6 }),
+            state: evidenceState(attempt?.state, ATTEMPT_STATES), fence: evidenceInteger(attempt?.fence, { minimum: 1 }),
+            terminal_code: evidenceCode(attempt?.terminal_code),
+          })),
+        };
+        evidence.current_route = {
+          release_id: evidenceUuid(observed?.current_route?.release_id),
+          generation: evidenceInteger(observed?.current_route?.generation, { minimum: 1 }),
+        };
+      }
+    } catch {
+      // Preserve the original wait failure. The bounded skeleton remains safe if evidence reads fail.
+    }
+    evidence.worker_process = workerProcessEvidence();
+    try {
+      const releasePart = artifactReleaseId ?? "unknown";
+      const path = join(context.artifactDir, `m3-release-failure-${String(artifactSequence).padStart(4, "0")}-${releasePart}.json`);
+      writeFileSync(path, `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      chmodSync(path, 0o600);
+    } catch {
+      // Preserve the original wait failure if the artifact itself cannot be written.
+    }
+  }
 
   function nextReleaseNetworkIndex() {
     const preferred = releaseNetworkFirst + (releaseLaunchSequence % releaseNetworkSpan);
@@ -329,69 +425,80 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     if (response.status !== 200) throw new Error(`release history returned HTTP ${response.status}`);
     return response.payload;
   }
-  async function awaitRelease(projectId, releaseId, expected) {
-    return eventually(`release ${releaseId}`, async () => {
-      const value = await history(projectId);
-      const release = value.releases.find(({ id }) => id === releaseId);
-      if (!release) return null;
-      if (expected.includes(release.state)) return { release, history: value };
-      if (["failed", "healthy", "retired"].includes(release.state)) throw new Error(`release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
-      return null;
-    }, { timeoutMs: options.promotionTimeoutMs ?? 120_000 });
+  async function awaitRelease(projectId, releaseId, expected, reconciliationId = null) {
+    try {
+      return await eventually(`release ${releaseId}`, async () => {
+        const value = await history(projectId);
+        const release = value.releases.find(({ id }) => id === releaseId);
+        if (!release) return null;
+        if (expected.includes(release.state)) return { release, history: value };
+        if (["failed", "healthy", "retired"].includes(release.state)) throw new Error(`release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        return null;
+      }, { timeoutMs: options.promotionTimeoutMs ?? 120_000 });
+    } catch (error) {
+      await writeReleaseFailureEvidence({ projectId, releaseId, reconciliationId, waitKind: "await_release" });
+      throw error;
+    }
   }
   async function awaitReleaseAndDatabase(staged, expected) {
-    if (!staged.migration.id) return awaitRelease(staged.projectId, staged.releaseId, expected);
-    return eventually(`migration release ${staged.releaseId}`, async () => {
-      if (!migrationFences.has(staged.migration.id)) {
-        // Keep the live apply queued while the trial, backup, and any other
-        // database work drains. This makes the stale-lease exercise a
-        // deterministic handoff instead of a race with the normal worker.
-        await dataStage.drainWorker(`release-pre-live-migration-${staged.migration.id}`, {
-          kinds: DATABASE_WORKER_KINDS_WITHOUT_LIVE_APPLY,
-        });
-        const queued = await m3.postgres.psqlJson("m3-release-live-migration-queued", `SELECT COALESCE((SELECT json_build_object(
-          'id',id::text,'state',state) FROM tenant_database_operations
-          WHERE kind='migration_live_apply' AND operation_key='${staged.migration.id}' AND state='queued'),'null'::json);`);
-        if (queued?.id) {
-          const stale = await m3.roleInternal("database", "/internal/v1/tenant-database-operations/lease", {
-            method: "POST", body: { worker_id: "m3-stale-migration-worker", kinds: ["migration_live_apply"] },
-          });
-          if (stale.status !== 200 || stale.payload.operation.id !== queued.id) throw new Error("could not acquire exact stale live-migration lease");
-          const expiry = Date.parse(stale.payload.attempt.lease_expires_at);
-          if (!Number.isFinite(expiry) || expiry <= Date.now()) throw new Error("stale live-migration lease omitted a future real expiry");
-          await context.delay(Math.max(0, expiry - Date.now()) + 250);
-          migrationFences.set(staged.migration.id, { operationId: queued.id, attempt: stale.payload.attempt });
-        }
-      }
-      // Once the exact stale attempt has expired, let the real worker process
-      // the queued live apply before checking release history. The release
-      // cannot become terminal until this operation completes.
-      if (migrationFences.has(staged.migration.id)) {
-        await dataStage.drainWorker(`release-live-migration-${staged.migration.id}`);
-      }
-      const value = await history(staged.projectId);
-      const release = value.releases.find(({ id }) => id === staged.releaseId);
-      if (!release) return null;
-      if (expected.includes(release.state)) {
+    if (!staged.migration.id) return awaitRelease(staged.projectId, staged.releaseId, expected, staged.reconciliationId);
+    try {
+      return await eventually(`migration release ${staged.releaseId}`, async () => {
         if (!migrationFences.has(staged.migration.id)) {
-          throw new Error("migration live apply reached a terminal release state before its exact stale lease was fenced");
-        }
-        const stale = migrationFences.get(staged.migration.id);
-        if (stale && stale.rejected !== true) {
-          const completion = await m3.roleInternal("database", `/internal/v1/tenant-database-operations/${stale.operationId}/complete`, {
-            method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
-              fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
+          // Keep the live apply queued while the trial, backup, and any other
+          // database work drains. This makes the stale-lease exercise a
+          // deterministic handoff instead of a race with the normal worker.
+          await dataStage.drainWorker(`release-pre-live-migration-${staged.migration.id}`, {
+            kinds: DATABASE_WORKER_KINDS_WITHOUT_LIVE_APPLY,
           });
-          if (completion.status !== 409) throw new Error("stale live-migration completion was not fenced");
-          stale.rejected = true;
+          const queued = await m3.postgres.psqlJson("m3-release-live-migration-queued", `SELECT COALESCE((SELECT json_build_object(
+            'id',id::text,'state',state) FROM tenant_database_operations
+            WHERE kind='migration_live_apply' AND operation_key='${staged.migration.id}' AND state='queued'),'null'::json);`);
+          if (queued?.id) {
+            const stale = await m3.roleInternal("database", "/internal/v1/tenant-database-operations/lease", {
+              method: "POST", body: { worker_id: "m3-stale-migration-worker", kinds: ["migration_live_apply"] },
+            });
+            if (stale.status !== 200 || stale.payload.operation.id !== queued.id) throw new Error("could not acquire exact stale live-migration lease");
+            const expiry = Date.parse(stale.payload.attempt.lease_expires_at);
+            if (!Number.isFinite(expiry) || expiry <= Date.now()) throw new Error("stale live-migration lease omitted a future real expiry");
+            await context.delay(Math.max(0, expiry - Date.now()) + 250);
+            migrationFences.set(staged.migration.id, { operationId: queued.id, attempt: stale.payload.attempt });
+          }
         }
-        return { release, history: value };
-      }
-      if (["failed", "healthy", "retired"].includes(release.state)) {
-        throw new Error(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
-      }
-      return null;
-    }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });
+        // Once the exact stale attempt has expired, let the real worker process
+        // the queued live apply before checking release history. The release
+        // cannot become terminal until this operation completes.
+        if (migrationFences.has(staged.migration.id)) {
+          await dataStage.drainWorker(`release-live-migration-${staged.migration.id}`);
+        }
+        const value = await history(staged.projectId);
+        const release = value.releases.find(({ id }) => id === staged.releaseId);
+        if (!release) return null;
+        if (expected.includes(release.state)) {
+          if (!migrationFences.has(staged.migration.id)) {
+            throw new Error("migration live apply reached a terminal release state before its exact stale lease was fenced");
+          }
+          const stale = migrationFences.get(staged.migration.id);
+          if (stale && stale.rejected !== true) {
+            const completion = await m3.roleInternal("database", `/internal/v1/tenant-database-operations/${stale.operationId}/complete`, {
+              method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
+                fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
+            });
+            if (completion.status !== 409) throw new Error("stale live-migration completion was not fenced");
+            stale.rejected = true;
+          }
+          return { release, history: value };
+        }
+        if (["failed", "healthy", "retired"].includes(release.state)) {
+          throw new Error(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        }
+        return null;
+      }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });
+    } catch (error) {
+      await writeReleaseFailureEvidence({ projectId: staged.projectId, releaseId: staged.releaseId,
+        reconciliationId: staged.reconciliationId, waitKind: "await_release_and_database" });
+      throw error;
+    }
   }
   async function awaitFailedMigrationRelease(staged) {
     if (!RELEASE_UUID.test(staged.migration?.id ?? "")) throw new Error("failed migration release requires an exact migration identity");
@@ -962,7 +1069,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         worker = startReleaseWorker(m3, { artifactRoot: join(m3.policyClock.stateDir, "private-cas"), runtimeRoot: runtime.stateRoot });
         const terminal = key === "incompatible_migration"
           ? await awaitFailedMigrationRelease(staged)
-          : await awaitRelease(staged.projectId, staged.releaseId, ["failed"]);
+          : await awaitRelease(staged.projectId, staged.releaseId, ["failed"], staged.reconciliationId);
         const failureEvidence = await failedReleaseEvidence(staged);
         const migrationFailureEvidence = key === "incompatible_migration"
           ? await failedMigrationEvidence(staged) : null;
@@ -1163,7 +1270,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     const expiry = Date.parse(stale.payload.attempt.lease_expires_at);
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiry - Date.now()) + 250));
     worker = startReleaseWorker(m3, { artifactRoot: join(m3.policyClock.stateDir, "private-cas"), runtimeRoot: runtime.stateRoot });
-    const winner = await awaitRelease(projectId, staged.releaseId, ["healthy"]);
+    const winner = await awaitRelease(projectId, staged.releaseId, ["healthy"], staged.reconciliationId);
     const staleCompletion = await m3.roleInternal("runtime", `/internal/v1/release-reconciliations/${staged.reconciliationId}/complete`, {
       method: "POST", body: { worker_id: "m3-stale-release-worker", attempt_id: stale.payload.attempt.id,
         fence: stale.payload.attempt.fence, outcome: { state: "failed", code: "stale_probe", probe_receipt_digests: [], migration_apply_receipt_digest: null } },
@@ -1199,7 +1306,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       });
       let winner;
       try {
-        winner = await awaitRelease(projectId, staged.releaseId, ["healthy"]);
+        winner = await awaitRelease(projectId, staged.releaseId, ["healthy"], staged.reconciliationId);
       } finally {
         await context.stopManaged(workerB.process, "release worker concurrent promotion winner complete");
       }

@@ -73,6 +73,9 @@ function requireRuntimeInputs(m3) {
 }
 
 export async function runM3RuntimeScenarios(context, m3, options = {}) {
+  if (options.releaseDiagnostic === true && context.state.configuration.scenarios.includes("m3-journey")) {
+    throw new Error("the full M3 journey cannot omit runtime acceptance checks");
+  }
   context.registerFixture("M3 runtime E2E scenario", "e2e/scenarios/m3-runtime.mjs");
   context.registerFixture("M3 runtime E2E support", "e2e/support/m3-runtime.mjs");
   context.registerFixture("M3 policy probe resource fixture", "e2e/fixtures/m3/policy-probes/server.mjs");
@@ -89,10 +92,30 @@ export async function runM3RuntimeScenarios(context, m3, options = {}) {
   await runtime.initialize();
   m3.state.runtime = runtime;
 
+  const installRuntimeIntegrations = () => {
+    m3.state.runtimeDatabaseProbe = runtime.runtimeDatabaseProbe;
+    m3.state.runtimeReadOnlyDatabaseProbe = runtime.runtimeReadOnlyDatabaseProbe;
+    m3.state.pauseRuntimeDatabasePeer = runtime.pauseDatabasePeer;
+    m3.state.evaluateRuntimeRelease = runtime.evaluateRelease;
+    m3.state.launchProbeAgainstDatabase = runtime.launchProbeAgainstDatabase;
+  };
+
   const raw = await runtime.exerciseRuntimeEvaluation({ buildOutputs: runtimeInputs.buildOutputs, tenantPeers: runtimeInputs.tenantPeers, nodeBaseRoots: runtimeInputs.nodeBaseRoots });
   const observed = runtime.finalizeObservedEvaluation(raw);
   const evaluation = await runtime.registerEvaluation(observed);
   const performanceAssessment = requirePerformanceAssessment(observed, evaluation);
+  if (options.releaseDiagnostic === true) {
+    installRuntimeIntegrations();
+    writeFileSync(join(context.artifactDir, "m3-runtime-release-diagnostic.json"), `${JSON.stringify({
+      schema: "hostlet.m3-runtime-release-diagnostic/v1",
+      diagnostic: true,
+      runsc_sha256: RUNSC_SHA256,
+      evaluation,
+      observations: observed,
+    }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    m3.state.runtimeEvidence = Object.freeze({ evaluation, observations: observed, diagnostic: true });
+    return m3.state.runtimeEvidence;
+  }
   const policyBuildRaw = raw.buildOutputs instanceof Map ? raw.buildOutputs.get("policy_probes") : raw.buildOutputs.policy_probes;
   const policyBuild = Array.isArray(policyBuildRaw) ? policyBuildRaw.find((value) => value.kind === "application") : policyBuildRaw;
   const node22BuildRaw = raw.buildOutputs instanceof Map ? raw.buildOutputs.get("node22_api") : raw.buildOutputs.node22_api;
@@ -247,11 +270,7 @@ export async function runM3RuntimeScenarios(context, m3, options = {}) {
   };
   writeFileSync(join(context.artifactDir, "m3-runtime-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   m3.state.runtimeEvidence = Object.freeze({ evaluation, allocations, evidence });
-  m3.state.runtimeDatabaseProbe = runtime.runtimeDatabaseProbe;
-  m3.state.runtimeReadOnlyDatabaseProbe = runtime.runtimeReadOnlyDatabaseProbe;
-  m3.state.pauseRuntimeDatabasePeer = runtime.pauseDatabasePeer;
-  m3.state.evaluateRuntimeRelease = runtime.evaluateRelease;
-  m3.state.launchProbeAgainstDatabase = runtime.launchProbeAgainstDatabase;
+  installRuntimeIntegrations();
   return m3.state.runtimeEvidence;
 }
 

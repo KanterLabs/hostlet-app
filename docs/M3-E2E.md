@@ -330,6 +330,10 @@ node e2e/run.mjs --milestone M3-journey-development --task HOST-233 \
   --scenario-module e2e/scenarios/m3-journey-development.mjs \
   --operation-timeout 3600000 --run-timeout 7200000
 
+node e2e/run.mjs --milestone M3-downstream-development --task HOST-233 \
+  --scenario-module e2e/scenarios/m3-downstream-development.mjs \
+  --operation-timeout 3600000 --run-timeout 7200000
+
 node e2e/run.mjs --milestone M3-data-development --task HOST-233 \
   --scenario-module e2e/scenarios/m3-data-development.mjs \
   --operation-timeout 3600000 --run-timeout 7200000
@@ -358,6 +362,17 @@ The journey diagnostic uses the existing short real-build setup and then runs
 runtime, release, approval, publication and data recovery stages. It omits build
 retry/failure acceptance, including the real ten-minute timeout, and cannot
 replace either full clean run.
+
+The downstream diagnostic uses the same short real-build setup, a real control-
+registered runtime evaluation, and the actual tenant database allocation. It
+omits only BUILD-03/04 and the post-registration RUNTIME-01..05 assertion and
+enforcement/continuity/negative matrix. It still runs application database
+verification, the complete coordinated release scenario, migration
+compatibility, owner approval, independent publication, export/restore, daily
+backup, storage allowance, and stopped-retained-rollback phases. Its
+`m3-runtime-release-diagnostic.json` artifact retains the finalized runtime
+observations and the control evaluation receipt; it is diagnostic evidence and
+cannot replace the full runtime gate or either clean M3 run.
 
 ### Static release-coordinator diagnostic
 

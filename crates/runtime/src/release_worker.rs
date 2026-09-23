@@ -231,7 +231,15 @@ fn reconcile_once<W: Write, E: Write>(
         if renew(client, options, token, &identity).is_err() {
             return fail(error, "release_lease_lost", 1);
         }
-        match execute_probe(probe_request, &lease, options, client, token, &identity) {
+        match execute_probe(
+            probe_request,
+            &lease,
+            options,
+            client,
+            token,
+            &identity,
+            error,
+        ) {
             Ok((digest, passed)) => {
                 receipt_digests.push(digest);
                 if !passed {
@@ -507,11 +515,12 @@ fn execute_probe(
     client: &reqwest::blocking::Client,
     token: &str,
     identity: &LeaseIdentity,
+    error: &mut dyn Write,
 ) -> Result<(String, bool), &'static str> {
     if request.get("schema").and_then(|value| value.as_str())
         == Some("hostlet.runtime.migration-probe-request/v1")
     {
-        return execute_migration_probe(request, options, client, token, identity);
+        return execute_migration_probe(request, options, client, token, identity, error);
     }
     if request
         .get("schema")
@@ -625,6 +634,7 @@ fn execute_migration_probe(
     client: &reqwest::blocking::Client,
     token: &str,
     identity: &LeaseIdentity,
+    error: &mut dyn Write,
 ) -> Result<(String, bool), &'static str> {
     let execution_id = json_uuid(request, "/probe_execution_id")?;
     let release_id = json_uuid(request, "/release_id")?;
@@ -651,10 +661,47 @@ fn execute_migration_probe(
         }))
         .send()
         .map_err(|_| "release_probe_credential_unavailable")?;
-    if response.status() != reqwest::StatusCode::OK
-        || response
-            .content_length()
-            .is_some_and(|length| length > 64 * 1024)
+    if response.status() != reqwest::StatusCode::OK {
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let code = if response.take(2049).read_to_end(&mut body).is_ok() && body.len() <= 2048 {
+            serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(
+                    |value| match value.pointer("/error/code").and_then(|v| v.as_str()) {
+                        Some("authentication_required") => Some("authentication_required"),
+                        Some("database_unavailable") => Some("database_unavailable"),
+                        Some("foundation_unavailable") => Some("foundation_unavailable"),
+                        Some("internal_error") => Some("internal_error"),
+                        Some("not_found") => Some("not_found"),
+                        Some("release_probe_target_invalid") => {
+                            Some("release_probe_target_invalid")
+                        }
+                        Some("release_reconciliation_fenced") => {
+                            Some("release_reconciliation_fenced")
+                        }
+                        Some("migration_trial_target_missing") => {
+                            Some("migration_trial_target_missing")
+                        }
+                        Some("migration_trial_target_mismatch") => {
+                            Some("migration_trial_target_mismatch")
+                        }
+                        _ => None,
+                    },
+                )
+                .unwrap_or("unknown")
+        } else {
+            "unknown"
+        };
+        let _ = writeln!(
+            error,
+            "release_probe_credential_rejection status={status} code={code}"
+        );
+        return Err("release_probe_credential_rejected");
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > 64 * 1024)
     {
         return Err("release_probe_credential_rejected");
     }

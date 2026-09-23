@@ -539,8 +539,8 @@ async fn resolve_probe_credential(
     if !allowed.contains(&request.release_id) {
         return Err(ApiError::not_found());
     }
-    let target: Option<(Uuid, Uuid, Uuid, Value)> = sqlx::query_as(
-        "SELECT release.tenant_database_id,release.database_generation,migration.id,migration.compatibility_evidence \
+    let target: Option<(Uuid, Uuid, Uuid, String, Value)> = sqlx::query_as(
+        "SELECT release.tenant_database_id,release.database_generation,migration.id,migration.state,migration.compatibility_evidence \
          FROM application_releases release CROSS JOIN application_releases candidate \
          JOIN tenant_database_migrations migration ON migration.id=candidate.migration_id \
          WHERE candidate.id=$1 AND release.id=$2 AND release.account_id=$3 AND release.project_id=$4 \
@@ -552,7 +552,8 @@ async fn resolve_probe_credential(
     .bind(reconciliation.project_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((database_id, database_generation, migration_id, evidence)) = target else {
+    let Some((database_id, database_generation, migration_id, migration_state, evidence)) = target
+    else {
         return Err(ApiError::not_found());
     };
     if let Some(probe) = leased_probe
@@ -576,7 +577,9 @@ async fn resolve_probe_credential(
         database_generation,
     )
     .await?;
-    let replacement = evidence
+    // The restore gives the clone its own identity; the recovery reference,
+    // not that identity, names the migration-owned database target.
+    let _replacement_identity = evidence
         .get("replacement_identity")
         .and_then(Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok())
@@ -586,13 +589,17 @@ async fn resolve_probe_credential(
                 "the prepared isolated database target is unavailable",
             )
         })?;
-    if replacement != migration_id {
+    let replacement_ref = evidence
+        .get("replacement_ref")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok());
+    if migration_state != "trial_prepared" || replacement_ref != Some(migration_id) {
         return Err(ApiError::conflict(
             "migration_trial_target_mismatch",
-            "the prepared isolated database identity does not match the migration",
+            "the prepared isolated database reference does not match the migration",
         ));
     }
-    let database_name = format!("hdr_{}", replacement.simple());
+    let database_name = format!("hdr_{}", migration_id.simple());
     Ok(Json(ProbeCredentialResponse {
         schema: "hostlet.runtime.probe-credential/v1".to_owned(),
         credential_id: credential.credential_id,

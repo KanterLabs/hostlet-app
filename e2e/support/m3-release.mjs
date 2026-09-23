@@ -260,13 +260,14 @@ function staticOutput(record) {
 }
 
 class ReleaseWorkerExited extends Error {}
+class TerminalReleaseWaitError extends Error {}
 
 async function eventually(label, callback, { timeoutMs = 60_000, intervalMs = 125 } = {}) {
   const deadline = Date.now() + timeoutMs; let last;
   while (Date.now() < deadline) {
     try { const value = await callback(); if (value) return value; }
     catch (error) {
-      if (error instanceof ReleaseWorkerExited) throw error;
+      if (error instanceof ReleaseWorkerExited || error instanceof TerminalReleaseWaitError) throw error;
       last = error;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -444,9 +445,10 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         const value = await history(projectId);
         const release = value.releases.find(({ id }) => id === releaseId);
         if (release && expected.includes(release.state)) return { release, history: value };
+        if (release && ["failed", "healthy", "retired"].includes(release.state)) {
+          throw new TerminalReleaseWaitError(`release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        }
         assertOwnedReleaseWorkerRunning();
-        if (!release) return null;
-        if (["failed", "healthy", "retired"].includes(release.state)) throw new Error(`release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
         return null;
       }, { timeoutMs: options.promotionTimeoutMs ?? 120_000 });
     } catch (error) {
@@ -488,25 +490,24 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         const value = await history(staged.projectId);
         const release = value.releases.find(({ id }) => id === staged.releaseId);
         if (release && expected.includes(release.state)) {
-          if (!migrationFences.has(staged.migration.id)) {
-            throw new Error("migration live apply reached a terminal release state before its exact stale lease was fenced");
+          if (release.state === "healthy" && !migrationFences.has(staged.migration.id)) {
+            throw new TerminalReleaseWaitError("migration live apply reached a healthy release state before its exact stale lease was fenced");
           }
           const stale = migrationFences.get(staged.migration.id);
-          if (stale && stale.rejected !== true) {
+          if (release.state === "healthy" && stale && stale.rejected !== true) {
             const completion = await m3.roleInternal("database", `/internal/v1/tenant-database-operations/${stale.operationId}/complete`, {
               method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
                 fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
             });
-            if (completion.status !== 409) throw new Error("stale live-migration completion was not fenced");
+            if (completion.status !== 409) throw new TerminalReleaseWaitError("stale live-migration completion was not fenced");
             stale.rejected = true;
           }
           return { release, history: value };
         }
-        assertOwnedReleaseWorkerRunning();
-        if (!release) return null;
-        if (["failed", "healthy", "retired"].includes(release.state)) {
-          throw new Error(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        if (release && ["failed", "healthy", "retired"].includes(release.state)) {
+          throw new TerminalReleaseWaitError(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
         }
+        assertOwnedReleaseWorkerRunning();
         return null;
       }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });
     } catch (error) {
@@ -531,7 +532,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       if (!release) return null;
       if (release.state === "failed") return { release, history: value };
       if (["healthy", "retired"].includes(release.state)) {
-        throw new Error(`incompatible migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        throw new TerminalReleaseWaitError(`incompatible migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
       }
       return null;
     }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });
@@ -1162,7 +1163,10 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         m3.postgres.psqlJson("m3-release-rollback-activation", `SELECT state FROM release_reconciliations WHERE id='${reconciliationId}'::uuid;`),
       ]);
       const release = value.releases.find(({ id }) => id === releaseId);
-      if (reconciliationState === "failed" || reconciliationState === "retriable") {
+      if (reconciliationState === "failed") {
+        throw new TerminalReleaseWaitError(`rollback reconciliation reached ${reconciliationState}`);
+      }
+      if (reconciliationState === "retriable") {
         throw new Error(`rollback reconciliation reached ${reconciliationState}`);
       }
       if (release?.state === "healthy" && reconciliationState === "succeeded" &&

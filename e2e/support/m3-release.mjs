@@ -49,6 +49,7 @@ export function startReleaseWorker(m3, {
   artifactRoot = join(m3.policyClock.stateDir, "private-cas"),
   runtimeRoot = m3.state.runtime?.stateRoot,
   workerId = "m3-owned-release-worker",
+  once = false,
 } = {}) {
   if (!runtimeRoot || !runsc || !runtimeArtifactRoot) throw new Error("release worker requires the actual initialized runtime state and artifact roots");
   ensureReleaseStateRoot(m3);
@@ -81,6 +82,7 @@ export function startReleaseWorker(m3, {
       "--launcher", launcher, "--runsc", runsc, "--peer-helper", peerHelper,
       "--state-root", m3.policyClock.stateDir, "--runtime-root", runtimeRoot,
       "--artifact-root", artifactRoot, "--runtime-artifact-root", runtimeArtifactRoot, ...privileged,
+      ...(once ? ["--once"] : []),
     ],
     { env: m3.componentEnvironment("runtime") },
     "m3-release-worker.log",
@@ -1556,6 +1558,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     const workerA = startReleaseWorker(m3, {
       artifactRoot: join(m3.policyClock.stateDir, "private-cas"), runtimeRoot: runtime.stateRoot,
       workerId: `m3-concurrent-release-a-${++sequence}`,
+      once: true,
     });
     try {
       const firstLease = await eventually(`concurrent release first lease ${staged.reconciliationId}`, async () => {

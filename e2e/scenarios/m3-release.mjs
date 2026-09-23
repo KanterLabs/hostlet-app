@@ -121,30 +121,44 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
   const route2 = readActiveRoute(m3.policyClock.stateDir, first.projectId);
   const history2 = await harness.releaseHistory(first.projectId);
   const newClient = harness.client(second.gateway);
-  const cachedOldClient = harness.client(second.gateway);
-  const cachedOldAgainstNew = await cachedOldClient.request("/api/items");
   const newPage = await newClient.request("/");
   const newAgainstNew = await newClient.request("/api/items");
-  const retainedApi = await harness.requestRetainedApi(second, first.releaseId, "/api/items");
-  const retainedBrowser = await oldBrowser.createItem("retained-v1-after-v2");
   const newBrowser = await harness.openBrowser("m3-release-v2-client");
   const newBrowserEvidence = await newBrowser.observe("m3-release-v2-active");
+  await oldBrowser.selectRelease(second.releaseId);
+  const cachedOldAgainstNew = await oldBrowser.createItem("cached-v1-against-v2");
+  await newBrowser.selectRelease(first.releaseId);
+  const newAgainstRetained = await newBrowser.createItem("new-v2-against-retained-v1");
+  const activeApiAfterCross = await newClient.request("/api/items");
+  const retainedApi = await harness.requestRetainedApi(second, first.releaseId, "/api/items");
+  const newAgainstNewPayload = newAgainstNew.status === 200 ? newAgainstNew.json() : null;
+  const activeApiAfterCrossPayload = activeApiAfterCross.status === 200 ? activeApiAfterCross.json() : null;
+  const retainedApiPayload = retainedApi.status === 200 ? retainedApi.json() : null;
   const overlapPassed =
     oldPage.status === 200 && oldPage.text().includes("frontend-v1") &&
-      cachedOldAgainstNew.status === 200 && cachedOldAgainstNew.json().api_version === "api-v2" &&
-      newPage.status === 200 && newPage.text().includes("frontend-v2") && newAgainstNew.status === 200 && newAgainstNew.json().api_version === "api-v2" &&
-      retainedApi.status === 200 && retainedApi.json().api_version === "api-v1" &&
+      cachedOldAgainstNew.release === "frontend-v1 using api-v2" &&
+      cachedOldAgainstNew.rows.some(({ text }) => text === "cached-v1-against-v2") &&
+      newPage.status === 200 && newPage.text().includes("frontend-v2") && newAgainstNewPayload?.api_version === "api-v2" &&
+      newAgainstRetained.release === "frontend-v2 using api-v1" &&
+      newAgainstRetained.rows.some(({ text }) => text === "new-v2-against-retained-v1") &&
+      activeApiAfterCross.status === 200 && activeApiAfterCrossPayload?.api_version === "api-v2" &&
+      Array.isArray(activeApiAfterCrossPayload?.items) && activeApiAfterCrossPayload.items.some(({ name }) => name === "cached-v1-against-v2") &&
+      retainedApi.status === 200 && retainedApiPayload?.api_version === "api-v1" &&
+      Array.isArray(retainedApiPayload?.items) && retainedApiPayload.items.some(({ name }) => name === "new-v2-against-retained-v1") &&
       Date.parse(route2.manifest.drain_expires_at) > Date.now() &&
-      retainedBrowser.release === "frontend-v1 using api-v1" && newBrowserEvidence.release === "frontend-v2 using api-v2" &&
-      retainedBrowser.rows.some(({ text }) => text === "retained-v1-after-v2");
+      newBrowserEvidence.release === "frontend-v2 using api-v2";
   assertResult("m3-release-client-overlap", overlapPassed,
-    { cached_old_frontend: oldPage.text().slice(0, 200), cached_old_frontend_api: cachedOldAgainstNew.json().api_version,
-      new_frontend_api: newAgainstNew.json().api_version, retained_api_version: retainedApi.json().api_version,
+    { cached_old_frontend: cachedOldAgainstNew, cached_old_frontend_api: cachedOldAgainstNew.release,
+      new_frontend_api: newAgainstNewPayload?.api_version ?? null,
+      new_frontend_retained_api: newAgainstRetained, retained_api_version: retainedApiPayload?.api_version ?? null,
+      active_api_after_cross: activeApiAfterCrossPayload, retained_api_after_cross: retainedApiPayload,
       drain_expires_at: route2.manifest.drain_expires_at,
-      retained_browser_release: retainedBrowser.release, active_browser_release: newBrowserEvidence.release,
-      retained_browser_screenshot: retainedBrowser.screenshot, active_browser_screenshot: newBrowserEvidence.screenshot,
-      retained_browser_dom: retainedBrowser.dom, active_browser_dom: newBrowserEvidence.dom,
-      retained_browser_network: retainedBrowser.network, active_browser_network: newBrowserEvidence.network });
+      active_browser_release: newBrowserEvidence.release,
+      cached_old_frontend_screenshot: cachedOldAgainstNew.screenshot, active_browser_screenshot: newBrowserEvidence.screenshot,
+      cached_old_frontend_dom: cachedOldAgainstNew.dom, active_browser_dom: newBrowserEvidence.dom,
+      cached_old_frontend_network: cachedOldAgainstNew.network, active_browser_network: newBrowserEvidence.network,
+      new_frontend_retained_screenshot: newAgainstRetained.screenshot,
+      new_frontend_retained_dom: newAgainstRetained.dom, new_frontend_retained_network: newAgainstRetained.network });
   const exactManifestV2Passed = exactRouteManifest(second, route2, history2, first.releaseId, [{
       release_id: first.releaseId, archive_digest: first.frontendDigest, manifest_digest: first.frontendManifestDigest,
     }]);
@@ -155,9 +169,10 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
   context.assertion("M3-RELEASE-01", "M3 coordinated releases",
     "exact frontend/backend artifacts become one durable route only after real health checks; old/new clients remain compatible through bounded drain",
       { first_release_id: first.releaseId, second_release_id: second.releaseId, route_generation: route2.manifest.generation,
-      managed_origin: second.gateway.origin, cached_old_frontend_api: cachedOldAgainstNew.json().api_version,
-      new_frontend_api: newAgainstNew.json().api_version, retained_api_version: retainedApi.json().api_version,
-      retained_browser_release: retainedBrowser.release, active_browser_release: newBrowserEvidence.release }, release01Passed);
+      managed_origin: second.gateway.origin, cached_old_frontend_api: cachedOldAgainstNew.release,
+      new_frontend_api: newAgainstNewPayload?.api_version ?? null,
+      new_frontend_retained_api: newAgainstRetained.release, retained_api_version: retainedApiPayload?.api_version ?? null,
+      active_browser_release: newBrowserEvidence.release }, release01Passed);
   await oldBrowser.close();
   await newBrowser.close();
   const populatedMigrationPassed = second.backupVerified === true && second.backupReceiptPassed === true &&
@@ -167,7 +182,8 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
       validDigest(second.migrationTrialReceiptDigest) && validDigest(second.migrationApplyReceiptDigest) &&
       second.migrationDuplicateSafe === true && second.migrationCompetingWorkerFenced === true &&
       second.currentBinaryCompatible === true &&
-      second.retainedBinariesCompatible === true && newAgainstNew.json().items.some((item) => item.id === beforeMigration.id);
+      second.retainedBinariesCompatible === true && Array.isArray(newAgainstNewPayload?.items) &&
+      newAgainstNewPayload.items.some((item) => item.id === beforeMigration.id);
   assertResult("m3-release-populated-migration", populatedMigrationPassed,
     { backup_archive_digest: second.backupArchiveDigest, migration_id: second.migrationId,
       trial_receipt_digest: second.migrationTrialReceiptDigest, live_apply_receipt_digest: second.migrationApplyReceiptDigest,

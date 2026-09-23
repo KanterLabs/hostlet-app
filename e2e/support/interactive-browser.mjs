@@ -258,6 +258,9 @@ export async function beginBrowser(
       throw new Error("owned browser certificate SPKI digest is invalid");
     }
   }
+  const ownedCookieOrigin = url === "about:blank"
+    ? null
+    : new URL(loopbackPageUrl(url, ownedHttpsHostname)).origin;
 
   const ownedLabel = safeLabel(label);
   const profile = join(context.tempDir, `chromium-interactive-${ownedLabel}`);
@@ -335,6 +338,7 @@ export async function beginBrowser(
     await connection.ready;
     await connection.send("Page.enable");
     await connection.send("Runtime.enable");
+    await connection.send("Network.enable");
     await connection.send("Emulation.setDeviceMetricsOverride", {
       width,
       height,
@@ -378,6 +382,37 @@ export async function beginBrowser(
 
     const waitFor = async (selectorOrPredicate, { waitTimeoutMs = timeoutMs } = {}) =>
       waitForExpression(expressionForPredicate(selectorOrPredicate), waitTimeoutMs);
+
+    const setHttpOnlyCookie = async (name, value, destination) => {
+      if (ownedHttpsHostname === null || ownedCookieOrigin === null) {
+        throw new Error("HttpOnly browser cookies require an owned HTTPS origin");
+      }
+      if (typeof name !== "string" || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+        throw new Error("browser cookie name is invalid");
+      }
+      if (typeof value !== "string" || value.length === 0 || value.length > 4096 || /[;\r\n]/.test(value)) {
+        throw new Error("browser cookie value is invalid");
+      }
+      if (typeof destination !== "string" || destination.length === 0) {
+        throw new Error("browser cookie URL is invalid");
+      }
+      const safeUrl = loopbackPageUrl(destination, ownedHttpsHostname);
+      const parsed = new URL(safeUrl);
+      if (parsed.protocol !== "https:" || parsed.hostname !== ownedHttpsHostname || parsed.origin !== ownedCookieOrigin) {
+        throw new Error("browser cookie URL is outside the exact owned HTTPS origin");
+      }
+      const result = await connection.send("Network.setCookie", {
+        name,
+        value,
+        url: `${parsed.origin}/`,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      });
+      if (result?.success !== true) throw new Error("browser HttpOnly cookie was not accepted");
+      return true;
+    };
 
     const navigate = async (destination) => {
       const safeUrl = loopbackPageUrl(destination, ownedHttpsHostname);
@@ -534,6 +569,7 @@ export async function beginBrowser(
       text,
       waitFor,
       evaluate,
+      setHttpOnlyCookie,
       screenshot,
       captureDom,
       close,

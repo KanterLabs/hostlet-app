@@ -191,10 +191,24 @@ export async function beginReleaseBrowser(context, gateway, certificateSpkiSha25
   if (!gateway?.origin || !gateway?.hostname || typeof certificateSpkiSha256 !== "string") {
     throw new Error("release browser requires the exact owned TLS gateway and certificate SPKI");
   }
+  if (!Number.isSafeInteger(gateway.port) || gateway.port < 1 || gateway.port > 65_535) {
+    throw new Error("release browser gateway port is invalid");
+  }
+  let origin;
+  try { origin = new URL(gateway.origin); }
+  catch { throw new Error("release browser gateway origin is invalid"); }
+  if (origin.protocol !== "https:" || origin.hostname !== gateway.hostname || Number(origin.port) !== gateway.port ||
+      origin.pathname !== "/" || origin.search || origin.hash) {
+    throw new Error("release browser gateway origin is not the exact owned HTTPS origin");
+  }
   const browser = await beginBrowser(context, {
     url: gateway.origin, width: 1280, height: 900, label, timeoutMs: 40_000,
     ownedHttpsHostname: gateway.hostname, certificateSpkiSha256,
   });
+  const selectRelease = async (releaseId) => {
+    if (!RELEASE_UUID.test(releaseId ?? "")) throw new Error("release browser selection requires an exact release UUID");
+    await browser.setHttpOnlyCookie("__Host-hostlet_release", releaseId, gateway.origin);
+  };
   const observe = async (evidenceLabel) => {
     await browser.waitFor("#release", { waitTimeoutMs: 30_000 });
     await browser.waitFor(() => document.querySelector("#release")?.textContent?.includes("api-v"), { waitTimeoutMs: 30_000 });
@@ -212,14 +226,19 @@ export async function beginReleaseBrowser(context, gateway, certificateSpkiSha25
     const dom = await browser.captureDom(evidenceLabel, { safe: true });
     return Object.freeze({ ...product, screenshot, dom, network: networkPath });
   };
+  let writeSequence = 0;
   const createItem = async (name) => {
-    await browser.fill("#item-name", name);
-    await browser.click('#item-form button[type="submit"]');
-    await browser.waitFor(() => document.querySelector("#status")?.textContent?.startsWith("Saved"), { waitTimeoutMs: 30_000 });
-    await browser.waitFor(`li[data-item-id]`, { waitTimeoutMs: 30_000 });
-    return observe(`${label}-after-write`);
+    const expectedName = String(name);
+    if (expectedName.length === 0) throw new Error("release browser item name is empty");
+    await browser.fill("#item-name", expectedName);
+    await browser.click("#item-form button");
+    const expectedNameLiteral = JSON.stringify(expectedName);
+    const namedRowPredicate = new Function(`return [...document.querySelectorAll("#items li")]
+      .some((row) => String(row.textContent ?? "").trim() === ${expectedNameLiteral});`);
+    await browser.waitFor(namedRowPredicate, { waitTimeoutMs: 30_000 });
+    return observe(`${label}-after-write-${++writeSequence}`);
   };
-  return Object.freeze({ browser, observe, createItem, close: browser.close });
+  return Object.freeze({ browser, observe, createItem, selectRelease, close: browser.close });
 }
 
 function applicationOutput(record) {

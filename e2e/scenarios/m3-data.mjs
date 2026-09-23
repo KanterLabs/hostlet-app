@@ -372,7 +372,7 @@ class OwnedTenantPostgres {
         'runtime_schema_usage',has_schema_privilege(${runtime},'hostlet_control','USAGE'),
         'runtime_identity_select',has_table_privilege(${runtime},'hostlet_control.database_identity','SELECT'),
         'migration_schema_usage',has_schema_privilege(${migration},'hostlet_control','USAGE'),
-        'backup_schema_usage',has_schema_privilege(${backup},'hostlet_control','USAGE')));`;
+        'backup_schema_usage',has_schema_privilege(${backup},'hostlet_control','USAGE'))));`;
     const result = await this.queryJson(target, label, sql, { databaseName });
     const expectedNames = new Set(roleNames);
     if (!Array.isArray(result.roles) || result.roles.length !== expectedNames.size ||
@@ -1165,7 +1165,15 @@ export function createM3DataStage(m3, { mainProject } = {}) {
             { address: database.peer.endpointIpv6, port: 5432, protocol: "tcp" },
           ];
           const foreign = databases.filter((candidate) => candidate !== database).flatMap((candidate) => [candidate.peer.endpointIpv4, candidate.peer.endpointIpv6]);
-          expectScenario(network.networkMode === "none" && Object.keys(network.networks).length === 0 &&
+          // Docker can represent --network=none as a named null-driver
+          // endpoint. It must still expose no address, gateway or IPAM setup.
+          const dockerAttachments = Object.entries(network.networks);
+          const dockerNetworkIsNone = network.networkMode === "none" && dockerAttachments.length <= 1 &&
+            dockerAttachments.every(([name, attachment]) => name === "none" && attachment &&
+              attachment.IPAMConfig === null &&
+              ["Gateway", "IPAddress", "MacAddress", "IPv6Gateway", "GlobalIPv6Address"].every((key) => attachment[key] === "") &&
+              attachment.IPPrefixLen === 0 && attachment.GlobalIPv6PrefixLen === 0);
+          expectScenario(dockerNetworkIsNone &&
             network.labels["io.hostlet.scope"] === "m3-e2e" && network.labels["io.hostlet.run-id"] === owned.runId,
           "tenant PostgreSQL remains on an owned network-none boundary", { networkMode: network.networkMode, networks: Object.keys(network.networks) });
           expectScenario(sameJson(runtime.network?.outbound_destinations ?? [], expectedDestinations) &&

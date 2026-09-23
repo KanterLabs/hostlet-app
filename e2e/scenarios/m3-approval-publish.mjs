@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beginBrowser } from "../support/interactive-browser.mjs";
 import { assertStatus, expectScenario, ScenarioExpectationError } from "../support/http-client.mjs";
+import { probeStaticHttpBoundary, staticHttpBoundaryPassed } from "../support/m3-static-http.mjs";
 
 export const M3_APPROVAL_PUBLISH_REQUIRED_ASSERTIONS = Object.freeze([
   "M3-APPROVAL-SETUP-01",
@@ -17,24 +17,6 @@ export const M3_APPROVAL_PUBLISH_REQUIRED_ASSERTIONS = Object.freeze([
   "M3-PUBLISH-03",
 ]);
 
-function rawPathStatus(port, path, signal) {
-  return new Promise((resolve, reject) => {
-    const request = httpRequest({
-      hostname: "127.0.0.1",
-      port,
-      path,
-      method: "GET",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
-    }, (response) => {
-      const status = response.statusCode;
-      response.destroy();
-      resolve({ status });
-    });
-    request.once("error", reject);
-    request.end();
-  });
-}
-
 function hostEnvironment(overrides = {}) {
   const environment = {};
   for (const name of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ", "TMPDIR"]) {
@@ -45,7 +27,7 @@ function hostEnvironment(overrides = {}) {
 
 function safeObserved(error) {
   if (error instanceof ScenarioExpectationError) return error.observed;
-  return { failed_checks: 1 };
+  return { failed_checks: 1, ...(error.staticHttpEvidence ? { static_http: error.staticHttpEvidence } : {}) };
 }
 
 async function approvalPublishStep(context, id, scenario, expected, run) {
@@ -284,6 +266,7 @@ export function registerM3ApprovalPublishFixtures(context) {
   context.registerFixture("M3 approval contract", "docs/M3-APPROVAL-CONTRACT.md");
   context.registerFixture("M3 publisher contract", "docs/M3-PUBLISHER-CONTRACT.md");
   context.registerFixture("M3 interactive Chromium driver", "e2e/support/interactive-browser.mjs");
+  context.registerFixture("M3 static HTTP probe", "e2e/support/m3-static-http.mjs");
   context.registerFixture("M3 owner approval UI", "web/src/PublicationPanel.tsx");
 }
 
@@ -1409,32 +1392,17 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
         webStopped = true;
         return withUpstreamsStopped({ context, m3 }, async () => {
           const publicUrl = `${staticBase}${slug}/`;
-          const unknownSlugResponse = await fetch(`${staticBase}m3-unknown-${randomUUID().slice(0, 8)}/`, {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          });
-          const encodedSeparatorResponse = await fetch(`${staticBase}${slug}/assets%2Fsite.css`, {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          });
-          const encodedTraversalResponse = await rawPathStatus(staticPort, `/${slug}/%2e%2e/${slug}/index.html`, context.abortSignal);
-          const unknownHostResponse = await fetch(publicUrl, {
-            cache: "no-store",
-            headers: { Host: "evil.example.test" },
-            signal: AbortSignal.timeout(10_000),
-          });
+          const staticHttp = {};
+          try {
+            await probeStaticHttpBoundary(staticPort, slug, context.abortSignal, staticHttp);
+          } catch (error) {
+            error.staticHttpEvidence = staticHttp;
+            throw error;
+          }
           expectScenario(
-            unknownSlugResponse.status === 404 &&
-              encodedSeparatorResponse.status === 404 &&
-              encodedTraversalResponse.status === 404 &&
-              [400, 404].includes(unknownHostResponse.status),
+            staticHttpBoundaryPassed(staticHttp),
             "independent static server rejects unknown hosts, unknown slugs and encoded traversal paths",
-            {
-              unknown_slug_status: unknownSlugResponse.status,
-              encoded_separator_status: encodedSeparatorResponse.status,
-              encoded_traversal_status: encodedTraversalResponse.status,
-              unknown_host_status: unknownHostResponse.status,
-            },
+            staticHttp,
           );
 
           await browser.close();
@@ -1461,8 +1429,9 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
             active_reservation_delta: finalCapacityUsage.active_reservations - initialCapacityUsage.active_reservations,
             hosted_slot_delta: finalCapacityUsage.hosted_slots - initialCapacityUsage.hosted_slots,
             project_count_delta: finalCapacityUsage.project_count - initialCapacityUsage.project_count,
-            unknown_host_rejected: [400, 404].includes(unknownHostResponse.status),
-            encoded_paths_rejected: encodedSeparatorResponse.status === 404 && encodedTraversalResponse.status === 404,
+            static_http: staticHttp,
+            unknown_host_rejected: [400, 404].includes(staticHttp.invalid_host_status),
+            encoded_paths_rejected: staticHttp.encoded_separator_status === 404 && staticHttp.encoded_traversal_status === 404,
             resource_origins: resourceOrigins,
           };
         });

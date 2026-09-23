@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { beginBrowser } from "../support/interactive-browser.mjs";
 import { assertStatus } from "../support/http-client.mjs";
 import { runM3Context } from "../support/m3-context.mjs";
+import { probeStaticHttpBoundary, staticHttpBoundaryPassed } from "../support/m3-static-http.mjs";
 import { M3_UPGRADE_REQUIRED_ASSERTIONS } from "./m3-upgrade.mjs";
 
 const ASSERTION = "M3-STATIC-PUBLICATION-DEVELOPMENT";
@@ -107,6 +108,7 @@ async function runStaticPublicationDevelopment(context) {
     ["M3 publisher renderer", "crates/publisher/src/render.rs"],
     ["M3 publication approval boundary", "crates/control/src/portfolio_approval.rs"],
     ["M3 Chromium driver", "e2e/support/interactive-browser.mjs"],
+    ["M3 static HTTP probe", "e2e/support/m3-static-http.mjs"],
   ]) context.registerFixture(label, path);
 
   await runM3Context(context, async (m3) => {
@@ -163,6 +165,7 @@ async function runStaticPublicationDevelopment(context) {
     let primaryError = null;
     let observations = null;
     let failureCapture = null;
+    const staticHttp = {};
     try {
       worker = await context.runCommand("M3 external-only publisher worker", publisherBinary, [
         "worker", "--control-url", m3.workerUrl, "--worker-id", `publisher-static-${randomUUID()}`, "--once",
@@ -273,6 +276,8 @@ async function runStaticPublicationDevelopment(context) {
       const recoveredText = await browser.text("body");
       const recoveryCapture = await captureBrowser(context, browser, "m3-static-publication-recovered");
       requireCheck(afterRecovery.status === 200 && !afterRecovery.bytes.equals(firstHome.bytes) && recoveredText.includes(recoveryNarrative) && !recoveredText.includes(publicNarrative) && !recoveredText.includes(replacementNarrative), "restarted static server did not serve only the recovered escaped narrative");
+      await probeStaticHttpBoundary(staticPort, slug, context.abortSignal, staticHttp);
+      requireCheck(staticHttpBoundaryPassed(staticHttp), `restarted static server Host and literal path probe failed: ${JSON.stringify(staticHttp)}`);
 
       await browser.close();
       browser = null;
@@ -319,6 +324,7 @@ async function runStaticPublicationDevelopment(context) {
         publication_rows: rows,
         worker: { exit_code: worker.code, signal: worker.signal, log: relative(context.artifactDir, worker.logPath), log_sha256: sha256(readFileSync(worker.logPath)) },
         browser: { home: homeCapture, detail: detailCapture, dashboard_return: dashboardCapture, recovery: recoveryCapture, offline_home: outageHomeCapture, offline_detail: outageDetailCapture },
+        static_http: staticHttp,
         replacement: {
           approved_revision_id: replacement.approved.id, publication_id: corruptQueued.id,
           corrupt_success_status: corruptCompletion.status, failed_completion_status: corruptFailure.status,
@@ -347,10 +353,10 @@ async function runStaticPublicationDevelopment(context) {
       if (staticServer) { try { await context.stopManaged(staticServer, "M3 static publication server cleanup"); } catch (error) { primaryError ??= error; } }
     }
 
-    const record = { schema: "hostlet.m3-static-publication-development/v1", diagnostic_only: true, production_capability_registered: false, m3_gate_satisfied: false, status: primaryError ? "failed" : "passed", observations, failure_capture: failureCapture, ...(primaryError ? { error: context.redact(primaryError.message) } : {}) };
+    const record = { schema: "hostlet.m3-static-publication-development/v1", diagnostic_only: true, production_capability_registered: false, m3_gate_satisfied: false, status: primaryError ? "failed" : "passed", observations, static_http: staticHttp, failure_capture: failureCapture, ...(primaryError ? { error: context.redact(primaryError.message) } : {}) };
     writeFileSync(join(context.artifactDir, "m3-static-publication-development.json"), `${context.redact(JSON.stringify(record, null, 2))}\n`, { encoding: "utf8", mode: 0o600 });
     const expected = "real external-only approval publishes escaped static pages; corrupt and expired publisher attempts preserve or safely replace the last-good pointer, and a fresh browser reads the recovered site with dashboard, control and provider stopped";
-    context.assertion(ASSERTION, "M3 external-only static publication diagnostic", expected, { ...observations, failure_capture: failureCapture, diagnostic_only: true, production_capability_registered: false }, !primaryError, primaryError?.message ?? null);
+    context.assertion(ASSERTION, "M3 external-only static publication diagnostic", expected, { ...observations, static_http: staticHttp, failure_capture: failureCapture, diagnostic_only: true, production_capability_registered: false }, !primaryError, primaryError?.message ?? null);
     if (primaryError) throw primaryError;
   });
 }

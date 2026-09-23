@@ -154,7 +154,8 @@ class OwnedTenantPostgres {
       item.recovery_id === recoveryId);
     if (existing && !force) return existing;
     this.sequence += 1;
-    const short = `${this.runId.slice(0, 8)}-${String(this.sequence).padStart(2, "0")}`;
+    const targetSequence = this.sequence;
+    const short = `${this.runId.slice(0, 8)}-${String(targetSequence).padStart(2, "0")}`;
     const name = `hostlet-m3-tenant-${short}`;
     const volume = `${name}-data`;
     const restore = recoveryId !== null;
@@ -190,14 +191,14 @@ class OwnedTenantPostgres {
       "hostlet.m3.restore": String(restore),
     };
     const absent = await this.context.runCommand("verify tenant PostgreSQL volume name is unused", "docker", ["volume", "ls", "--filter", `name=^${volume}$`, "--format", "{{.Name}}"], {
-      timeoutMs: 15_000, logName: `m3-data-postgres-volume-absent-${String(this.sequence).padStart(2, "0")}.log`,
+      timeoutMs: 15_000, logName: `m3-data-postgres-volume-absent-${String(targetSequence).padStart(2, "0")}.log`,
     });
     if (absent.code !== 0 || absent.stdout.trim() !== "") throw new Error(`refusing existing tenant PostgreSQL volume ${volume}`);
     const volumeArgs = ["volume", "create"];
     for (const [key, value] of Object.entries(volumeLabels)) volumeArgs.push("--label", `${key}=${value}`);
     volumeArgs.push(volume);
     const createdVolume = await this.context.runCommand("create owned tenant PostgreSQL volume", "docker", volumeArgs, {
-      timeoutMs: 30_000, logName: `m3-data-postgres-volume-create-${String(this.sequence).padStart(2, "0")}.log`,
+      timeoutMs: 30_000, logName: `m3-data-postgres-volume-create-${String(targetSequence).padStart(2, "0")}.log`,
     });
     if (createdVolume.code !== 0 || createdVolume.stdout.trim() !== volume) throw new Error(`failed to create owned tenant PostgreSQL volume ${volume}`);
     const resource = { containerId: null, name, volume, labels, volumeLabels };
@@ -208,7 +209,7 @@ class OwnedTenantPostgres {
     args.push(this.image);
     const started = await this.context.runCommand(`start owned tenant PostgreSQL ${short}`, "docker", args, {
       timeoutMs: 120_000,
-      logName: `m3-data-postgres-start-${String(this.sequence).padStart(2, "0")}.log`,
+      logName: `m3-data-postgres-start-${String(targetSequence).padStart(2, "0")}.log`,
     });
     if (started.code !== 0 || !CONTAINER_ID.test(started.stdout.trim())) throw new Error("owned tenant PostgreSQL did not start");
     const containerId = started.stdout.trim();
@@ -219,7 +220,7 @@ class OwnedTenantPostgres {
         "exec", containerId, "pg_isready", "--username", "postgres", "--dbname", "postgres",
       ], {
         timeoutMs: 5_000,
-        logName: `m3-data-postgres-ready-${String(this.sequence).padStart(2, "0")}-${attempt + 1}.log`,
+        logName: `m3-data-postgres-ready-${String(targetSequence).padStart(2, "0")}-${attempt + 1}.log`,
       });
       if (ready.code === 0) {
         const authenticated = await this.context.runCommand(`authenticate owned tenant PostgreSQL ${short}`, "docker", [
@@ -229,7 +230,7 @@ class OwnedTenantPostgres {
         ], {
           env: { ...process.env, PGPASSWORD: password },
           timeoutMs: 5_000,
-          logName: `m3-data-postgres-authenticated-${String(this.sequence).padStart(2, "0")}-${attempt + 1}.log`,
+          logName: `m3-data-postgres-authenticated-${String(targetSequence).padStart(2, "0")}-${attempt + 1}.log`,
         });
         if (authenticated.code === 0) break;
       }
@@ -242,8 +243,8 @@ class OwnedTenantPostgres {
       recovery_id: recoveryId,
       container_id: containerId,
       restore_target: restore,
-      endpoint_ipv4: `10.231.${this.sequence}.2`,
-      endpoint_ipv6: `fd42:686f:7374:${this.sequence.toString(16)}::2`,
+      endpoint_ipv4: `10.231.${targetSequence}.2`,
+      endpoint_ipv6: `fd42:686f:7374:${targetSequence.toString(16)}::2`,
     };
     this.targets.push(target);
     this.writeInventory();
@@ -1145,6 +1146,14 @@ export function createM3DataStage(m3, { mainProject } = {}) {
         "DATA01 includes an actual pre-provision worker crash, lease expiry, fresh retry, and one durable effect", provisioningCrashRecovery);
         const runtimeProbe = m3.state.runtimeDatabaseProbe ?? m3.state.runtime?.runtimeDatabaseProbe;
         if (typeof runtimeProbe !== "function") throw new Error("M3-DATA-01 requires the runtime database probe integration");
+        const peerAddresses = databases.flatMap(({ peer }) => [peer.endpointIpv4, peer.endpointIpv6]);
+        expectScenario(peerAddresses.length === databases.length * 2 &&
+          peerAddresses.every((address) => typeof address === "string") &&
+          new Set(peerAddresses).size === peerAddresses.length,
+        "owned tenant PostgreSQL peers have distinct exact endpoints", {
+          database_ids: databases.map(({ record }) => record.id),
+          peer_addresses: peerAddresses,
+        });
         const probes = [];
         for (const [index, database] of databases.entries()) {
           probes.push(await runtimeProbe({ artifactKey: "fullstack_v1", databasePeer: database.peer, expectedProjectId: database.project.projectId, mode: "read_write", index: 40 + index }));

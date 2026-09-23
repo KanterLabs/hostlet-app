@@ -402,10 +402,42 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
         const sourceCommitSelected = await browser.evaluate(`document.querySelector(${JSON.stringify(`${projectSelector} [data-testid="preview-status-source_commit"]`)})?.checked === true`);
         expectScenario(!sourceCommitSelected, "source commit remains private without explicit owner opt-in", { source_commit_selected: sourceCommitSelected });
         await browser.click('[data-testid="preview-save"]');
-        await browser.waitFor(() => {
-          const button = document.querySelector('[data-testid="publication-load-review"]');
-          return Boolean(button && !button.disabled);
-        }, { waitTimeoutMs: 30_000 });
+        try {
+          await browser.waitFor(() => {
+            const button = document.querySelector('[data-testid="publication-load-review"]');
+            return Boolean(button && !button.disabled);
+          }, { waitTimeoutMs: 30_000 });
+        } catch (error) {
+          const [state, screenshot, dom] = await Promise.allSettled([
+            browser.evaluate(`(() => {
+              const notice = document.querySelector('[data-testid="preview-editor-notice"]')?.textContent ?? '';
+              const review = document.querySelector('[data-testid="publication-load-review"]');
+              const save = document.querySelector('[data-testid="preview-save"]');
+              return {
+                review_present: Boolean(review),
+                review_disabled: review instanceof HTMLButtonElement ? review.disabled : null,
+                save_disabled: save instanceof HTMLButtonElement ? save.disabled : null,
+                save_first_present: Boolean(document.querySelector('[data-testid="publication-save-first"]')),
+                notice_kind: notice === 'Private preview saved.' ? 'saved'
+                  : notice.includes('Review the form values') ? 'validation'
+                  : notice.includes('changed while you were working') ? 'stale'
+                  : notice.includes('session has expired') ? 'session_expired'
+                  : notice ? 'other' : 'none',
+              };
+            })()`),
+            browser.screenshot('m3-approval-save-transition-failure'),
+            browser.captureDom('m3-approval-save-transition-failure', { safe: true }),
+          ]);
+          try {
+            writeFileSync(join(context.artifactDir, 'm3-approval-save-transition-failure.json'), JSON.stringify({
+              schema: 'hostlet.e2e.approval-save-transition-failure/v1',
+              ui: state.status === 'fulfilled' ? state.value : null,
+              screenshot_retained: screenshot.status === 'fulfilled',
+              safe_dom_retained: dom.status === 'fulfilled',
+            }), { flag: 'wx', mode: 0o600 });
+          } catch { /* Preserve the original browser transition failure. */ }
+          throw error;
+        }
         await browser.click('[data-testid="publication-load-review"]');
         await browser.waitFor('[data-testid="publication-review"]', { waitTimeoutMs: 30_000 });
         await ensureCheckbox(browser, '[data-testid="publication-refresh-deployment_timestamp"]', true);

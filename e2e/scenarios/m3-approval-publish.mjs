@@ -681,7 +681,9 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
         );
         await browser.navigate(webUrl);
         await browser.waitFor('[data-testid="publication-panel"]');
+        await browser.waitFor('[data-testid="publication-job"][data-publication-state="published"] [data-testid="publication-url"]', { waitTimeoutMs: 40_000 });
         const shownUrl = await browser.text('[data-testid="publication-url"]');
+        expectScenario(shownUrl === publicUrl, "dashboard links to the exact independently served approved publication", { browser_url_matches_served_url: shownUrl === publicUrl });
         return { publication_id: firstPublished.id, artifact_digest: firstPublished.artifact_digest, pointer_generation: firstPublished.pointer_generation, public_url: shownUrl };
       },
     );

@@ -358,6 +358,33 @@ The journey diagnostic uses the existing short real-build setup and then runs
 runtime, release, approval, publication and data recovery stages. It omits build
 retry/failure acceptance, including the real ten-minute timeout, and cannot
 replace either full clean run.
+
+### Static release-coordinator diagnostic
+
+To isolate real build-to-static-coordinator integration without the later runtime
+and fifteen-minute release phase, run this non-gating diagnostic:
+
+```sh
+node e2e/run.mjs --milestone M3-release-static-development --task HOST-233 \
+  --scenario-module e2e/scenarios/m3-release-static-development.mjs \
+  --operation-timeout 3600000 --run-timeout 3600000
+```
+
+It runs the retained M3 upgrade setup and the real disposable-VM build cases
+required by `M3-BUILD-01` and `M3-BUILD-02`, then passes the resulting static
+archive and manifest digests to the actual
+`scripts/release/hostlet-release-coordinator.py stage` command. The diagnostic
+compares extracted bytes, modes and the independently computed tree digest with
+the build output, repeats the same stage input to prove idempotency, and checks
+that no temporary stage remains. The coordinator command logs and the parsed
+stage receipt are retained in the run artifact. Its explicit assertion is
+`M3-RELEASE-STATIC-DEVELOPMENT`.
+
+This diagnostic does not start a tenant runtime, release worker, gateway, tenant
+database, health probe or route switch. Its receipt is useful for diagnosing a
+coordinator/CAS boundary failure only; it cannot establish `M3-RELEASE-01`,
+`M3-RELEASE-02`, `M3-RELEASE-03`, or HOST-233 acceptance.
+
 The database bootstrap diagnostic launches one Node 24 application with a
 control-scoped tenant credential, exercises application read/write, and verifies
 secret mount and runtime cleanup. It does not register a runtime capability.

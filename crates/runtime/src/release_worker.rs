@@ -919,10 +919,52 @@ fn run_coordinator(
     let result = child.wait_with_output();
     let _ = fs::remove_file(&path);
     let result = result.map_err(|_| "release_coordinator_unavailable")?;
-    if !result.status.success() || result.stdout.len() > 1024 * 1024 {
+    if !result.status.success() {
+        return Err(coordinator_failure_code(&result.stderr));
+    }
+    if result.stdout.len() > 1024 * 1024 {
         return Err("release_coordinator_failed");
     }
     serde_json::from_slice(&result.stdout).map_err(|_| "release_coordinator_receipt_invalid")
+}
+
+fn coordinator_failure_code(stderr: &[u8]) -> &'static str {
+    if stderr.len() > 128 {
+        return "release_coordinator_failed";
+    }
+    // Only reviewed one-line codes may become durable public failure reasons.
+    // Unknown output and tracebacks never expose child stderr or input values.
+    match std::str::from_utf8(stderr).map(str::trim) {
+        Ok("release_artifact_digest_mismatch") => "release_artifact_digest_mismatch",
+        Ok("release_artifact_invalid") => "release_artifact_invalid",
+        Ok("release_artifact_limits") => "release_artifact_limits",
+        Ok("release_artifact_manifest_invalid") => "release_artifact_manifest_invalid",
+        Ok("release_artifact_manifest_mismatch") => "release_artifact_manifest_mismatch",
+        Ok("release_artifact_missing") => "release_artifact_missing",
+        Ok("release_artifact_truncated") => "release_artifact_truncated",
+        Ok("release_digest_invalid") => "release_digest_invalid",
+        Ok("release_input_invalid") => "release_input_invalid",
+        Ok("release_lease_invalid") => "release_lease_invalid",
+        Ok("release_migration_artifact_invalid") => "release_migration_artifact_invalid",
+        Ok("release_migration_collision") => "release_migration_collision",
+        Ok("release_migration_digest_mismatch") => "release_migration_digest_mismatch",
+        Ok("release_not_prepared") => "release_not_prepared",
+        Ok("release_root_not_owned") => "release_root_not_owned",
+        Ok("release_root_not_private") => "release_root_not_private",
+        Ok("release_root_unavailable") => "release_root_unavailable",
+        Ok("release_route_generation_collision") => "release_route_generation_collision",
+        Ok("release_route_generation_mismatch") => "release_route_generation_mismatch",
+        Ok("release_route_generation_stale") => "release_route_generation_stale",
+        Ok("release_route_manifest_bytes_missing") => "release_route_manifest_bytes_missing",
+        Ok("release_route_manifest_collision") => "release_route_manifest_collision",
+        Ok("release_route_manifest_digest_mismatch") => "release_route_manifest_digest_mismatch",
+        Ok("release_route_manifest_invalid") => "release_route_manifest_invalid",
+        Ok("release_route_manifest_mismatch") => "release_route_manifest_mismatch",
+        Ok("release_static_collision") => "release_static_collision",
+        Ok("release_static_invalid") => "release_static_invalid",
+        Ok("release_switch_identity_invalid") => "release_switch_identity_invalid",
+        _ => "release_coordinator_failed",
+    }
 }
 
 fn private_temp(root: &Path, stem: &str, bytes: Vec<u8>) -> Result<PathBuf, &'static str> {

@@ -170,6 +170,7 @@ fn reconcile_once<W: Write, E: Write>(
                 options,
                 token,
                 &identity,
+                error,
                 CompletionOutcome {
                     state: "failed",
                     code,
@@ -214,6 +215,7 @@ fn reconcile_once<W: Write, E: Write>(
                 options,
                 token,
                 &identity,
+                error,
                 CompletionOutcome {
                     state: "failed",
                     code: "release_probes_missing",
@@ -248,6 +250,7 @@ fn reconcile_once<W: Write, E: Write>(
                         options,
                         token,
                         &identity,
+                        error,
                         CompletionOutcome {
                             state: "failed",
                             code: "release_probe_failed",
@@ -273,6 +276,7 @@ fn reconcile_once<W: Write, E: Write>(
                     options,
                     token,
                     &identity,
+                    error,
                     CompletionOutcome {
                         state: "failed",
                         code,
@@ -298,11 +302,23 @@ fn reconcile_once<W: Write, E: Write>(
         .or_else(|| lease.pointer("/migration/migration_apply_receipt_digest"))
         .or_else(|| lease.pointer("/migration/apply_receipt_digest"))
         .and_then(|value| value.as_str());
+    let _ = writeln!(
+        output,
+        "{}",
+        serde_json::json!({
+            "schema":"hostlet.release-probe-submission/v1",
+            "reconciliation_id":identity.reconciliation_id,
+            "attempt_id":identity.attempt_id,
+            "fence":identity.fence,
+            "probe_receipt_digests":&receipt_digests,
+        })
+    );
     let prepared = match complete(
         client,
         options,
         token,
         &identity,
+        error,
         CompletionOutcome {
             state: "succeeded",
             code: "release_checks_passed",
@@ -479,11 +495,12 @@ fn renew(
     client.post(url).bearer_auth(token).json(&serde_json::json!({"worker_id":options.worker_id,"attempt_id":id.attempt_id,"fence":id.fence}))
         .send().ok().filter(|r| r.status().is_success()).map(|_| ()).ok_or(())
 }
-fn complete(
+fn complete<E: Write>(
     client: &reqwest::blocking::Client,
     options: &ReleaseReconcilerOptions,
     token: &str,
     id: &LeaseIdentity,
+    error: &mut E,
     outcome: CompletionOutcome<'_>,
 ) -> Result<serde_json::Value, &'static str> {
     let url = format!(
@@ -503,6 +520,87 @@ fn complete(
         .send()
         .map_err(|_| "release_completion_unavailable")?;
     if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let code = if response.take(2049).read_to_end(&mut body).is_ok() && body.len() <= 2048 {
+            serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(
+                    |value| match value.pointer("/error/code").and_then(|v| v.as_str()) {
+                        Some("authentication_required") => Some("authentication_required"),
+                        Some("database_unavailable") => Some("database_unavailable"),
+                        Some("foundation_unavailable") => Some("foundation_unavailable"),
+                        Some("internal_error") => Some("internal_error"),
+                        Some("not_found") => Some("not_found"),
+                        Some("release_reconciliation_fenced") => {
+                            Some("release_reconciliation_fenced")
+                        }
+                        Some("release_route_changed") => Some("release_route_changed"),
+                        Some("release_route_generation_stale") => {
+                            Some("release_route_generation_stale")
+                        }
+                        Some("release_runtime_unhealthy") => Some("release_runtime_unhealthy"),
+                        Some("release_runtime_ineligible") => Some("release_runtime_ineligible"),
+                        Some("release_secret_version_expired") => {
+                            Some("release_secret_version_expired")
+                        }
+                        Some("release_completion_invalid") => Some("release_completion_invalid"),
+                        Some("release_probe_set_invalid") => Some("release_probe_set_invalid"),
+                        Some("release_probe_duplicate") => Some("release_probe_duplicate"),
+                        Some("release_probe_set_mismatch") => Some("release_probe_set_mismatch"),
+                        Some("release_evidence_missing") => Some("release_evidence_missing"),
+                        Some("release_evidence_invalid") => Some("release_evidence_invalid"),
+                        Some("release_evidence_digest_mismatch") => {
+                            Some("release_evidence_digest_mismatch")
+                        }
+                        Some("release_executor_identity_mismatch") => {
+                            Some("release_executor_identity_mismatch")
+                        }
+                        Some("migration_apply_evidence_missing") => {
+                            Some("migration_apply_evidence_missing")
+                        }
+                        Some("migration_apply_evidence_mismatch") => {
+                            Some("migration_apply_evidence_mismatch")
+                        }
+                        Some("migration_trial_not_prepared") => {
+                            Some("migration_trial_not_prepared")
+                        }
+                        Some("migration_trial_apply_receipt_mismatch") => {
+                            Some("migration_trial_apply_receipt_mismatch")
+                        }
+                        Some("migration_release_mismatch") => Some("migration_release_mismatch"),
+                        Some("migration_runtime_evidence_invalid") => {
+                            Some("migration_runtime_evidence_invalid")
+                        }
+                        Some("migration_runtime_evidence_incomplete") => {
+                            Some("migration_runtime_evidence_incomplete")
+                        }
+                        Some("migration_runtime_evidence_duplicate") => {
+                            Some("migration_runtime_evidence_duplicate")
+                        }
+                        Some("migration_runtime_evidence_unexpected") => {
+                            Some("migration_runtime_evidence_unexpected")
+                        }
+                        Some("migration_runtime_targets_missing") => {
+                            Some("migration_runtime_targets_missing")
+                        }
+                        Some("migration_cross_version_evidence_incomplete") => {
+                            Some("migration_cross_version_evidence_incomplete")
+                        }
+                        Some("migration_runtime_targets_changed") => {
+                            Some("migration_runtime_targets_changed")
+                        }
+                        _ => None,
+                    },
+                )
+                .unwrap_or("unknown")
+        } else {
+            "unknown"
+        };
+        let _ = writeln!(
+            error,
+            "release_completion_rejection status={status} code={code}"
+        );
         return Err("release_completion_rejected");
     }
     response.json().map_err(|_| "release_completion_invalid")

@@ -33,7 +33,7 @@ in [the M1 handoff](docs/M1-HANDOFF.md). The upfront M2 inventory remains
 [M2 scenarios](docs/M2-SCENARIOS.md).
 
 The next milestone is **M3 — Working demo and portfolio**, ending at HOST-233.
-HOST-222 and HOST-225 are active in Helm for runtime and disposable-VM build verification. HOST-223 and HOST-227 have completed prerequisites; later dependent cards remain unclaimed. Helm accepted both claims and structured progress; the latest dependency snapshot is revision 11758. The resumed M3 assignment uses Luna workers with Sol owning integration and verification. No M3 completion is implied. See [M3 scenarios](docs/M3-SCENARIOS.md) for the upfront acceptance inventory.
+HOST-222 and HOST-225 are active in Helm for runtime and disposable-VM build verification. HOST-223 and HOST-227 have completed prerequisites; later dependent cards remain unclaimed. Helm accepted both claims and structured progress; the latest dependency snapshot is revision 11758. The September 23 correction requires GPT-6 Sol workers at medium reasoning, with the primary owning integration and verification. No M3 completion is implied. See [M3 scenarios](docs/M3-SCENARIOS.md) for the upfront acceptance inventory.
 The planned paid-pilot readiness release remains planned; M2 does not authorize
 customer execution, live payments, provider purchases or a production launch.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) retains the observed

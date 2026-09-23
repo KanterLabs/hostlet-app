@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync, chmodSync } from "node:fs";
 import https from "node:https";
 import { join } from "node:path";
 import { beginBrowser } from "./interactive-browser.mjs";
@@ -309,6 +309,219 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
   function evidenceInteger(value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
     return Number.isSafeInteger(value) && value >= minimum && value <= maximum ? value : null;
   }
+  function workerProbeSubmission(reconciliationId, attemptId, fence) {
+    if (!worker || !evidenceUuid(reconciliationId) || !evidenceUuid(attemptId) ||
+        evidenceInteger(fence, { minimum: 1 }) === null) return null;
+    const path = join(context.artifactDir, "logs", "m3-release-worker.log");
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 1024 * 1024 ||
+        (metadata.mode & 0o077) !== 0 || realpathSync(path) !== path) return null;
+    const bytes = readFileSync(path);
+    if (bytes.length > 1024 * 1024) return null;
+    const expectedKeys = ["attempt_id", "fence", "probe_receipt_digests", "reconciliation_id", "schema"];
+    const matching = [];
+    for (const line of bytes.toString("utf8").split(/\r?\n/)) {
+      if (line.length < 2 || line.length > 4096 || line[0] !== "{") continue;
+      let value;
+      try { value = JSON.parse(line); } catch { continue; }
+      if (!value || typeof value !== "object" || Array.isArray(value) ||
+          Object.keys(value).sort().join(",") !== expectedKeys.join(",") ||
+          value.schema !== "hostlet.release-probe-submission/v1" ||
+          value.reconciliation_id !== reconciliationId || value.attempt_id !== attemptId ||
+          value.fence !== fence || !Array.isArray(value.probe_receipt_digests) ||
+          value.probe_receipt_digests.length > 17 ||
+          value.probe_receipt_digests.some((digest) => !validReleaseDigest(digest)) ||
+          new Set(value.probe_receipt_digests).size !== value.probe_receipt_digests.length) continue;
+      matching.push(value.probe_receipt_digests);
+    }
+    return matching.length === 1 ? matching[0] : null;
+  }
+
+  function safeReleaseReceipt(digest) {
+    const root = join(m3.policyClock.stateDir, "evidence", "sha256");
+    const path = join(root, digest.slice(7, 9), `${digest.slice(9)}.json`);
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 64 * 1024 ||
+        (metadata.mode & 0o077) !== 0 || realpathSync(path) !== path) return null;
+    const bytes = readFileSync(path);
+    if (bytes.length > 64 * 1024 || releaseSha256(bytes) !== digest) return null;
+    let value;
+    try { value = JSON.parse(bytes.toString("utf8")); } catch { return null; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const uuid = (field) => evidenceUuid(value[field]);
+    const code = (field) => evidenceCode(value[field]);
+    const linked = [];
+    const link = (field) => {
+      if (validReleaseDigest(value[field])) linked.push(value[field]);
+    };
+    const base = { digest, schema: value.schema };
+    if (value.schema === "hostlet.runtime.executor-receipt/v1") {
+      return { summary: { ...base, allocation_id: uuid("allocation_id"),
+        artifact_digest: validReleaseDigest(value.artifact_digest) ? value.artifact_digest : null,
+        runtime_binary_digest: validReleaseDigest(value.runtime_binary_digest) ? value.runtime_binary_digest : null,
+        policy_digest: validReleaseDigest(value.policy_digest) ? value.policy_digest : null,
+        capability_digest: validReleaseDigest(value.capability_digest) ? value.capability_digest : null,
+        generation: evidenceInteger(value.generation, { minimum: 1 }),
+        fence: evidenceInteger(value.fence, { minimum: 1 }),
+        operation: evidenceState(value.operation, new Set(["prepare", "start", "inspect", "stop", "cleanup", "reconcile", "validate"])),
+        status: evidenceState(value.status, new Set(["prepared", "running", "stopped", "cleaned", "restart_scheduled", "backoff"])),
+        result: evidenceState(value.result, new Set(["passed", "failed"])),
+        reason_code: code("reason_code"),
+        profile: evidenceState(value.profile, new Set(["evidence_gated_owned_fixture", "owned_fixture_evaluation"])),
+        platform: evidenceState(value.platform, new Set(["systrap", "kvm"])),
+        runsc_status: evidenceState(value.runsc_status, new Set(["created", "running", "stopped"])),
+        observed_limits_present: value.observed_limits !== null && typeof value.observed_limits === "object" && !Array.isArray(value.observed_limits),
+        health_passing: typeof value.health?.passing === "boolean" ? value.health.passing : null,
+        cleanup: value.cleanup && typeof value.cleanup === "object" ? {
+          sandbox_absent: typeof value.cleanup.sandbox_absent === "boolean" ? value.cleanup.sandbox_absent : null,
+          application_namespace_absent: typeof value.cleanup.application_namespace_absent === "boolean" ? value.cleanup.application_namespace_absent : null,
+          gateway_namespace_absent: typeof value.cleanup.gateway_namespace_absent === "boolean" ? value.cleanup.gateway_namespace_absent : null,
+          cgroup_absent: typeof value.cleanup.cgroup_absent === "boolean" ? value.cleanup.cgroup_absent : null,
+          state_retained: typeof value.cleanup.state_retained === "boolean" ? value.cleanup.state_retained : null,
+        } : null }, linked };
+    }
+    if (value.schema === "hostlet.runtime.probe-receipt/v1" || value.schema === "hostlet.runtime.probe-receipt/v2") {
+      for (const field of ["executor_receipt_digest", "application_probe_receipt_digest", "cleanup_receipt_digest"]) link(field);
+      return { summary: { ...base, probe_execution_id: uuid("probe_execution_id"),
+        reconciliation_id: uuid("reconciliation_id"), attempt_id: uuid("attempt_id"),
+        release_fence: evidenceInteger(value.release_fence, { minimum: 1 }),
+        release_id: uuid("release_id"), peer_release_id: uuid("peer_release_id"),
+        source_allocation_id: uuid("source_allocation_id"),
+        source_generation: evidenceInteger(value.source_generation, { minimum: 1 }),
+        source_fence: evidenceInteger(value.source_fence, { minimum: 1 }),
+        allocation_id: uuid("allocation_id"), generation: evidenceInteger(value.generation, { minimum: 1 }),
+        fence: evidenceInteger(value.fence, { minimum: 1 }),
+        artifact_digest: validReleaseDigest(value.artifact_digest) ? value.artifact_digest : null,
+        database_generation: uuid("database_generation"), migration_id: uuid("migration_id"),
+        target: evidenceState(value.target, new Set(["isolated"])), check_kind: code("check_kind"),
+        result: evidenceState(value.result, new Set(["passed", "failed"])), reason_code: code("reason_code"),
+        observed_at_unix_ms: evidenceInteger(value.observed_at_unix_ms, { minimum: 1 }),
+        safe_status_code: evidenceInteger(value.http?.safe_status_code, { minimum: 100, maximum: 599 }),
+        assertions_count: Array.isArray(value.assertions) ? Math.min(value.assertions.length, 64) : null,
+        assertions_all_passed: Array.isArray(value.assertions) ? value.assertions.every((item) => item?.passed === true) : null,
+        linked_digests: linked }, linked };
+    }
+    if (value.schema === "hostlet.runtime.application-probe-receipt/v1") {
+      return { summary: { ...base, probe_execution_id: uuid("probe_execution_id"),
+        allocation_id: uuid("allocation_id"), generation: evidenceInteger(value.generation, { minimum: 1 }),
+        fence: evidenceInteger(value.fence, { minimum: 1 }),
+        artifact_digest: validReleaseDigest(value.artifact_digest) ? value.artifact_digest : null,
+        database_generation: uuid("database_generation"), migration_id: uuid("migration_id"),
+        check_kind: code("check_kind"), target: evidenceState(value.target, new Set(["isolated"])),
+        result: evidenceState(value.result, new Set(["passed", "failed"])), reason_code: code("reason_code"),
+        observed_at_unix_ms: evidenceInteger(value.observed_at_unix_ms, { minimum: 1 }),
+        write_status_code: evidenceInteger(value.http?.write_status_code, { minimum: 100, maximum: 599 }),
+        read_status_code: evidenceInteger(value.http?.read_status_code, { minimum: 100, maximum: 599 }),
+        response_digest_valid: validReleaseDigest(value.http?.response_sha256),
+        elapsed_ms: evidenceInteger(value.http?.elapsed_ms, { minimum: 1 }),
+        assertions_count: Array.isArray(value.assertions) ? Math.min(value.assertions.length, 64) : null,
+        assertions_all_passed: Array.isArray(value.assertions) ? value.assertions.every((item) => item?.passed === true) : null }, linked };
+    }
+    if (value.schema === "hostlet.release-stage-receipt/v1") {
+      return { summary: { ...base, release_id: uuid("release_id"),
+        result: evidenceState(value.result, new Set(["staged", "failed"])) }, linked };
+    }
+    return null;
+  }
+
+  async function releaseReceiptEvidence(projectId, releaseId, reconciliationId, attemptId, fence, artifactSequence) {
+    const empty = { expected_probes: [], submission: { matched: false, digest_count: 0 },
+      database_links_available: false, seed_count: 0, entries: [], unavailable_count: 0, truncated: false };
+    if (!evidenceUuid(projectId) || !evidenceUuid(releaseId) || !evidenceUuid(reconciliationId)) return empty;
+    let observed = null;
+    try { observed = await m3.postgres.psqlJson(`m3-release-failure-receipt-links-${artifactSequence}`, `SELECT json_build_object(
+      'required',COALESCE((SELECT json_agg(json_build_object(
+        'probe_execution_id',probe.value->>'probe_execution_id',
+        'check_kind',probe.value->>'check_kind',
+        'reconciliation_id',probe.value->>'reconciliation_id',
+        'attempt_id',probe.value->>'attempt_id',
+        'release_fence',probe.value->'release_fence',
+        'release_id',probe.value->>'release_id',
+        'peer_release_id',probe.value->>'peer_release_id',
+        'source_allocation_id',probe.value->>'source_allocation_id',
+        'source_generation',probe.value->'source_generation',
+        'source_fence',probe.value->'source_fence',
+        'artifact_digest',probe.value->>'artifact_digest',
+        'database_generation',probe.value->>'database_generation',
+        'migration_id',probe.value->>'migration_id',
+        'target',probe.value->>'target',
+        'executor_receipt_digest',probe.value->>'executor_receipt_digest',
+        'executor_template_receipt_digest',probe.value->>'executor_template_receipt_digest') ORDER BY probe.ordinality)
+        FROM release_reconciliations r, LATERAL jsonb_array_elements(COALESCE(r.requirements->'required_probes','[]'::jsonb))
+          WITH ORDINALITY probe(value,ordinality)
+        WHERE r.id='${reconciliationId}'::uuid AND r.project_id='${projectId}'::uuid
+          AND r.release_id='${releaseId}'::uuid),'[]'::json),
+      'result',(SELECT json_build_object(
+        'probe_receipt_digests',r.result->'probe_receipt_digests',
+        'isolated_probe_receipt_digests',r.result->'isolated_probe_receipt_digests',
+        'migration_stage_receipt_digest',r.result->>'migration_stage_receipt_digest',
+        'isolated_apply_receipt_digest',r.result->>'isolated_apply_receipt_digest')
+        FROM release_reconciliations r WHERE r.id='${reconciliationId}'::uuid
+          AND r.project_id='${projectId}'::uuid AND r.release_id='${releaseId}'::uuid));`);
+      empty.database_links_available = true;
+    } catch {
+      // Exact worker submission can still seed receipt evidence when PostgreSQL is unavailable.
+    }
+    const seeds = [];
+    let submitted = null;
+    try { submitted = workerProbeSubmission(reconciliationId, attemptId, fence); } catch { submitted = null; }
+    if (submitted) {
+      empty.submission = { matched: true, digest_count: submitted.length };
+      seeds.push(...submitted);
+    }
+    for (const probe of Array.isArray(observed?.required) ? observed.required.slice(0, 24) : []) {
+      empty.expected_probes.push({ probe_execution_id: evidenceUuid(probe?.probe_execution_id),
+        reconciliation_id: evidenceUuid(probe?.reconciliation_id), attempt_id: evidenceUuid(probe?.attempt_id),
+        release_fence: evidenceInteger(probe?.release_fence, { minimum: 1 }),
+        release_id: evidenceUuid(probe?.release_id), peer_release_id: evidenceUuid(probe?.peer_release_id),
+        source_allocation_id: evidenceUuid(probe?.source_allocation_id),
+        source_generation: evidenceInteger(probe?.source_generation, { minimum: 1 }),
+        source_fence: evidenceInteger(probe?.source_fence, { minimum: 1 }),
+        artifact_digest: validReleaseDigest(probe?.artifact_digest) ? probe.artifact_digest : null,
+        database_generation: evidenceUuid(probe?.database_generation), migration_id: evidenceUuid(probe?.migration_id),
+        target: evidenceState(probe?.target, new Set(["isolated"])), check_kind: evidenceCode(probe?.check_kind) });
+      for (const field of ["executor_receipt_digest", "executor_template_receipt_digest"]) {
+        if (validReleaseDigest(probe?.[field])) seeds.push(probe[field]);
+      }
+    }
+    for (const field of ["probe_receipt_digests", "isolated_probe_receipt_digests"]) {
+      for (const digest of Array.isArray(observed?.result?.[field]) ? observed.result[field].slice(0, 24) : []) {
+        if (validReleaseDigest(digest)) seeds.push(digest);
+      }
+    }
+    for (const field of ["migration_stage_receipt_digest", "isolated_apply_receipt_digest"]) {
+      if (validReleaseDigest(observed?.result?.[field])) seeds.push(observed.result[field]);
+    }
+    const queue = [...new Set(seeds)].slice(0, 48);
+    empty.seed_count = queue.length;
+    empty.truncated = seeds.length > 48 || (Array.isArray(observed?.required) && observed.required.length > 24) ||
+      ["probe_receipt_digests", "isolated_probe_receipt_digests"].some((field) =>
+        Array.isArray(observed?.result?.[field]) && observed.result[field].length > 24);
+    const visited = new Set();
+    while (queue.length && visited.size < 96) {
+      const digest = queue.shift();
+      if (visited.has(digest)) continue;
+      visited.add(digest);
+      let receipt;
+      try { receipt = safeReleaseReceipt(digest); } catch { receipt = null; }
+      if (!receipt) { empty.unavailable_count += 1; continue; }
+      empty.entries.push(receipt.summary);
+      for (const linked of receipt.linked) if (!visited.has(linked) && !queue.includes(linked)) queue.push(linked);
+    }
+    if (queue.length) empty.truncated = true;
+    for (const probe of empty.expected_probes) {
+      const actual = probe.probe_execution_id === null ? null : empty.entries.find((entry) =>
+        entry.schema === "hostlet.runtime.probe-receipt/v2" &&
+        entry.probe_execution_id === probe.probe_execution_id);
+      probe.receipt_linked = Boolean(actual);
+      probe.mismatched_fields = actual ? ["reconciliation_id", "attempt_id", "release_fence", "release_id",
+        "peer_release_id", "source_allocation_id", "source_generation", "source_fence", "artifact_digest",
+        "database_generation", "migration_id", "target", "check_kind"].filter((field) =>
+        probe[field] !== actual[field]) : [];
+    }
+    return empty;
+  }
+
   function workerProcessEvidence() {
     const child = worker?.process?.child;
     if (!child) return { present: false, running: false, exit_code: null, signal: null };
@@ -337,6 +550,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       attempts: { count: 0, entries: [] },
       worker_process: workerProcessEvidence(),
       current_route: { release_id: null, generation: null },
+      receipts: { expected_probes: [], submission: { matched: false, digest_count: 0 },
+        database_links_available: false, seed_count: 0, entries: [], unavailable_count: 0, truncated: false },
     };
     try {
       if (evidenceUuid(projectId) && artifactReleaseId && artifactReconciliationId) {
@@ -385,6 +600,12 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       }
     } catch {
       // Preserve the original wait failure. The bounded skeleton remains safe if evidence reads fail.
+    }
+    try {
+      evidence.receipts = await releaseReceiptEvidence(projectId, releaseId, reconciliationId,
+        evidence.reconciliation.current_attempt_id, evidence.reconciliation.current_fence, artifactSequence);
+    } catch {
+      // Keep the original wait failure and metadata if exact receipt traversal is unavailable.
     }
     evidence.worker_process = workerProcessEvidence();
     try {
@@ -459,7 +680,32 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
   async function awaitReleaseAndDatabase(staged, expected) {
     if (!staged.migration.id) return awaitRelease(staged.projectId, staged.releaseId, expected, staged.reconciliationId);
     try {
+      const terminal = async (value) => {
+        const release = value.releases.find(({ id }) => id === staged.releaseId);
+        if (release && expected.includes(release.state)) {
+          if (release.state === "healthy" && !migrationFences.has(staged.migration.id)) {
+            throw new TerminalReleaseWaitError("migration live apply reached a healthy release state before its exact stale lease was fenced");
+          }
+          const stale = migrationFences.get(staged.migration.id);
+          if (release.state === "healthy" && stale && stale.rejected !== true) {
+            const completion = await m3.roleInternal("database", `/internal/v1/tenant-database-operations/${stale.operationId}/complete`, {
+              method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
+                fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
+            });
+            if (completion.status !== 409) throw new TerminalReleaseWaitError("stale live-migration completion was not fenced");
+            stale.rejected = true;
+          }
+          return { release, history: value };
+        }
+        if (release && ["failed", "healthy", "retired"].includes(release.state)) {
+          throw new TerminalReleaseWaitError(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
+        }
+        return null;
+      };
       return await eventually(`migration release ${staged.releaseId}`, async () => {
+        const beforeDrain = await terminal(await history(staged.projectId));
+        if (beforeDrain) return beforeDrain;
+        assertOwnedReleaseWorkerRunning();
         if (!migrationFences.has(staged.migration.id)) {
           // Keep the live apply queued while the trial, backup, and any other
           // database work drains. This makes the stale-lease exercise a
@@ -487,26 +733,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         if (migrationFences.has(staged.migration.id)) {
           await dataStage.drainWorker(`release-live-migration-${staged.migration.id}`);
         }
-        const value = await history(staged.projectId);
-        const release = value.releases.find(({ id }) => id === staged.releaseId);
-        if (release && expected.includes(release.state)) {
-          if (release.state === "healthy" && !migrationFences.has(staged.migration.id)) {
-            throw new TerminalReleaseWaitError("migration live apply reached a healthy release state before its exact stale lease was fenced");
-          }
-          const stale = migrationFences.get(staged.migration.id);
-          if (release.state === "healthy" && stale && stale.rejected !== true) {
-            const completion = await m3.roleInternal("database", `/internal/v1/tenant-database-operations/${stale.operationId}/complete`, {
-              method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
-                fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
-            });
-            if (completion.status !== 409) throw new TerminalReleaseWaitError("stale live-migration completion was not fenced");
-            stale.rejected = true;
-          }
-          return { release, history: value };
-        }
-        if (release && ["failed", "healthy", "retired"].includes(release.state)) {
-          throw new TerminalReleaseWaitError(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
-        }
+        const afterDrain = await terminal(await history(staged.projectId));
+        if (afterDrain) return afterDrain;
         assertOwnedReleaseWorkerRunning();
         return null;
       }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });

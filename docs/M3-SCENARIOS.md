@@ -2,8 +2,9 @@
 
 Written before M3 implementation. Scope is HOST-222, HOST-223, HOST-225,
 HOST-227, HOST-226, HOST-229 and the HOST-233 stop. The September 22 assignment
-authorizes owned local fixtures through this gate; the resumed assignment uses
-Luna workers with Sol owning integration and verification.
+authorizes owned local fixtures through this gate; the September 23 correction
+requires GPT-6 Sol workers at medium reasoning, with the primary owning
+integration and verification.
 These are planned observable outcomes, not completed evidence. Stop before M4.
 No post-implementation unit tests will be added.
 

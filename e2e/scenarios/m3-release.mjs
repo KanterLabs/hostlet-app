@@ -150,19 +150,36 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
   const newAgainstNewPayload = newAgainstNew.status === 200 ? newAgainstNew.json() : null;
   const activeApiAfterCrossPayload = activeApiAfterCross.status === 200 ? activeApiAfterCross.json() : null;
   const retainedApiPayload = retainedApi.status === 200 ? retainedApi.json() : null;
-  const overlapPassed =
-    oldPage.status === 200 && oldPage.text().includes("frontend-v1") &&
-      cachedOldAgainstNew.release === "frontend-v1 using api-v2" &&
-      cachedOldAgainstNew.rows.some(({ text }) => text === "cached-v1-against-v2") &&
-      newPage.status === 200 && newPage.text().includes("frontend-v2") && newAgainstNewPayload?.api_version === "api-v2" &&
-      newAgainstRetained.release === "frontend-v2 using api-v1" &&
-      newAgainstRetained.rows.some(({ text }) => text === "new-v2-against-retained-v1") &&
-      activeApiAfterCross.status === 200 && activeApiAfterCrossPayload?.api_version === "api-v2" &&
-      Array.isArray(activeApiAfterCrossPayload?.items) && activeApiAfterCrossPayload.items.some(({ name }) => name === "cached-v1-against-v2") &&
-      retainedApi.status === 200 && retainedApiPayload?.api_version === "api-v1" &&
-      Array.isArray(retainedApiPayload?.items) && retainedApiPayload.items.some(({ name }) => name === "new-v2-against-retained-v1") &&
-      Date.parse(route2.manifest.drain_expires_at) > Date.now() &&
-      newBrowserEvidence.release === "frontend-v2 using api-v2";
+  // The HTML shell loads a JS bundle; the frontend release label exists only
+  // after that bundle executes, so prove its identity in the real browser.
+  const overlapChecks = {
+    old_html_status: oldPage.status === 200,
+    old_browser_initial_pair: oldBrowserInitial.release === "frontend-v1 using api-v1",
+    cached_old_frontend_pair: cachedOldAgainstNew.release === "frontend-v1 using api-v2",
+    cached_old_frontend_write: cachedOldAgainstNew.rows.some(({ text }) => text === "cached-v1-against-v2"),
+    new_html_status: newPage.status === 200,
+    new_browser_initial_pair: newBrowserEvidence.release === "frontend-v2 using api-v2",
+    new_api_status: newAgainstNew.status === 200,
+    new_api_version: newAgainstNewPayload?.api_version === "api-v2",
+    new_frontend_retained_pair: newAgainstRetained.release === "frontend-v2 using api-v1",
+    new_frontend_retained_write: newAgainstRetained.rows.some(({ text }) => text === "new-v2-against-retained-v1"),
+    active_api_status: activeApiAfterCross.status === 200,
+    active_api_version: activeApiAfterCrossPayload?.api_version === "api-v2",
+    active_api_cross_write: Array.isArray(activeApiAfterCrossPayload?.items) &&
+      activeApiAfterCrossPayload.items.some(({ name }) => name === "cached-v1-against-v2"),
+    retained_api_status: retainedApi.status === 200,
+    retained_api_version: retainedApiPayload?.api_version === "api-v1",
+    retained_api_cross_write: Array.isArray(retainedApiPayload?.items) &&
+      retainedApiPayload.items.some(({ name }) => name === "new-v2-against-retained-v1"),
+    drain_still_open: Date.parse(route2.manifest.drain_expires_at) > Date.now(),
+  };
+  const failedOverlapChecks = Object.entries(overlapChecks).filter(([, passed]) => !passed).map(([name]) => name);
+  const overlapPassed = failedOverlapChecks.length === 0;
+  if (!overlapPassed) context.assertion("m3-release-client-overlap", "M3 coordinated releases",
+    "both browser-rendered frontend/API pairs, cross-version writes, direct API responses, and the drain window hold",
+    { failed_checks: failedOverlapChecks, old_html_status: oldPage.status, new_html_status: newPage.status,
+      new_api_status: newAgainstNew.status, active_api_status: activeApiAfterCross.status,
+      retained_api_status: retainedApi.status, drain_expires_at: route2.manifest.drain_expires_at }, false);
   assertResult("m3-release-client-overlap", overlapPassed,
     { cached_old_frontend: cachedOldAgainstNew, cached_old_frontend_api: cachedOldAgainstNew.release,
       new_frontend_api: newAgainstNewPayload?.api_version ?? null,

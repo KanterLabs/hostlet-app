@@ -283,9 +283,13 @@ function stageCanonicalArtifact(m3, detail, artifact, artifactRoot) {
 async function configureAdmission(m3) {
   const current = await m3.ownerHTTP("/v1/entitlements/current");
   assertStatus(current, 200, "M3 inherited entitlement fixture");
+  // The full journey can retain ten rollout holds: three populated build
+  // replacements, one isolated probe build, and six release/approval rebuilds.
+  // Keep two bounded fixture slots for deterministic replay/setup attempts.
+  const rolloutHeadroomLimit = 12;
   const capacity = await m3.callInternal("/internal/v1/admission/capacity", {
     method: "POST",
-    body: { event_id: randomUUID(), pool_key: POOL, profile: "m3-upgrade-standard", hosted_slot_limit: 32, rollout_headroom_limit: 4 },
+    body: { event_id: randomUUID(), pool_key: POOL, profile: "m3-upgrade-standard", hosted_slot_limit: 32, rollout_headroom_limit: rolloutHeadroomLimit },
   });
   assertStatus(capacity, 200, "M3 build capacity fixture");
   const entitlement = await m3.callInternal("/internal/v1/admission/entitlements", {
@@ -828,20 +832,63 @@ function createBuildUnitGuard(m3, setup) {
     if (existsSync(directory)) throw new Error(`run-owned build socket directory remains: ${directory}`);
     return true;
   };
+  const discoverOwnedSocketAttempts = (jobId) => {
+    const attempts = new Set();
+    for (const entry of readdirSync("/tmp")) {
+      const matched = /^hostlet-build-([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.exec(entry);
+      if (!matched) continue;
+      const attemptId = matched[1];
+      const directory = join("/tmp", entry);
+      let directoryMetadata;
+      try {
+        directoryMetadata = lstatSync(directory);
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      if (!directoryMetadata.isDirectory() || directoryMetadata.isSymbolicLink() ||
+          directoryMetadata.uid !== process.getuid()) continue;
+      const marker = join(directory, ".hostlet-owned");
+      let markerMetadata;
+      try {
+        markerMetadata = lstatSync(marker);
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink() || markerMetadata.uid !== process.getuid()) continue;
+      const expectedMarker = `hostlet-build-sockets/v1\njob=${jobId}\nattempt=${attemptId}\n`;
+      const markerValue = readFileSync(marker, "utf8");
+      if (markerValue === expectedMarker) {
+        attempts.add(attemptId);
+      } else if (markerValue.startsWith(`hostlet-build-sockets/v1\njob=${jobId}\n`)) {
+        throw new Error(`refusing cleanup of build socket directory with invalid marker: ${directory}`);
+      }
+    }
+    return attempts;
+  };
   const cleanupJob = async (jobId) => {
     const tracked = jobs.get(jobId);
     if (!tracked) return { discovered: 0, stopped: 0, active: 0, socketsRemoved: 0, socketsRemaining: 0 };
     if (!tracked.attemptsCached) {
-      const durable = await m3.postgres.psqlJson(`m3-build-attempt-discovery-${jobId}`, `SELECT json_build_object(
-        'attempt_ids',COALESCE(json_agg(id::text ORDER BY id),'[]'::json)
-      ) FROM build_attempts WHERE job_id=${sqlString(jobId)};`);
-      for (const attemptId of durable.attempt_ids ?? []) {
-        if (!UUID.test(attemptId)) throw new Error("refusing to cache invalid durable build attempt identity");
-        tracked.attemptIds.add(attemptId);
+      if (m3.context.abortSignal.aborted) {
+        // The M3 context tears down PostgreSQL in its own finally block before
+        // runner-registered cleanups run after an abort. Unit and marker
+        // discovery below remain independent exact ownership boundaries.
+        tracked.attemptsCached = true;
+      } else {
+        const durable = await m3.postgres.psqlJson(`m3-build-attempt-discovery-${jobId}`, `SELECT json_build_object(
+          'attempt_ids',COALESCE(json_agg(id::text ORDER BY id),'[]'::json)
+        ) FROM build_attempts WHERE job_id=${sqlString(jobId)};`);
+        for (const attemptId of durable.attempt_ids ?? []) {
+          if (!UUID.test(attemptId)) throw new Error("refusing to cache invalid durable build attempt identity");
+          tracked.attemptIds.add(attemptId);
+        }
+        tracked.attemptsCached = true;
       }
-      tracked.attemptsCached = true;
     }
     const attemptIds = new Set(tracked.attemptIds);
+    for (const attemptId of discoverOwnedSocketAttempts(jobId)) attemptIds.add(attemptId);
     const listed = await command(
       `M3 build unit discovery ${jobId}`, tracked.profile.systemctl,
       ["list-units", `hostlet-build-${jobId}-*.service`, "--all", "--plain", "--no-legend"],

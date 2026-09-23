@@ -27,7 +27,7 @@ use crate::{
     error::{ApiError, SafeJson},
     foundation::FoundationState,
     intent::{self, Replay},
-    portfolio_drafts::m1_validation_issues,
+    portfolio_drafts::private_preview_validation_issues,
 };
 
 const CREATE_OPERATION: &str = "portfolio.preview_revision.create";
@@ -477,7 +477,7 @@ async fn create_preview_revision(
         return Err(ApiError::stale_revision().into());
     }
 
-    let draft_issues = m1_validation_issues(&request.draft);
+    let draft_issues = private_preview_validation_issues(&request.draft);
     if !draft_issues.is_empty() {
         return Err(PreviewError::Draft(draft_issues));
     }

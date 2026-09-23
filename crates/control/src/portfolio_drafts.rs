@@ -121,8 +121,20 @@ fn as_u64(value: i64) -> Result<u64, PortfolioError> {
 }
 
 pub(crate) fn m1_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation> {
-    let mut issues = draft
-        .validate()
+    input_validation_issues(draft, false)
+}
+
+pub(crate) fn private_preview_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation> {
+    input_validation_issues(draft, true)
+}
+
+fn input_validation_issues(draft: &PortfolioDraft, private_preview: bool) -> Vec<FieldViolation> {
+    let validation = if private_preview {
+        draft.validate_private_input()
+    } else {
+        draft.validate()
+    };
+    let mut issues = validation
         .err()
         .map_or_else(Vec::new, |error| error.violations);
 
@@ -142,7 +154,12 @@ pub(crate) fn m1_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation
             issues.push(FieldViolation {
                 path: format!("{path}.authorized_deployment_facts_id"),
                 code: "unauthorized_deployment_facts".into(),
-                message: "authorized deployment facts are unavailable in M1".into(),
+                message: if private_preview {
+                    "private previews cannot supply authorized deployment facts"
+                } else {
+                    "authorized deployment facts are unavailable in M1"
+                }
+                .into(),
             });
         }
 
@@ -157,7 +174,12 @@ pub(crate) fn m1_validation_issues(draft: &PortfolioDraft) -> Vec<FieldViolation
             issues.push(FieldViolation {
                 path: format!("{path}.demo_readiness"),
                 code: "readiness_unverified".into(),
-                message: "M1 drafts require never-checked demo readiness".into(),
+                message: if private_preview {
+                    "private previews require never-checked demo readiness"
+                } else {
+                    "M1 drafts require never-checked demo readiness"
+                }
+                .into(),
             });
         }
     }

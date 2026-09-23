@@ -36,6 +36,38 @@ async function ensureCheckbox(browser, selector, checked) {
   requireCheck(available, `browser checkbox ${selector} did not reach the requested state`);
 }
 
+async function observePreviewSaveResponses(browser) {
+  const installed = await browser.evaluate(`(() => {
+    if (window.__hostletPreviewSaveResponses) return true;
+    const originalFetch = window.fetch.bind(window);
+    const observed = [];
+    window.__hostletPreviewSaveResponses = observed;
+    window.fetch = (...args) => originalFetch(...args).then((response) => {
+      try {
+        const input = args[0];
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        const method = String(args[1]?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+        if (method === "POST" && url.pathname === "/v1/portfolio/preview-revisions" && observed.length < 3) {
+          const record = { status: response.status, error_code: null, issues: [] };
+          observed.push(record);
+          void response.clone().json().then((body) => {
+            const error = body?.error;
+            if (typeof error?.code === "string" && /^[a-z0-9_]{1,80}$/.test(error.code)) record.error_code = error.code;
+            const issues = error?.details?.issues;
+            if (Array.isArray(issues)) record.issues = issues.slice(0, 12).filter((issue) =>
+              typeof issue?.code === "string" && /^[a-z0-9_]{1,80}$/.test(issue.code) &&
+              typeof issue?.path === "string" && /^projects\\[\\d+\\]\\.[a-z_]+$/.test(issue.path)
+            ).map((issue) => ({ code: issue.code, path: issue.path }));
+          }).catch(() => {});
+        }
+      } catch { /* observation cannot change the browser request result */ }
+      return response;
+    });
+    return true;
+  })()`);
+  requireCheck(installed === true, "browser preview save response observer was unavailable");
+}
+
 async function safeUiState(browser) {
   if (!browser) return { browser_available: false, capture_reason: "Chromium page was unavailable" };
   return browser.evaluate(`(() => {
@@ -57,6 +89,7 @@ async function safeUiState(browser) {
       publication_notice: publicationNotice?.textContent?.trim().slice(0, 240) ?? null,
       conflict_present: Boolean(document.querySelector('[data-testid="preview-conflict"]')),
       invalid_controls: invalid.map((element) => ({ name: element.getAttribute('name') ?? element.getAttribute('data-field') ?? element.tagName.toLowerCase(), message: element.validationMessage.slice(0, 160) })),
+      save_responses: Array.isArray(window.__hostletPreviewSaveResponses) ? window.__hostletPreviewSaveResponses.slice(0, 3) : [],
     };
   })()`);
 }
@@ -117,6 +150,7 @@ async function runPreviewSaveDevelopment(context) {
       await browser.click('[data-testid="auth-form"] button[type="submit"]');
       await browser.waitFor(projectSelector, { waitTimeoutMs: 40_000 });
       await browser.waitFor('[data-testid="publication-load-review"]', { waitTimeoutMs: 40_000 });
+      await observePreviewSaveResponses(browser);
       const initialUi = await safeUiState(browser);
 
       await browser.select('[data-testid="preview-accent"]', "indigo");
@@ -146,6 +180,26 @@ async function runPreviewSaveDevelopment(context) {
       const savedProject = latest.payload.draft.projects.find((item) => item.project_reference_id === project.project_reference_id);
       const savedContext = latest.payload.preview.project_contexts.find((item) => item.project_reference_id === project.project_reference_id);
       requireCheck(latest.payload.id !== baseline.payload.id && latest.payload.revision > baseline.payload.revision && latest.payload.draft.profile.introduction === narrative && latest.payload.draft.profile.headline === headline && latest.payload.draft.section_visibility.headline === "hidden" && latest.payload.preview.accent === "indigo" && savedProject?.kind?.project_id === projectId && savedProject?.evidence?.length === 0 && savedProject?.displayed_status?.source_commit === false && savedContext?.source_revision_id === selectedSource.sourceRevisionId, "durable owner preview did not retain the browser's exact saved values and selected-source relation");
+
+      const invalidDraft = structuredClone(latest.payload.draft);
+      const hostedIndex = invalidDraft.projects.findIndex((item) => item.project_reference_id === project.project_reference_id);
+      requireCheck(hostedIndex >= 0, "saved hosted project disappeared before caller-facts rejection check");
+      invalidDraft.projects[hostedIndex].authorized_deployment_facts_id = randomUUID();
+      const suppliedFacts = await m3.ownerHTTP("/v1/portfolio/preview-revisions", {
+        method: "POST",
+        headers: { "If-Match": `"${latest.payload.revision}"`, "Idempotency-Key": `m3-preview-caller-facts-${randomUUID()}` },
+        body: { draft: invalidDraft, preview: latest.payload.preview },
+      });
+      const suppliedIssues = suppliedFacts.payload?.error?.details?.issues;
+      const forbiddenFactPath = `projects[${hostedIndex}].authorized_deployment_facts_id`;
+      requireCheck(suppliedFacts.status === 422 && suppliedFacts.payload?.error?.code === "invalid_portfolio_draft" && Array.isArray(suppliedIssues) && suppliedIssues.some((issue) => issue.code === "unauthorized_deployment_facts" && issue.path === forbiddenFactPath), "owner-supplied deployment facts ID was not rejected at the exact private preview boundary");
+      const afterRejectedFacts = await m3.ownerHTTP("/v1/portfolio/draft-revisions/latest");
+      requireCheck(afterRejectedFacts.status === 200 && afterRejectedFacts.payload?.id === latest.payload.id && afterRejectedFacts.payload?.revision === latest.payload.revision, "rejected caller deployment facts changed the saved preview revision");
+
+      const review = await m3.ownerHTTP(`/v1/portfolio/publication-review?draft_revision_id=${encodeURIComponent(latest.payload.id)}`);
+      requireCheck(review.status === 409 && review.payload?.error?.code === "deployment_facts_unavailable", "publication review accepted private display preferences without a healthy routed release");
+      const approval = await m3.ownerHTTP("/v1/portfolio/approved-revisions/latest");
+      requireCheck(approval.status === 404, "a private preview without a healthy release unexpectedly produced an approved revision");
       observations = {
         diagnostic_only: true, production_capability_registered: false, m3_gate_satisfied: false,
         project_id: projectId, selected_source_commit: selectedSource.commitSha,
@@ -154,6 +208,8 @@ async function runPreviewSaveDevelopment(context) {
         initial_ui: initialUi, unsaved_ui: unsavedUi, saved_ui: savedUi,
         owner_latest_status: latest.status, saved_introduction_sha256: sha256(Buffer.from(narrative)),
         selected_source_context_retained: true, evidence_removed: true, source_commit_opt_in: false,
+        caller_facts_rejection: { status: suppliedFacts.status, error_code: suppliedFacts.payload.error.code, issue: { code: "unauthorized_deployment_facts", path: forbiddenFactPath }, latest_revision_unchanged: true },
+        review_without_release: { status: review.status, error_code: review.payload.error.code, approved_revision_status: approval.status },
       };
     } catch (error) {
       primaryError = error;

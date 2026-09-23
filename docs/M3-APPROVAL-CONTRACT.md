@@ -10,6 +10,15 @@ role; build, database, generic M1 and future publisher credentials are rejected.
 
 ## Exact owner review
 
+The private preview saves an owner's choice of which deployment fields to
+display. It keeps `authorized_deployment_facts_id` null and requires demo
+readiness to remain `needs_recheck/never_checked`; a caller-supplied fact ID or
+readiness claim is rejected. The private-input validator applies the shared
+content, bounds, URL and project checks without requiring a fact ID before
+review. The M1 draft endpoint and the typed approved-revision validator retain
+their strict fact-binding contract. Saving a display preference alone grants
+no fact value or publication permission.
+
 `GET /v1/portfolio/publication-review?draft_revision_id=<uuid>` loads an owned,
 immutable draft revision and its appearance. The server derives every approval
 target from stored content. For displayed deployment fields it reads only the

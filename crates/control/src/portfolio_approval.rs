@@ -24,6 +24,7 @@ use crate::{
     foundation::FoundationState,
     intent::{self, Replay},
     m3::{self, RuntimeWorkerAuth},
+    portfolio_drafts::private_preview_validation_issues,
 };
 
 const APPROVE_OPERATION: &str = "portfolio.approved_revision.create";
@@ -386,12 +387,12 @@ async fn build_review(
     };
     let draft: PortfolioDraft =
         serde_json::from_value(draft_json).map_err(|_| ApiError::internal())?;
-    draft.validate().map_err(|_| {
-        ApiError::unprocessable(
+    if !private_preview_validation_issues(&draft).is_empty() {
+        return Err(ApiError::unprocessable(
             "invalid_portfolio_draft",
             "the stored portfolio draft is not valid for publication",
-        )
-    })?;
+        ));
+    }
     let preview_context: Value = sqlx::query_scalar(
         "SELECT jsonb_build_object('layout',context.layout,'typography',context.typography,'accent',context.accent) \
          FROM portfolio_preview_contexts context \

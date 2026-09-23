@@ -45,6 +45,18 @@ pub struct PortfolioDraft {
 impl PortfolioDraft {
     /// Validate bounded owner input before assigning ownership or persistence IDs.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
+        self.validate_with_fact_binding(true)
+    }
+
+    /// Validate a private draft before deployment facts are bound during publication review.
+    pub fn validate_private_input(&self) -> Result<(), ValidationErrors> {
+        self.validate_with_fact_binding(false)
+    }
+
+    fn validate_with_fact_binding(
+        &self,
+        require_authorized_facts: bool,
+    ) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
 
         validate_text(
@@ -116,6 +128,7 @@ impl PortfolioDraft {
                 project,
                 &mut project_reference_ids,
                 &mut project_orders,
+                require_authorized_facts,
             );
         }
         for expected_order in 0..self.projects.len() {
@@ -973,6 +986,7 @@ fn validate_project(
     project: &ProjectReference,
     project_reference_ids: &mut HashSet<String>,
     project_orders: &mut HashSet<u16>,
+    require_authorized_facts: bool,
 ) {
     validate_id(
         errors,
@@ -1137,10 +1151,11 @@ fn validate_project(
         &format!("{path}.authorized_deployment_facts_id"),
         project.authorized_deployment_facts_id.as_deref(),
     );
-    if (project.displayed_status.deployment_timestamp
-        || project.displayed_status.availability
-        || project.displayed_status.release_identifier
-        || project.displayed_status.source_commit)
+    if require_authorized_facts
+        && (project.displayed_status.deployment_timestamp
+            || project.displayed_status.availability
+            || project.displayed_status.release_identifier
+            || project.displayed_status.source_commit)
         && project.authorized_deployment_facts_id.is_none()
     {
         push_error(

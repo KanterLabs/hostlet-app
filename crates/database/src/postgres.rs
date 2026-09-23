@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -10,6 +10,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -924,7 +925,8 @@ REVOKE ALL ON hostlet_control.database_identity FROM PUBLIC, {runtime}, {migrati
             if existing.0 != file_digest || existing.1 != schema_revision {
                 return Err(Failure::Postgres("migration_effect_conflict"));
             }
-            return Ok(MigrationApplyResult::new(
+            return MigrationApplyResult::new(
+                &self.state_dir,
                 database_id,
                 database_generation,
                 migration_id,
@@ -933,7 +935,7 @@ REVOKE ALL ON hostlet_control.database_identity FROM PUBLIC, {runtime}, {migrati
                 existing.1,
                 existing.2,
                 true,
-            ));
+            );
         }
         let advisory_key = i64::from_be_bytes(
             migration_id.as_bytes()[..8]
@@ -1010,7 +1012,8 @@ COMMIT;
         if file != file_digest || schema != schema_revision {
             return Err(Failure::Postgres("migration_effect_conflict"));
         }
-        Ok(MigrationApplyResult::new(
+        MigrationApplyResult::new(
+            &self.state_dir,
             database_id,
             database_generation,
             migration_id,
@@ -1019,7 +1022,7 @@ COMMIT;
             schema,
             applied_at,
             already_applied,
-        ))
+        )
     }
 
     fn discover_application_roles(
@@ -1503,6 +1506,7 @@ impl MigrationApplyResult {
         reason = "the receipt digest commits each migration and target identity as a separate field"
     )]
     fn new(
+        state_dir: &Path,
         database_id: Uuid,
         database_generation: Uuid,
         migration_id: Uuid,
@@ -1511,25 +1515,106 @@ impl MigrationApplyResult {
         schema_revision: String,
         applied_at: String,
         already_applied: bool,
-    ) -> Self {
-        let receipt_digest = format!(
-            "sha256:{}",
-            sha256(
-                format!(
-                    "hostlet.database-migration-apply/v1|{database_id}|{database_generation}|{migration_id}|{}|{migration_file_digest}|{schema_revision}|{applied_at}",
-                    recovery_id.map(|id| id.to_string()).unwrap_or_else(|| "live".to_owned())
-                )
-                .as_bytes()
-            )
-        );
-        Self {
+    ) -> Result<Self, Failure> {
+        let mut receipt = serde_json::to_vec(&json!({
+            "schema":"hostlet.database-migration-apply/v1",
+            "tenant_database_id":database_id,
+            "database_generation":database_generation,
+            "migration_id":migration_id,
+            "recovery_id":recovery_id,
+            "migration_file_digest":migration_file_digest,
+            "schema_revision":schema_revision,
+            "applied_at":applied_at,
+        }))
+        .map_err(|_| Failure::Postgres("migration_apply_receipt_invalid"))?;
+        receipt.push(b'\n');
+        let receipt_digest = store_apply_receipt(state_dir, &receipt)?;
+        Ok(Self {
             migration_file_digest,
             schema_revision,
             applied_at,
             receipt_digest,
             already_applied,
+        })
+    }
+}
+
+fn store_apply_receipt(state_dir: &Path, bytes: &[u8]) -> Result<String, Failure> {
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let directory = state_dir.join("evidence").join("sha256").join(&digest[..2]);
+    let root = fs::symlink_metadata(state_dir)
+        .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+    for path in [
+        state_dir.join("evidence"),
+        state_dir.join("evidence").join("sha256"),
+        directory.clone(),
+    ] {
+        let created = match fs::create_dir(&path) {
+            Ok(()) => {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                    .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+                true
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(_) => return Err(Failure::Postgres("migration_apply_receipt_store_failed")),
+        };
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+        if !metadata.file_type().is_dir()
+            || metadata.uid() != root.uid()
+            || metadata.gid() != root.gid()
+            || metadata.permissions().mode() & 0o077 != 0
+            || fs::canonicalize(&path).ok().as_deref() != Some(path.as_path())
+        {
+            return Err(Failure::Postgres("migration_apply_receipt_store_failed"));
+        }
+        if created {
+            fs::File::open(
+                path.parent()
+                    .ok_or(Failure::Postgres("migration_apply_receipt_store_failed"))?,
+            )
+            .and_then(|file| file.sync_all())
+            .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
         }
     }
+    let destination = directory.join(format!("{}.json", &digest[2..]));
+    let temporary = directory.join(format!(".{}-{}.tmp", std::process::id(), Uuid::new_v4()));
+    let write = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        match fs::hard_link(&temporary, &destination) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error),
+        }
+    })();
+    match fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(Failure::Postgres("migration_apply_receipt_store_failed")),
+    }
+    write.map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+    let metadata = fs::symlink_metadata(&destination)
+        .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != root.uid()
+        || metadata.gid() != root.gid()
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.len() != bytes.len() as u64
+        || fs::canonicalize(&destination).ok().as_deref() != Some(destination.as_path())
+        || fs::read(&destination).ok().as_deref() != Some(bytes)
+    {
+        return Err(Failure::Postgres("migration_apply_receipt_store_failed"));
+    }
+    fs::File::open(&directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| Failure::Postgres("migration_apply_receipt_store_failed"))?;
+    Ok(format!("sha256:{digest}"))
 }
 
 #[derive(Deserialize)]

@@ -725,13 +725,16 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     const endpoint = `/v1/projects/${projectId}/deployments/${deploymentId}/migration-trial`;
     let response = await m3.ownerHTTP(endpoint, { method: "POST",
       headers: { "Idempotency-Key": `m3-migration-backup-${++sequence}` }, body });
+    const queuedArchiveId = response.status === 202 ? evidenceUuid(response.payload?.archive_id) : null;
     if (response.status === 202) {
       await dataStage.drainWorker("release-pre-migration-backup");
       response = await m3.ownerHTTP(endpoint, { method: "POST",
         headers: { "Idempotency-Key": `m3-migration-trial-${++sequence}` }, body });
     }
-    if (response.status !== 201 || response.payload.phase !== "migration_planned" || !response.payload.migration_id) {
-      throw new Error(`migration did not become planned after its fresh backup: HTTP ${response.status}`);
+    if (response.status !== 201 || response.payload?.phase !== "migration_planned" || !response.payload?.migration_id) {
+      const diagnostic = { project_id: evidenceUuid(projectId), deployment_id: evidenceUuid(deploymentId),
+        archive_id: queuedArchiveId, error_code: evidenceCode(response.payload?.error?.code) };
+      throw new Error(`migration did not become planned after its fresh backup: HTTP ${response.status}; ${JSON.stringify(diagnostic)}`);
     }
     const evidence = await m3.postgres.psqlJson("m3-release-migration-plan", `SELECT json_build_object(
       'migration_id',m.id::text,'state',m.state,'archive_id',m.pre_migration_archive_id::text,

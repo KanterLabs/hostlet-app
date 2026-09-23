@@ -1723,12 +1723,15 @@ pub(crate) async fn enqueue_migration_trial(
     // merely to the artifact digest.
     let policy_time = m3::policy_now(state).await?;
     let mut tx = state.pool.begin().await?;
+    // The worker records the policy-time snapshot in the verified receipt;
+    // verified_at is real completion time and can differ after a clock advance.
     let archive:Option<(i64,String)>=sqlx::query_as(
         "SELECT a.source_data_generation,a.encrypted_sha256 FROM tenant_database_archives a JOIN tenant_databases d \
            ON d.account_id=a.account_id AND d.project_id=a.project_id AND d.id=a.tenant_database_id AND d.generation=a.database_generation \
          WHERE a.account_id=$1 AND a.project_id=$2 AND a.tenant_database_id=$3 AND a.database_generation=$4 AND a.id=$5 \
            AND a.kind='pre_migration' AND a.state='usable' AND a.intended_migration_revision=$6 \
-           AND a.source_data_generation=d.source_data_generation AND a.verified_at >= $7 AND a.expires_at >= $8 FOR UPDATE OF d",
+           AND a.source_data_generation=d.source_data_generation AND a.snapshot_at >= $7 \
+           AND a.verified_at IS NOT NULL AND a.expires_at >= $8 FOR UPDATE OF d",
     ).bind(request.account_id).bind(request.project_id).bind(request.tenant_database_id).bind(request.database_generation)
     .bind(archive_id).bind(&request.migration_revision).bind(policy_time-Duration::hours(1)).bind(policy_time)
     .fetch_optional(&mut *tx).await?;

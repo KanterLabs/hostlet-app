@@ -326,6 +326,10 @@ For shorter debugging cycles, the partial data and runtime development
 scenarios can be run directly:
 
 ```sh
+node e2e/run.mjs --milestone M3-journey-development --task HOST-233 \
+  --scenario-module e2e/scenarios/m3-journey-development.mjs \
+  --operation-timeout 3600000 --run-timeout 7200000
+
 node e2e/run.mjs --milestone M3-data-development --task HOST-233 \
   --scenario-module e2e/scenarios/m3-data-development.mjs \
   --operation-timeout 3600000 --run-timeout 7200000
@@ -350,6 +354,10 @@ node e2e/run.mjs --milestone M3-runtime-database-bootstrap-development --task HO
 These partial commands deliberately omit parts of the journey and are
 non-gating diagnostic tools. Their receipts cannot establish completed M3
 behavior or satisfy any HOST-233 acceptance or clean-repeat requirement.
+The journey diagnostic uses the existing short real-build setup and then runs
+runtime, release, approval, publication and data recovery stages. It omits build
+retry/failure acceptance, including the real ten-minute timeout, and cannot
+replace either full clean run.
 The database bootstrap diagnostic launches one Node 24 application with a
 control-scoped tenant credential, exercises application read/write, and verifies
 secret mount and runtime cleanup. It does not register a runtime capability.

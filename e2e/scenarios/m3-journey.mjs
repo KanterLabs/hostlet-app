@@ -30,7 +30,10 @@ async function currentPresentation(m3) {
     sourceReleaseId: release.id, managedDemoUrl: release.managed_demo_url, sourceCommit: release.source_commit });
 }
 
-async function runM3Journey(context) {
+export async function runM3Journey(context, { developmentBuildsOnly = false } = {}) {
+  if (developmentBuildsOnly && context.state.configuration.scenarios.includes("m3-journey")) {
+    throw new Error("the full M3 journey cannot omit build acceptance cases");
+  }
   context.registerFixture("M3 full journey compositor", "e2e/scenarios/m3-journey.mjs");
   registerM3BuildFixtures(context);
   registerM3DataFixtures(context);
@@ -47,7 +50,7 @@ async function runM3Journey(context) {
   }
 
   await runM3Context(context, async (m3) => {
-    await phase("disposable VM builds", () => runM3BuildScenarios(m3));
+    await phase("disposable VM builds", () => runM3BuildScenarios(m3, { developmentBuildsOnly }));
     const prepared = m3.state.m3Build.fullstackV1.prepared;
     const data = createM3DataStage(m3, { mainProject: {
       graph: prepared.graph, deployment: prepared.deployment, reservation: prepared.admission.reservation,

@@ -287,16 +287,23 @@ async function configureAdmission(m3) {
   // replacements, one isolated probe build, and six release/approval rebuilds.
   // Keep two bounded fixture slots for deterministic replay/setup attempts.
   const rolloutHeadroomLimit = 12;
+  // Full build acceptance leaves 24 durable initial slots; data isolation adds
+  // one, runtime preparation adds next16/crash_runtime (two), and the build
+  // allowance probe can add unhealthy_runtime (one): 28 at the journey peak.
+  // Keep finite 32-slot owner and 40-slot pool budgets; release artifacts use
+  // rollout headroom on their existing projects.
+  const hostedSlotLimit = 32;
+  const poolHostedSlotLimit = 40;
   const capacity = await m3.callInternal("/internal/v1/admission/capacity", {
     method: "POST",
-    body: { event_id: randomUUID(), pool_key: POOL, profile: "m3-upgrade-standard", hosted_slot_limit: 32, rollout_headroom_limit: rolloutHeadroomLimit },
+    body: { event_id: randomUUID(), pool_key: POOL, profile: "m3-upgrade-standard", hosted_slot_limit: poolHostedSlotLimit, rollout_headroom_limit: rolloutHeadroomLimit },
   });
   assertStatus(capacity, 200, "M3 build capacity fixture");
   const entitlement = await m3.callInternal("/internal/v1/admission/entitlements", {
     method: "POST",
     body: {
       event_id: randomUUID(), account_id: m3.state.owner.record.id, capacity_pool_key: POOL,
-      hosted_slot_limit: 24, build_seconds_limit: 20_000,
+      hosted_slot_limit: hostedSlotLimit, build_seconds_limit: 20_000,
       period_starts_at: current.payload.period_starts_at,
       period_ends_at: current.payload.period_ends_at, state: "active",
     },

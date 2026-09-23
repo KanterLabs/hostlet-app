@@ -1247,7 +1247,7 @@ COMMIT;
                 "-d",
                 database,
                 "-c",
-                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p')",
+                "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p') AND has_table_privilege(current_user,c.oid,'SELECT')",
             ],
             Some(password),
         )?;
@@ -1274,7 +1274,7 @@ COMMIT;
             ]);
         let result = run_with_input(
             &mut command,
-            b"SELECT format('SELECT 1 FROM %I.%I LIMIT 1',n.nspname,c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p') ORDER BY c.oid LIMIT 1 \\gexec\n",
+            b"SELECT format('SELECT 1 FROM %I.%I LIMIT 1',n.nspname,c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p') AND has_table_privilege(current_user,c.oid,'SELECT') ORDER BY c.oid LIMIT 1 \\gexec\n",
             COMMAND_TIMEOUT,
         );
         let _ = fs::remove_file(env_file);
@@ -1315,7 +1315,7 @@ COMMIT;
             .stdin
             .take()
             .ok_or(Failure::Postgres("storage_write_validation_failed"))?
-            .write_all(b"SELECT format('DELETE FROM %I.%I WHERE false',n.nspname,c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p') ORDER BY c.oid LIMIT 1 \\gexec\n")
+            .write_all(b"SELECT format('DELETE FROM %I.%I WHERE false',n.nspname,c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app' AND c.relkind IN ('r','p') AND has_table_privilege(current_user,c.oid,'SELECT') ORDER BY c.oid LIMIT 1 \\gexec\n")
             .map_err(|_| Failure::Postgres("storage_write_validation_failed"))?;
         let denied = wait_child_failure(child, COMMAND_TIMEOUT)
             .map_err(|_| Failure::Postgres("storage_write_validation_failed"));

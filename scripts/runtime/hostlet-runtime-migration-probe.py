@@ -296,7 +296,8 @@ def main():
     request_keys = {
         "schema", "probe_execution_id", "reconciliation_id", "attempt_id", "release_fence",
         "check_kind", "release_id", "peer_release_id", "source_allocation_id",
-        "source_generation", "source_fence", "artifact_digest", "executor_template_receipt_digest",
+        "source_generation", "source_fence", "artifact_digest", "artifact_manifest_digest",
+        "build_profile_digest", "executor_template_receipt_digest",
         "tenant_database_id", "database_generation", "migration_id", "target", "executor",
     }
     exact_keys(request, request_keys, "migration_probe_request_invalid")
@@ -314,7 +315,8 @@ def main():
     for field in ("release_fence", "source_generation", "source_fence"):
         if not isinstance(request[field], int) or request[field] <= 0 or request[field] > 2**63 - 1:
             fail("migration_probe_identity_invalid")
-    for field in ("artifact_digest", "executor_template_receipt_digest"):
+    for field in ("artifact_digest", "artifact_manifest_digest", "build_profile_digest",
+                  "executor_template_receipt_digest"):
         if not isinstance(request[field], str) or not DIGEST.fullmatch(request[field]):
             fail("migration_probe_digest_invalid")
     executor_keys = {"runtime_binary_digest", "policy_digest", "capability_digest", "platform", "profile",
@@ -366,9 +368,22 @@ def main():
             template.get("runsc_status") != "running" or not isinstance(template.get("observed_limits"), dict) or
             template.get("health", {}).get("passing") is not True or not template.get("health", {}).get("checks")):
         fail("migration_probe_template_mismatch")
-    artifact = artifact_root / request["artifact_digest"][7:]
-    if artifact.is_symlink() or not (artifact / "rootfs").is_dir() or not (artifact / "manifest.json").is_file():
+    artifact = artifact_root / request["artifact_manifest_digest"][7:]
+    if artifact.is_symlink() or not (artifact / "rootfs").is_dir():
         fail("migration_probe_artifact_missing")
+    manifest_path = regular_file(artifact / "manifest.json")
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        if len(manifest_bytes) > 64 * 1024:
+            fail("migration_probe_artifact_invalid")
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        fail("migration_probe_artifact_invalid")
+    if (not isinstance(manifest, dict) or manifest.get("schema") != "hostlet.runtime-artifact/v1" or
+            manifest.get("archive_digest") != request["artifact_digest"] or
+            manifest.get("build_manifest_digest") != request["artifact_manifest_digest"] or
+            manifest.get("build_profile_digest") != request["build_profile_digest"]):
+        fail("migration_probe_artifact_invalid")
     inventory_path = evidence_root / "database-inventory.json"
     inventory_metadata = inventory_path.lstat()
     if not stat.S_ISREG(inventory_metadata.st_mode) or stat.S_IMODE(inventory_metadata.st_mode) & 0o077:
@@ -401,7 +416,10 @@ def main():
     runtime_request_base = {
         "schema": "hostlet.runtime.executor-request/v1", "profile": executor["profile"],
         "allocation_id": request["probe_execution_id"], "generation": 1, "fence": request["release_fence"],
-        "artifact_digest": request["artifact_digest"], "runtime_binary_digest": executor["runtime_binary_digest"],
+        "artifact_digest": request["artifact_digest"],
+        "artifact_manifest_digest": request["artifact_manifest_digest"],
+        "build_profile_digest": request["build_profile_digest"],
+        "runtime_binary_digest": executor["runtime_binary_digest"],
         "policy_digest": executor["policy_digest"], "capability_digest": executor["capability_digest"],
         "platform": executor["platform"], "argv": executor["argv"], "environment": [],
         "secret_version_refs": [{"name": "DATABASE_URL", "version_id": credential["credential_id"]}],
@@ -623,7 +641,10 @@ def main():
         "release_id": request["release_id"], "peer_release_id": request["peer_release_id"],
         "source_allocation_id": request["source_allocation_id"],
         "source_generation": request["source_generation"], "source_fence": request["source_fence"],
-        "artifact_digest": request["artifact_digest"], "database_generation": request["database_generation"],
+        "artifact_digest": request["artifact_digest"],
+        "artifact_manifest_digest": request["artifact_manifest_digest"],
+        "build_profile_digest": request["build_profile_digest"],
+        "database_generation": request["database_generation"],
         "migration_id": request["migration_id"], "target": "isolated",
         "executor_receipt_digest": executor_digest, "application_probe_receipt_digest": application_digest,
         "cleanup_receipt_digest": cleanup_digest, "result": "passed",

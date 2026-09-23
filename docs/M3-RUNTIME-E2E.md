@@ -21,7 +21,10 @@ The stage consumes `m3.state.runtimeEvaluationInputs`:
   beside it), or `{rootfs, manifest, rootfsDigest, manifestDigest}`. The stage
   invokes `scripts/runtime/prepare-artifact.py` against the canonical HCA1 and
   build-manifest objects in control's private CAS. Repeated assembly verifies
-  and reuses the exact installed artifact identity.
+  and reuses the exact installed artifact identity. Assemblies are indexed by
+  build-manifest digest, allowing equal archive bytes from different builds to
+  coexist without changing retained artifacts. Requests also bind the archive
+  and build-profile digests; a changed base under the same manifest is rejected.
 
 The runtime stage itself launches the native comparison, operator-owned gVisor
 evaluator, probes and continuity journey. Measurements must be backed by executor receipt digests
@@ -105,3 +108,22 @@ boundary; no isolated unit suite is introduced.
 The stage retains only safe identities, measurements, limits and digests.
 Credentials, connection URIs, host inventories and private source bytes never
 enter the E2E artifact.
+
+## Focused artifact identity diagnostic
+
+This diagnostic uses two real VM builds of the same full-stack source and two
+running gVisor applications against one owned tenant database. It checks equal
+archive bytes with distinct build manifests, immutable assembly coexistence,
+exact replay, conflicting-profile rejection, cross-application reads and
+writes, and cleanup receipts. It registers no production capability and cannot
+satisfy a full M3 gate.
+
+```sh
+node e2e/run.mjs --require-clean \
+  --milestone M3-runtime-artifact-identity-development --task HOST-233 \
+  --scenario-module e2e/scenarios/m3-runtime-artifact-identity-development.mjs \
+  --operation-timeout 3600000 --run-timeout 7200000
+```
+
+The standard runner retains the outcome, exact inputs and external checksum
+receipt under `artifacts/e2e/M3-runtime-artifact-identity-development/<run-id>/`.

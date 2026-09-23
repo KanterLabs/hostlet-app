@@ -392,6 +392,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         allocation_id: uuid("allocation_id"), generation: evidenceInteger(value.generation, { minimum: 1 }),
         fence: evidenceInteger(value.fence, { minimum: 1 }),
         artifact_digest: validReleaseDigest(value.artifact_digest) ? value.artifact_digest : null,
+        artifact_manifest_digest: validReleaseDigest(value.artifact_manifest_digest) ? value.artifact_manifest_digest : null,
+        build_profile_digest: validReleaseDigest(value.build_profile_digest) ? value.build_profile_digest : null,
         database_generation: uuid("database_generation"), migration_id: uuid("migration_id"),
         target: evidenceState(value.target, new Set(["isolated"])), check_kind: code("check_kind"),
         result: evidenceState(value.result, new Set(["passed", "failed"])), reason_code: code("reason_code"),
@@ -442,6 +444,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         'source_generation',probe.value->'source_generation',
         'source_fence',probe.value->'source_fence',
         'artifact_digest',probe.value->>'artifact_digest',
+        'artifact_manifest_digest',probe.value->>'artifact_manifest_digest',
+        'build_profile_digest',probe.value->>'build_profile_digest',
         'database_generation',probe.value->>'database_generation',
         'migration_id',probe.value->>'migration_id',
         'target',probe.value->>'target',
@@ -478,6 +482,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         source_generation: evidenceInteger(probe?.source_generation, { minimum: 1 }),
         source_fence: evidenceInteger(probe?.source_fence, { minimum: 1 }),
         artifact_digest: validReleaseDigest(probe?.artifact_digest) ? probe.artifact_digest : null,
+        artifact_manifest_digest: validReleaseDigest(probe?.artifact_manifest_digest) ? probe.artifact_manifest_digest : null,
+        build_profile_digest: validReleaseDigest(probe?.build_profile_digest) ? probe.build_profile_digest : null,
         database_generation: evidenceUuid(probe?.database_generation), migration_id: evidenceUuid(probe?.migration_id),
         target: evidenceState(probe?.target, new Set(["isolated"])), check_kind: evidenceCode(probe?.check_kind) });
       for (const field of ["executor_receipt_digest", "executor_template_receipt_digest"]) {
@@ -516,6 +522,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       probe.receipt_linked = Boolean(actual);
       probe.mismatched_fields = actual ? ["reconciliation_id", "attempt_id", "release_fence", "release_id",
         "peer_release_id", "source_allocation_id", "source_generation", "source_fence", "artifact_digest",
+        "artifact_manifest_digest", "build_profile_digest",
         "database_generation", "migration_id", "target", "check_kind"].filter((field) =>
         probe[field] !== actual[field]) : [];
     }

@@ -292,15 +292,44 @@ def main():
     validate_tree(base)
     if tree_digest(base) != args.base_rootfs_digest:
         fail("runtime_base_rootfs_digest_mismatch")
-    destination = artifact_root / args.archive_digest[7:]
-    if destination.exists():
+    # Build manifests include the exact build job and attempt. Identical HCA
+    # bytes can therefore have distinct, valid provenance and must coexist.
+    destination = artifact_root / args.build_manifest_digest[7:]
+    expected_manifest = {
+        "schema": SCHEMA,
+        "archive_digest": args.archive_digest,
+        "build_manifest_digest": args.build_manifest_digest,
+        "build_profile_digest": args.build_profile_digest,
+        "base_rootfs_digest": args.base_rootfs_digest,
+        "base_manifest_digest": args.base_manifest_digest,
+        "base_image": image,
+        "secret_env_shim_digest": digest_bytes(SECRET_ENV_SHIM),
+        "source_commit": source_commit,
+        "service_id": build["service_id"],
+        "workdir": "/app",
+    }
+    if os.path.lexists(destination):
         manifest = destination / "manifest.json"
-        if (destination / ".hostlet-artifact-owned").read_text() != MARKER or json.loads(manifest.read_bytes()).get("archive_digest") != args.archive_digest:
+        marker = destination / ".hostlet-artifact-owned"
+        rootfs = destination / "rootfs"
+        if (destination.is_symlink() or not destination.is_dir() or
+                manifest.is_symlink() or not manifest.is_file() or
+                marker.is_symlink() or not marker.is_file() or marker.read_text() != MARKER or
+                rootfs.is_symlink() or not rootfs.is_dir()):
             fail("runtime_artifact_collision")
-        validate_tree(destination / "rootfs")
-        if tree_digest(destination / "rootfs") != json.loads(manifest.read_bytes()).get("rootfs_tree_digest"):
+        try:
+            existing = json.loads(manifest.read_bytes())
+        except (UnicodeDecodeError, json.JSONDecodeError):
             fail("runtime_artifact_collision")
-        print(canonical_json(json.loads(manifest.read_bytes())).decode(), end="")
+        if (not isinstance(existing, dict) or
+                set(existing) != (set(expected_manifest) | {"rootfs_tree_digest"}) or
+                any(existing.get(key) != value for key, value in expected_manifest.items()) or
+                not valid_digest(existing.get("rootfs_tree_digest"))):
+            fail("runtime_artifact_collision")
+        validate_tree(rootfs)
+        if tree_digest(rootfs) != existing["rootfs_tree_digest"]:
+            fail("runtime_artifact_collision")
+        print(canonical_json(existing).decode(), end="")
         return
     temporary = Path(tempfile.mkdtemp(prefix=".prepare-", dir=artifact_root))
     try:
@@ -326,20 +355,7 @@ def main():
         secret_mountpoint.mkdir(mode=0o755, parents=True, exist_ok=True)
         secret_mountpoint.chmod(0o755)
         validate_tree(rootfs)
-        manifest_value = {
-            "schema": SCHEMA,
-            "archive_digest": args.archive_digest,
-            "build_manifest_digest": args.build_manifest_digest,
-            "build_profile_digest": args.build_profile_digest,
-            "base_rootfs_digest": args.base_rootfs_digest,
-            "base_manifest_digest": args.base_manifest_digest,
-            "base_image": image,
-            "rootfs_tree_digest": tree_digest(rootfs),
-            "secret_env_shim_digest": digest_bytes(SECRET_ENV_SHIM),
-            "source_commit": source_commit,
-            "service_id": build["service_id"],
-            "workdir": "/app",
-        }
+        manifest_value = {**expected_manifest, "rootfs_tree_digest": tree_digest(rootfs)}
         (temporary / "manifest.json").write_bytes(canonical_json(manifest_value))
         (temporary / ".hostlet-artifact-owned").write_text(MARKER)
         os.chmod(temporary / "manifest.json", 0o444)

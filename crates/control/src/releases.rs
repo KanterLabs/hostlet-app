@@ -188,6 +188,7 @@ struct RuntimeLease {
     state: String,
     artifact_digest: String,
     artifact_manifest_digest: String,
+    build_profile_digest: String,
     runtime_binary_digest: String,
     policy_digest: String,
     capability_digest: String,
@@ -1080,6 +1081,8 @@ struct IsolatedRequiredProbe {
     source_generation: i64,
     source_fence: i64,
     artifact_digest: String,
+    artifact_manifest_digest: String,
+    build_profile_digest: String,
     executor_template_receipt_digest: String,
     tenant_database_id: Uuid,
     database_generation: Uuid,
@@ -1230,6 +1233,8 @@ struct IsolatedProbeReceipt {
     source_generation: u64,
     source_fence: u64,
     artifact_digest: String,
+    artifact_manifest_digest: String,
+    build_profile_digest: String,
     database_generation: Uuid,
     migration_id: Uuid,
     target: String,
@@ -2181,7 +2186,7 @@ async fn load_release_lease(
     }
     let runtime = if let Some(allocation_id) = release.runtime_allocation_id {
         let row: Option<RuntimeLease> = sqlx::query_as(
-            "SELECT a.id AS allocation_id,a.service_id,a.generation,a.fence,a.state,a.artifact_digest,a.artifact_manifest_digest,\
+            "SELECT a.id AS allocation_id,a.service_id,a.generation,a.fence,a.state,a.artifact_digest,a.artifact_manifest_digest,a.build_profile_digest,\
                     a.runtime_binary_digest,a.policy_digest,a.capability_digest,a.platform,a.profile,\
                     ARRAY(SELECT jsonb_array_elements_text(a.argv)) AS argv,a.application_port,a.health_port,a.health_path \
              FROM runtime_allocations a JOIN runtime_evaluations e ON e.id=a.evaluation_id \
@@ -2427,6 +2432,8 @@ fn probe(
             source_generation: runtime.generation,
             source_fence: runtime.fence,
             artifact_digest: runtime.artifact_digest.clone(),
+            artifact_manifest_digest: runtime.artifact_manifest_digest.clone(),
+            build_profile_digest: runtime.build_profile_digest.clone(),
             executor_template_receipt_digest: executor_receipt_digest.to_owned(),
             tenant_database_id: context.tenant_database_id.ok_or_else(ApiError::internal)?,
             database_generation: context.database_generation.ok_or_else(ApiError::internal)?,
@@ -2580,6 +2587,8 @@ fn validate_isolated_probe_receipt(
         || i64::try_from(receipt.source_generation).ok() != Some(expected.source_generation)
         || i64::try_from(receipt.source_fence).ok() != Some(expected.source_fence)
         || receipt.artifact_digest != expected.artifact_digest
+        || receipt.artifact_manifest_digest != expected.artifact_manifest_digest
+        || receipt.build_profile_digest != expected.build_profile_digest
         || receipt.database_generation != expected.database_generation
         || receipt.migration_id != expected.migration_id
         || receipt.target != "isolated"

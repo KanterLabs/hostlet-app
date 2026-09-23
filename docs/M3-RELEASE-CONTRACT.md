@@ -119,12 +119,16 @@ observation and nonempty named assertions.
 An `isolated_validation` entry instead uses
 `hostlet.runtime.migration-probe-request/v1`. Control generates a fresh
 `probe_execution_id` and binds it to the reconciliation, attempt, release
-fence, source allocation tuple, exact artifact and executor-template digest,
+fence, source allocation tuple, exact archive, build-manifest and build-profile
+digests, and executor-template digest,
 tenant database generation, migration, and the immutable runtime, policy,
 capability, platform, argv, port and health tuple. The worker resolves a
 `hostlet.runtime.probe-credential/v1` document for that exact execution ID.
 The document is written as a protected file and includes the isolated
 `hdr_<migration UUID>` database, scoped role and password.
+The probe selects the immutable runtime assembly by build-manifest digest and
+checks the archive and profile before launching it; equal archive bytes from
+a different build do not select a retained build's assembly.
 
 The disposable gVisor execution emits
 `hostlet.runtime.probe-receipt/v2`. It binds the fresh execution ID and source

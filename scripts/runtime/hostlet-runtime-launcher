@@ -44,8 +44,11 @@ cgroup_root=
 cgroup_inode=
 request_identity_sha256=$(jq -cS 'del(.operation,.observed_at_unix_ms,.exit_history_unix_ms)' "$request" | sha256sum | awk '{print $1}')
 generation_root="${state_root}/${id}/${generation}"; bundle="${generation_root}/bundle"; run_root="${state_root}/runsc"; evidence="${generation_root}/evidence"; cgroup_state_file="${evidence}/cgroup-state.json"
-digest=$(jq -r .artifact_digest "$request"); hex=${digest#sha256:}; rootfs="${artifact_root}/${hex}/rootfs"
-[[ "$digest" == "sha256:${hex}" && "$hex" =~ ^[0-9a-f]{64}$ ]] || { echo runtime_digest_invalid >&2; exit 2; }
+digest=$(jq -r .artifact_digest "$request"); hex=${digest#sha256:}
+manifest_digest=$(jq -r .artifact_manifest_digest "$request"); manifest_hex=${manifest_digest#sha256:}
+profile_digest=$(jq -r .build_profile_digest "$request"); profile_hex=${profile_digest#sha256:}
+[[ "$digest" == "sha256:${hex}" && "$hex" =~ ^[0-9a-f]{64}$ && "$manifest_digest" == "sha256:${manifest_hex}" && "$manifest_hex" =~ ^[0-9a-f]{64}$ && "$profile_digest" == "sha256:${profile_hex}" && "$profile_hex" =~ ^[0-9a-f]{64}$ ]] || { echo runtime_digest_invalid >&2; exit 2; }
+rootfs="${artifact_root}/${manifest_hex}/rootfs"
 [[ "$rootfs" == "${artifact_root}/"* ]] || { echo runtime_artifact_escape >&2; exit 2; }
 mount_root=/run/hostlet-owned-fixture-mounts
 mount_root_marker="${mount_root}/.hostlet-owned"
@@ -744,10 +747,10 @@ partial_mount_cleanup() {
 
 prepare() {
   trap 'prepare_exit_cleanup' EXIT
-  artifact_dir="${artifact_root}/${hex}"; manifest="${artifact_dir}/manifest.json"
+  artifact_dir="${artifact_root}/${manifest_hex}"; manifest="${artifact_dir}/manifest.json"
   [[ -d "$rootfs" && -f "$manifest" && -f "$artifact_dir/.hostlet-artifact-owned" ]] || { echo runtime_rootfs_missing >&2; exit 1; }
   [[ "$(cat "$artifact_dir/.hostlet-artifact-owned")" == hostlet-runtime-artifact-v1 ]] || { echo runtime_artifact_not_owned >&2; exit 1; }
-  jq -e --arg digest "$digest" '.schema=="hostlet.runtime-artifact/v1" and .archive_digest==$digest and .workdir=="/app" and (.base_image|test("^node:(22|24)-bookworm-slim@sha256:[0-9a-f]{64}$")) and ([.build_manifest_digest,.base_manifest_digest,.base_rootfs_digest,.rootfs_tree_digest,.build_profile_digest,.secret_env_shim_digest]|all(test("^sha256:[0-9a-f]{64}$"))) and (.source_commit|test("^[0-9a-f]{40}$|^[0-9a-f]{64}$"))' "$manifest" >/dev/null || { echo runtime_artifact_manifest_invalid >&2; exit 1; }
+  jq -e --arg digest "$digest" --arg manifest_digest "$manifest_digest" --arg profile_digest "$profile_digest" '.schema=="hostlet.runtime-artifact/v1" and .archive_digest==$digest and .build_manifest_digest==$manifest_digest and .build_profile_digest==$profile_digest and .workdir=="/app" and (.base_image|test("^node:(22|24)-bookworm-slim@sha256:[0-9a-f]{64}$")) and ([.build_manifest_digest,.base_manifest_digest,.base_rootfs_digest,.rootfs_tree_digest,.build_profile_digest,.secret_env_shim_digest]|all(test("^sha256:[0-9a-f]{64}$"))) and (.source_commit|test("^[0-9a-f]{40}$|^[0-9a-f]{64}$"))' "$manifest" >/dev/null || { echo runtime_artifact_manifest_invalid >&2; exit 1; }
   [[ "sha256:$(sha256sum "$rootfs/hostlet/bin/secret-env" | awk '{print $1}')" == "$(jq -r .secret_env_shim_digest "$manifest")" ]] || { echo runtime_artifact_shim_mismatch >&2; exit 1; }
   observed_tree=$(python3 "$(dirname "$0")/prepare-artifact.py" --tree-digest "$rootfs") || { echo runtime_artifact_tree_invalid >&2; exit 1; }; expected_tree=$(jq -r .rootfs_tree_digest "$manifest")
   [[ "$observed_tree" == "$expected_tree" ]] || { echo runtime_artifact_tree_mismatch >&2; exit 1; }

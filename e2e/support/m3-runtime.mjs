@@ -137,6 +137,8 @@ function requestFor(allocation, operation, network, overrides = {}) {
     generation: allocation.generation,
     fence: allocation.fence,
     artifact_digest: allocation.artifact_digest,
+    artifact_manifest_digest: requireDigest(allocation.artifact_manifest_digest, "allocation artifact manifest digest"),
+    build_profile_digest: requireDigest(allocation.build_profile_digest, "allocation build profile digest"),
     runtime_binary_digest: allocation.runtime_binary_digest,
     policy_digest: requireDigest(allocation.policy?.digest ?? allocation.policy_digest, "allocation policy digest"),
     capability_digest: allocation.capability_digest ?? null,
@@ -564,8 +566,8 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
         if (prepared.code !== 0) throw new Error(`verified runtime artifact assembly failed for ${key}`);
         let manifest;
         try { manifest = JSON.parse(prepared.stdout); } catch { throw new Error(`runtime artifact preparer emitted an invalid manifest for ${key}`); }
-        if (manifest.archive_digest !== build.archiveDigest || manifest.build_manifest_digest !== build.manifestDigest || manifest.build_profile_digest !== build.buildProfileDigest || manifest.base_rootfs_digest !== baseRootfsDigest || manifest.base_manifest_digest !== baseManifestDigest || manifest.workdir !== "/app") throw new Error(`runtime artifact manifest identity mismatch for ${key}`);
-        const directory = join(artifactRoot, build.archiveDigest.slice(7));
+        if (manifest.archive_digest !== build.archiveDigest || manifest.build_manifest_digest !== build.manifestDigest || manifest.build_profile_digest !== build.buildProfileDigest || manifest.base_rootfs_digest !== baseRootfsDigest || manifest.base_manifest_digest !== baseManifestDigest || manifest.source_commit !== build.sourceCommit || manifest.service_id !== build.serviceId || manifest.workdir !== "/app") throw new Error(`runtime artifact manifest identity mismatch for ${key}`);
+        const directory = join(artifactRoot, build.manifestDigest.slice(7));
         decorated.push(Object.freeze({ ...build, runtimeRootfs: join(directory, "rootfs"), runtimeTreeDigest: requireDigest(manifest.rootfs_tree_digest, `${key} runtime tree digest`), runtimeManifest: Object.freeze(manifest) }));
       }
       assembled.set(key, Array.isArray(raw) ? Object.freeze(decorated) : decorated[0]);
@@ -978,7 +980,7 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     }
     const value = response.payload;
     requireDigest(value.capability_digest, "allocation capability");
-    if (value.artifact_digest !== build.archiveDigest || value.artifact_manifest_digest !== build.manifestDigest || value.source_commit !== build.sourceCommit) {
+    if (value.artifact_digest !== build.archiveDigest || value.artifact_manifest_digest !== build.manifestDigest || value.build_profile_digest !== build.buildProfileDigest || value.source_commit !== build.sourceCommit) {
       throw new Error("runtime allocation differs from the exact build output");
     }
     return value;

@@ -38,6 +38,8 @@ struct RuntimeRequest {
     generation: u64,
     fence: u64,
     artifact_digest: String,
+    artifact_manifest_digest: String,
+    build_profile_digest: String,
     runtime_binary_digest: String,
     policy_digest: String,
     capability_digest: Option<String>,
@@ -354,6 +356,8 @@ fn validate_request(r: &RuntimeRequest, o: &ExecutorOptions) -> Result<(), &'sta
         return Err("runtime_generation_invalid");
     }
     valid_digest(&r.artifact_digest)?;
+    valid_digest(&r.artifact_manifest_digest)?;
+    valid_digest(&r.build_profile_digest)?;
     valid_digest(&r.runtime_binary_digest)?;
     valid_digest(&r.policy_digest)?;
     match (r.profile.as_str(), &r.capability_digest) {

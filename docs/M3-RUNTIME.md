@@ -41,15 +41,18 @@ owned roots and writes `hostlet-runtime-state-v1` to
 roots. These markers are prerequisites, not evidence.
 
 The request is `hostlet.runtime.executor-request/v1`. It contains allocation
-UUID, generation, fence, immutable artifact/runtime/policy/capability digests,
+UUID, generation, fence, immutable archive (`artifact_digest`), build manifest
+(`artifact_manifest_digest`), build profile (`build_profile_digest`), runtime,
+policy and capability digests,
 platform, fixed command ID expansion, safe environment names, application and
 health ports, exact IPv4/IPv6 endpoints, the canonical resource policy and the
 operation. `owned_fixture_evaluation` requires a null capability digest;
 `evidence_gated_owned_fixture` requires one. Raw secrets, host paths, namespace
 paths, mounts and runtime flags are not protocol fields.
 
-HOST-226 stages the builder's verified HCA1 `archive_digest` beneath the runtime
-artifact root, writes `hostlet.runtime-artifact/v1`, and records source commit
+HOST-226 stages the builder's verified HCA1 beneath
+`<runtime-artifact-root>/<build-manifest-sha256-hex>/`, writes
+`hostlet.runtime-artifact/v1`, and records source commit
 from the build manifest plus build-profile digest from the trusted build job.
 It combines the HCA1 payload at fixed `/app` with a pinned Node base rootfs and
 records both build-manifest and base-rootfs digests; an HCA1 application archive
@@ -59,6 +62,16 @@ bounded HCA1 framing itself, rejects special files and escaping or dangling
 base-image links, and atomically installs the resulting tree. The manifest
 fixes the work directory at `/app` and binds the reviewed secret-entrypoint
 digest.
+
+Identical archive bytes from different builds may have different manifests.
+Each exact build manifest selects its own immutable assembly, so a rebuild
+cannot replace an artifact used by a retained release. Repeating assembly must
+match the archive, build profile, both base digests, source, service and shim,
+and must verify the installed tree. A conflicting assembly is rejected rather
+than overwritten. M3 pins one runtime base per exact build manifest; changing
+that base requires a new build manifest. The executor and migration probe
+select by the requested build manifest and verify the archive and profile
+before mounting the tree.
 
 ```text
 prepare-artifact.py --archive-file HCA1 --archive-digest sha256:... \

@@ -971,7 +971,11 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     const response = await m3.roleInternal("runtime", "/internal/v1/runtime/allocations", {
       method: "POST", body: { build_job_id: build.buildJobId, artifact_id: build.artifactId, evaluation_id: evaluationId },
     });
-    if (![200, 201].includes(response.status)) throw new Error(`runtime allocation rejected with HTTP ${response.status}`);
+    if (![200, 201].includes(response.status)) {
+      const code = response.payload?.error?.code;
+      const safeCode = typeof code === "string" && /^[a-z0-9_.:-]{1,96}$/.test(code) ? code : "none";
+      throw new Error(`runtime allocation rejected with HTTP ${response.status} code ${safeCode}`);
+    }
     const value = response.payload;
     requireDigest(value.capability_digest, "allocation capability");
     if (value.artifact_digest !== build.archiveDigest || value.artifact_manifest_digest !== build.manifestDigest || value.source_commit !== build.sourceCommit) {
@@ -2745,14 +2749,23 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
 
   async function evaluateRelease(buildOutput, databasePeer, nodeBaseRoots) {
     const build = requireBuildOutput("release", buildOutput);
-    let existing = evaluatedCapabilities.get(build.archiveDigest);
+    // Control matches the entire artifact tuple, not just its archive digest.
+    // A rebuilt artifact can retain bytes while changing another bound field.
+    const matchingCapability = (candidate) => {
+      const patterns = candidate?.receipt?.evaluation?.patterns;
+      return Array.isArray(patterns) && patterns.some((pattern) =>
+        pattern?.artifact_digest === build.archiveDigest && pattern.manifest_digest === build.manifestDigest &&
+        pattern.build_profile_digest === build.buildProfileDigest && pattern.source_commit === build.sourceCommit &&
+        pattern.framework === build.framework && pattern.node_major === build.nodeMajor) ? candidate : null;
+    };
+    let existing = matchingCapability(evaluatedCapabilities.get(build.archiveDigest));
     if (existing && Date.parse(existing.expires_at) <= Date.parse(m3.policyClock.current().now)) {
       for (const [digest, evaluation] of evaluatedCapabilities) if (evaluation.id === existing.id) evaluatedCapabilities.delete(digest);
       if (!lastRuntimeInputs) throw new Error("expired runtime capability cannot be refreshed without the original real evaluation inputs");
       const refreshedRaw = await exerciseRuntimeEvaluation(lastRuntimeInputs);
       const refreshed = finalizeObservedEvaluation(refreshedRaw);
       await registerEvaluation(refreshed);
-      existing = evaluatedCapabilities.get(build.archiveDigest);
+      existing = matchingCapability(evaluatedCapabilities.get(build.archiveDigest));
     }
     if (existing) return existing;
     if (!lastRuntimeEvaluation) throw new Error("release evaluation requires the completed runtime isolation evaluation");
@@ -2764,7 +2777,7 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
       ...lastRuntimeEvaluation,
       buildOutputs: new Map([...outputsMap(lastRuntimeEvaluation.buildOutputs), ["release_exact", build]]),
       patterns: [
-        ...lastRuntimeEvaluation.patterns.filter((pattern) => pattern.artifact_digest !== build.archiveDigest && pattern.key !== "release_exact"),
+        ...lastRuntimeEvaluation.patterns.filter((pattern) => pattern.key !== "release_exact"),
         { ...measured.pattern, receipt_digests: measured.receiptDigests },
       ],
       evaluationIdentity: identity,

@@ -868,9 +868,7 @@ function createBuildUnitGuard(m3, setup) {
     }
     return attempts;
   };
-  const cleanupJob = async (jobId) => {
-    const tracked = jobs.get(jobId);
-    if (!tracked) return { discovered: 0, stopped: 0, active: 0, socketsRemoved: 0, socketsRemaining: 0 };
+  const runCleanupJob = async (jobId, tracked) => {
     if (!tracked.attemptsCached) {
       if (m3.context.abortSignal.aborted) {
         // The M3 context tears down PostgreSQL in its own finally block before
@@ -958,10 +956,21 @@ function createBuildUnitGuard(m3, setup) {
     if (socketsRemaining !== 0) throw new Error(`run-owned build socket directory remains for job ${jobId}`);
     return { discovered: names.length, stopped, active, socketsRemoved, socketsRemaining };
   };
+  const cleanupJob = (jobId) => {
+    const tracked = jobs.get(jobId);
+    if (!tracked) return Promise.resolve({ discovered: 0, stopped: 0, active: 0, socketsRemoved: 0, socketsRemaining: 0 });
+    if (tracked.cleanupPromise) return tracked.cleanupPromise;
+    const result = runCleanupJob(jobId, tracked).catch((error) => {
+      if (tracked.cleanupPromise === result) tracked.cleanupPromise = null;
+      throw error;
+    });
+    tracked.cleanupPromise = result;
+    return result;
+  };
   const guard = {
     track(jobId, profileId, workRoot) {
       if (!UUID.test(jobId)) throw new Error("refusing to track invalid build job identity");
-      jobs.set(jobId, { profile: setup.profile(profileId), workRoot, attemptIds: new Set(), attemptsCached: false });
+      jobs.set(jobId, { profile: setup.profile(profileId), workRoot, attemptIds: new Set(), attemptsCached: false, cleanupPromise: null });
     },
     cleanupJob,
   };

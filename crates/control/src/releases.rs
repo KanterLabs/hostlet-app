@@ -599,6 +599,25 @@ async fn resolve_probe_credential(
             "the prepared isolated database reference does not match the migration",
         ));
     }
+    let mut credential_plaintext: Value = serde_json::from_str(credential.value.as_str())
+        .map_err(|_| ApiError::foundation_unavailable())?;
+    let fields = credential_plaintext
+        .as_object_mut()
+        .ok_or_else(ApiError::foundation_unavailable)?;
+    let password = match fields.remove("password") {
+        Some(Value::String(value)) => Zeroizing::new(value),
+        _ => return Err(ApiError::foundation_unavailable()),
+    };
+    if fields.len() != 2
+        || fields.get("database_ref").and_then(Value::as_str)
+            != Some(credential.database_ref.as_str())
+        || fields.get("role_ref").and_then(Value::as_str) != Some(credential.role_ref.as_str())
+    {
+        return Err(ApiError::foundation_unavailable());
+    }
+    if !(16..=1024).contains(&password.len()) || password.chars().any(char::is_control) {
+        return Err(ApiError::foundation_unavailable());
+    }
     let database_name = format!("hdr_{}", migration_id.simple());
     Ok(Json(ProbeCredentialResponse {
         schema: "hostlet.runtime.probe-credential/v1".to_owned(),
@@ -614,7 +633,7 @@ async fn resolve_probe_credential(
         migration_id,
         database_name,
         role_name: credential.role_name,
-        password: credential.value,
+        password,
     }))
 }
 

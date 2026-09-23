@@ -1487,14 +1487,13 @@ async fn complete_operation(
             },
         }));
     }
-    let prior: Option<(Vec<u8>, String)> = sqlx::query_as(
+    let prior: Option<(Option<Vec<u8>>, String)> = sqlx::query_as(
         "SELECT completion_hash,state FROM tenant_database_operation_attempts WHERE operation_id=$1 AND id=$2 AND fence=$3 AND worker_id=$4",
     ).bind(operation_id).bind(request.attempt_id).bind(request.fence).bind(&request.worker_id)
     .fetch_optional(&mut *tx).await?;
-    if prior
-        .as_ref()
-        .is_some_and(|(hash, state)| hash == &completion_hash && state == &request.outcome.state)
-    {
+    if prior.as_ref().is_some_and(|(hash, state)| {
+        hash.as_ref() == Some(&completion_hash) && state == &request.outcome.state
+    }) {
         let operation = row.into_record()?;
         let kind = operation.kind.clone();
         tx.commit().await?;

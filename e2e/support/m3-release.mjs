@@ -537,7 +537,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         `(exit code ${child.exitCode ?? "none"}, signal ${child.signalCode ?? "none"})`);
     }
   }
-  async function writeReleaseFailureEvidence({ projectId, releaseId, reconciliationId, waitKind }) {
+  async function writeReleaseFailureEvidence({ projectId, releaseId, reconciliationId, waitKind, staleMigrationCompletion = null }) {
     const artifactSequence = ++failureEvidenceSequence;
     const artifactReleaseId = evidenceUuid(releaseId);
     const artifactReconciliationId = evidenceUuid(reconciliationId);
@@ -549,6 +549,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         attempt_count: null, current_attempt_id: null, current_fence: null },
       attempts: { count: 0, entries: [] },
       worker_process: workerProcessEvidence(),
+      stale_migration_completion: staleMigrationCompletion,
       current_route: { release_id: null, generation: null },
       receipts: { expected_probes: [], submission: { matched: false, digest_count: 0 },
         database_links_available: false, seed_count: 0, entries: [], unavailable_count: 0, truncated: false },
@@ -679,6 +680,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
   }
   async function awaitReleaseAndDatabase(staged, expected) {
     if (!staged.migration.id) return awaitRelease(staged.projectId, staged.releaseId, expected, staged.reconciliationId);
+    let staleMigrationCompletion = null;
     try {
       const terminal = async (value) => {
         const release = value.releases.find(({ id }) => id === staged.releaseId);
@@ -692,7 +694,16 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
               method: "POST", body: { worker_id: "m3-stale-migration-worker", attempt_id: stale.attempt.id,
                 fence: stale.attempt.fence, outcome: { state: "failed", code: "stale_migration_attempt", proof: {} } },
             });
-            if (completion.status !== 409) throw new TerminalReleaseWaitError("stale live-migration completion was not fenced");
+            staleMigrationCompletion = {
+              operation_id: evidenceUuid(stale.operationId), attempt_id: evidenceUuid(stale.attempt.id),
+              fence: evidenceInteger(stale.attempt.fence, { minimum: 1 }),
+              status: evidenceInteger(completion.status, { minimum: 100, maximum: 599 }),
+              error_code: evidenceCode(completion.payload?.error?.code),
+            };
+            if (completion.status !== 409) {
+              throw new TerminalReleaseWaitError(`stale live-migration completion was not fenced ` +
+                `(HTTP ${staleMigrationCompletion.status ?? "unknown"}, code ${staleMigrationCompletion.error_code ?? "none"})`);
+            }
             stale.rejected = true;
           }
           return { release, history: value };
@@ -740,7 +751,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       }, { timeoutMs: options.promotionTimeoutMs ?? 180_000, intervalMs: 250 });
     } catch (error) {
       await writeReleaseFailureEvidence({ projectId: staged.projectId, releaseId: staged.releaseId,
-        reconciliationId: staged.reconciliationId, waitKind: "await_release_and_database" });
+        reconciliationId: staged.reconciliationId, waitKind: "await_release_and_database", staleMigrationCompletion });
       throw error;
     }
   }

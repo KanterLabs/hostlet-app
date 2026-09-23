@@ -1416,7 +1416,10 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     return m3.postgres.psqlJson("m3-data-next-invalid-operation", `SELECT COALESCE((SELECT json_build_object(
       'operation_id',o.id::text,'kind',o.kind,'database_id',o.tenant_database_id::text,
       'recovery_id',o.spec->>'recovery_id','archive_id',o.spec->>'archive_id',
-      'object_ref',o.spec->>'object_ref','encrypted_sha256',o.spec->>'encrypted_sha256')
+      'object_ref',(SELECT a.object_ref FROM tenant_database_archives a
+        WHERE a.id::text=o.spec->>'archive_id' AND a.tenant_database_id=o.tenant_database_id
+          AND a.database_generation=o.database_generation AND a.state='usable'),
+      'encrypted_sha256',o.spec->>'encrypted_sha256')
       FROM tenant_database_operations o WHERE o.state IN ('queued','retriable')
       ORDER BY o.created_at,o.id LIMIT 1),'null'::json);`);
   }
@@ -1509,7 +1512,9 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     expectScenario(wrongTarget.error === "tenant_target_identity_mismatch", "mismatched replacement identity is rejected", { code: wrongTarget.error });
 
     const truncated = await runInvalidRestore("truncated-archive", async ({ operation }) => {
-      if (!/^tenant_[0-9a-f]{32}\/[0-9a-f-]{36}\.htb$/.test(operation.object_ref ?? "")) throw new Error("restore object ref escaped the owned repository");
+      const expectedRef = `tenant_${operation.database_id.replaceAll("-", "")}/${operation.archive_id}.htb`;
+      if (!/^tenant_[0-9a-f]{32}\/[0-9a-f-]{36}\.htb$/.test(operation.object_ref ?? "") ||
+        operation.object_ref !== expectedRef) throw new Error("restore object ref escaped the owned repository");
       const repository = resolve(m3.policyClock.stateDir, "tenant-backups");
       const archive = resolve(repository, operation.object_ref);
       if (!archive.startsWith(`${repository}/`)) throw new Error("restore object ref escaped the owned repository");

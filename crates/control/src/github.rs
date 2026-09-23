@@ -1514,3 +1514,108 @@ pub(crate) async fn authorized_source_snapshot(
         snapshot,
     })
 }
+
+/// Revalidates the saved owner authorization and exact source tuple for the
+/// trusted M3 materializer. Repository credentials stay inside this module.
+#[allow(clippy::too_many_arguments)] // The exact persisted source identity is explicit at this trust boundary.
+pub(crate) async fn authorized_build_source_snapshot(
+    state: &FoundationState,
+    transaction: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    project_id: Uuid,
+    source_revision_id: Uuid,
+    configuration_revision_id: Uuid,
+    expected_commit: &str,
+    expected_tree: &str,
+) -> Result<crate::github_provider::BuildSourceSnapshot, ApiError> {
+    let provider = provider(state)?;
+    let row: Option<BindingSourceRow> = sqlx::query_as(
+        "SELECT b.id AS binding_id, b.project_id, b.repository_id, b.installation_id, \
+                b.github_repository_id, b.canonical_owner, b.canonical_name, \
+                b.repository_private, b.authorized_ref, b.status AS binding_status, \
+                b.revision AS binding_revision, s.id AS source_id, \
+                s.configuration_revision_id AS source_configuration_revision_id, \
+                s.commit_sha, s.tree_sha, s.source AS source_kind, s.observed_at, \
+                p.revision AS project_revision, p.current_configuration_revision_id \
+         FROM github_source_revisions s \
+         JOIN github_repository_bindings b ON b.id=s.binding_id AND b.account_id=s.account_id AND b.project_id=s.project_id \
+         JOIN projects p ON p.account_id=s.account_id AND p.id=s.project_id \
+         WHERE s.account_id=$1 AND s.project_id=$2 AND s.id=$3 AND b.status='active'",
+    )
+    .bind(account_id).bind(project_id).bind(source_revision_id)
+    .fetch_optional(&mut **transaction).await?;
+    let Some(row) = row else {
+        return Err(ApiError::not_found());
+    };
+    let (binding, source, project_revision, current_configuration) = row.into_parts();
+    if source.configuration_revision_id != configuration_revision_id
+        || current_configuration != Some(configuration_revision_id)
+        || source.commit_sha != expected_commit
+        || source.tree_sha.as_deref() != Some(expected_tree)
+    {
+        return Err(ApiError::conflict(
+            "build_source_stale",
+            "the admitted exact source and current configuration no longer match",
+        ));
+    }
+    let authorization = live_authorization(state, account_id).await?;
+    let snapshot = provider
+        .read_build_source(
+            GitHubSourceRequest {
+                membership: GitHubRepositoryRequest {
+                    user_access_token: &authorization.access_token,
+                    expected_user_id: authorization.github_user_id,
+                    installation_id: binding.installation_id,
+                    repository_id: binding.github_repository_id,
+                },
+                authorized_ref: &binding.authorized_ref,
+            },
+            expected_commit,
+            expected_tree,
+        )
+        .await?;
+    if snapshot.repository.id != binding.github_repository_id
+        || snapshot.authorized_ref != binding.authorized_ref
+        || snapshot.commit_sha != expected_commit
+        || snapshot.tree_sha != expected_tree
+    {
+        return Err(github_access_denied());
+    }
+    let locked: Option<(i64, Option<Uuid>)> = sqlx::query_as(
+        "SELECT revision,current_configuration_revision_id FROM projects \
+         WHERE account_id=$1 AND id=$2 FOR SHARE",
+    )
+    .bind(account_id)
+    .bind(project_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if locked != Some((project_revision, Some(configuration_revision_id))) {
+        return Err(ApiError::conflict(
+            "build_source_stale",
+            "the project changed during source authorization",
+        ));
+    }
+    lock_current_authorization(transaction, account_id, &authorization).await?;
+    lock_installation(transaction, binding.installation_id).await?;
+    let installation_active: bool = sqlx::query_scalar(
+        "SELECT status='active' FROM github_installations WHERE installation_id=$1 FOR SHARE",
+    )
+    .bind(binding.installation_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .unwrap_or(false);
+    let binding_current: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM github_repository_bindings \
+         WHERE id=$1 AND account_id=$2 AND project_id=$3 AND revision=$4 AND status='active')",
+    )
+    .bind(binding.id)
+    .bind(account_id)
+    .bind(project_id)
+    .bind(binding.revision)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !installation_active || !binding_current {
+        return Err(github_access_denied());
+    }
+    Ok(snapshot)
+}

@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""Run the M3 native comparison fixture under the exact runtime budget.
+
+This helper is deliberately a fixture-only supervisor.  It never accepts a
+customer allocation, artifact or runtime policy: the harness supplies one
+assembled Node rootfs and this file applies the fixed M3 comparison budget.
+"""
+
+import argparse
+import importlib.util
+import json
+import os
+import re
+import signal
+import socket
+import sys
+import time
+import uuid
+from pathlib import Path
+
+
+# Use an independently owned child of the cgroup-v2 root with the same budget
+# as the sandbox. Never create or remove shared systemd slices or the runtime
+# launcher's allocation cgroups.
+CGROUP_PARENT = "/sys/fs/cgroup"
+STATE_MARKER = ".hostlet-runtime-owned"
+STATE_MARKER_VALUE = "hostlet-runtime-state-v1"
+ARTIFACT_MARKER = ".hostlet-artifacts-owned"
+ARTIFACT_MARKER_VALUE = "hostlet-artifacts-v1"
+METADATA_NAME = ".native-baseline.json"
+CGROUP_NAME = re.compile(r"^hostlet-native-baseline-[0-9a-f]{32}$")
+NODE_COMMAND = "/app/dist/server.mjs"
+NODE_UID = 65532
+POLICY = {
+    "cpu_max": "25000 100000",
+    "memory_max_bytes": 536_870_912,
+    "memory_swap_max_bytes": 0,
+    "pids_max": 128,
+}
+
+
+def fail(reason):
+    print(f"native_baseline_{reason}", file=sys.stderr)
+    return 1
+
+
+def absolute_directory(value, label):
+    if not value or not os.path.isabs(value):
+        raise RuntimeError(f"{label}_not_absolute")
+    resolved = os.path.realpath(value)
+    if resolved != value or not os.path.isdir(value) or os.path.islink(value):
+        raise RuntimeError(f"{label}_path_changed")
+    return resolved
+
+
+def regular_file(path, label):
+    if not os.path.isfile(path) or os.path.islink(path):
+        raise RuntimeError(f"{label}_invalid")
+    return path
+
+
+def read_text(path, label):
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            return stream.read()
+    except OSError as error:
+        raise RuntimeError(f"{label}_unavailable") from error
+
+
+def validate_state_root(value):
+    state_root = absolute_directory(value, "state_root")
+    marker = regular_file(os.path.join(state_root, STATE_MARKER), "state_marker")
+    if read_text(marker, "state_marker").strip() != STATE_MARKER_VALUE:
+        raise RuntimeError("state_marker_invalid")
+    requests = os.path.join(state_root, "requests")
+    absolute_directory(requests, "requests_root")
+    return state_root, os.path.join(requests, METADATA_NAME)
+
+
+def validate_artifact_root(value):
+    artifact_root = absolute_directory(value, "artifact_root")
+    marker = regular_file(os.path.join(artifact_root, ARTIFACT_MARKER), "artifact_marker")
+    if read_text(marker, "artifact_marker").strip() != ARTIFACT_MARKER_VALUE:
+        raise RuntimeError("artifact_marker_invalid")
+    return artifact_root
+
+
+def validate_rootfs(value, artifact_root):
+    rootfs = absolute_directory(value, "rootfs")
+    try:
+        inside = os.path.commonpath([rootfs, artifact_root]) == artifact_root
+    except ValueError:
+        inside = False
+    if not inside or rootfs == artifact_root:
+        raise RuntimeError("rootfs_outside_artifact_root")
+    if not os.path.isfile(os.path.join(rootfs, "usr", "local", "bin", "node")):
+        raise RuntimeError("rootfs_node_missing")
+    if not os.path.isfile(os.path.join(rootfs, "app", "dist", "server.mjs")):
+        raise RuntimeError("rootfs_entrypoint_missing")
+    return rootfs
+
+
+def metadata_path(state_root):
+    return os.path.join(state_root, "requests", METADATA_NAME)
+
+
+def write_metadata(path, value):
+    temporary = f"{path}.tmp"
+    if os.path.lexists(temporary):
+        raise RuntimeError("metadata_temporary_exists")
+    payload = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(temporary, flags, 0o644)
+        try:
+            os.write(descriptor, payload)
+            os.fsync(descriptor)
+            os.fchmod(descriptor, 0o644)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        os.chmod(path, 0o644)
+    except OSError as error:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise RuntimeError("metadata_write_failed") from error
+
+
+def read_metadata(path):
+    regular_file(path, "metadata")
+    try:
+        value = json.loads(read_text(path, "metadata"))
+    except json.JSONDecodeError as error:
+        raise RuntimeError("metadata_invalid") from error
+    if not isinstance(value, dict) or value.get("schema") != "hostlet.runtime.native-baseline/v1":
+        raise RuntimeError("metadata_schema_invalid")
+    return value
+
+
+def cgroup_path_from_metadata(value):
+    path = value.get("cgroup_path")
+    if not isinstance(path, str) or not path.startswith(f"{CGROUP_PARENT}/"):
+        raise RuntimeError("cgroup_path_invalid")
+    name = path.rsplit("/", 1)[-1]
+    if not CGROUP_NAME.fullmatch(name) or os.path.realpath(path) != path:
+        raise RuntimeError("cgroup_path_invalid")
+    return path
+
+
+def write_control(path, value):
+    try:
+        with open(path, "w", encoding="ascii") as stream:
+            stream.write(f"{value}\n")
+    except OSError as error:
+        raise RuntimeError(f"cgroup_{os.path.basename(path)}_write_failed") from error
+
+
+def read_control(path, label):
+    value = read_text(path, label).strip()
+    if not value:
+        raise RuntimeError(f"cgroup_{label}_empty")
+    return value
+
+
+def cgroup_relative(path):
+    return path[len("/sys/fs/cgroup"):]
+
+
+def process_command(pid):
+    try:
+        status = read_text(f"/proc/{pid}/status", "process_status")
+        command_line = [part for part in read_text(f"/proc/{pid}/cmdline", "process_cmdline").split("\0") if part]
+    except RuntimeError:
+        return None
+    uid_match = re.search(r"^Uid:\s+(\d+)", status, re.MULTILINE)
+    state_match = re.search(r"^State:\s+([A-Z])", status, re.MULTILINE)
+    return {
+        "uid": int(uid_match.group(1)) if uid_match else -1,
+        "state": state_match.group(1) if state_match else None,
+        "command_line": command_line,
+    }
+
+
+def process_in_cgroup(pid, path):
+    try:
+        groups = read_text(f"/proc/{pid}/cgroup", "process_cgroup")
+    except RuntimeError:
+        return False
+    return any(line.startswith(f"0::{cgroup_relative(path)}\n") for line in groups.splitlines(keepends=True))
+
+
+def validate_native_process(pid, path):
+    if not isinstance(pid, int) or pid <= 0 or not process_in_cgroup(pid, path):
+        raise RuntimeError("native_process_cgroup_mismatch")
+    identity = process_command(pid)
+    if identity is None or identity["uid"] != NODE_UID or not identity["command_line"]:
+        raise RuntimeError("native_process_identity_invalid")
+    if os.path.basename(identity["command_line"][0]) != "node" or NODE_COMMAND not in identity["command_line"]:
+        raise RuntimeError("native_process_identity_invalid")
+    return identity
+
+
+def read_number(path, label):
+    value = read_control(path, label)
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise RuntimeError(f"cgroup_{label}_invalid") from error
+    if number < 0:
+        raise RuntimeError(f"cgroup_{label}_invalid")
+    return number
+
+
+def read_cgroup(path):
+    if not os.path.isdir(path) or os.path.islink(path) or os.path.realpath(path) != path:
+        raise RuntimeError("cgroup_missing")
+    limits = {
+        "cpu_max": read_control(os.path.join(path, "cpu.max"), "cpu_max"),
+        "memory_max_bytes": read_number(os.path.join(path, "memory.max"), "memory_max"),
+        "memory_swap_max_bytes": read_number(os.path.join(path, "memory.swap.max"), "memory_swap_max"),
+        "pids_max": read_number(os.path.join(path, "pids.max"), "pids_max"),
+        "cpu_usage_usec": 0,
+        "memory_peak_bytes": read_number(os.path.join(path, "memory.peak"), "memory_peak"),
+        "pids_current": read_number(os.path.join(path, "pids.current"), "pids_current"),
+    }
+    cpu_stat = read_text(os.path.join(path, "cpu.stat"), "cpu_stat")
+    for line in cpu_stat.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "usage_usec":
+            limits["cpu_usage_usec"] = int(value)
+            break
+    if limits["cpu_usage_usec"] < 0:
+        raise RuntimeError("cgroup_cpu_usage_invalid")
+    pids_events = {}
+    for line in read_text(os.path.join(path, "pids.events"), "pids_events").splitlines():
+        key, _, value = line.partition(" ")
+        if key:
+            pids_events[key] = int(value)
+    limits["pids_events"] = {"max": pids_events.get("max", 0)}
+    return limits
+
+
+def cgroup_pids(path):
+    values = read_text(os.path.join(path, "cgroup.procs"), "cgroup_procs").split()
+    try:
+        return [int(value) for value in values]
+    except ValueError as error:
+        raise RuntimeError("cgroup_process_list_invalid") from error
+
+
+def relay_process_identity(pid):
+    identity = process_command(pid)
+    if identity is None or identity["state"] == "Z":
+        return identity
+    if identity["uid"] != 0 or not identity["command_line"]:
+        raise RuntimeError("native_relay_identity_invalid")
+    if "hostlet-runtime-native-baseline" not in " ".join(identity["command_line"]):
+        raise RuntimeError("native_relay_identity_invalid")
+    return identity
+
+
+def reap_relay_child(pid):
+    while True:
+        try:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+            return waited == pid
+        except InterruptedError:
+            continue
+        except (ChildProcessError, ProcessLookupError):
+            return True
+
+
+def relay_terminated(pid):
+    identity = relay_process_identity(pid)
+    if identity is None:
+        reap_relay_child(pid)
+        return True
+    if identity["state"] == "Z":
+        if not reap_relay_child(pid) and process_command(pid) is not None:
+            raise RuntimeError("native_relay_zombie_not_reaped")
+        return True
+    return False
+
+
+def terminate_relay_process(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return
+    if relay_terminated(pid):
+        return
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        reap_relay_child(pid)
+        return
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if relay_terminated(pid):
+            return
+        time.sleep(0.05)
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        reap_relay_child(pid)
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not relay_terminated(pid):
+        time.sleep(0.05)
+    if not relay_terminated(pid):
+        raise RuntimeError("native_relay_not_stopped")
+
+
+def terminate_owned_processes(path, recorded_pid):
+    pids = set(cgroup_pids(path))
+    if isinstance(recorded_pid, int) and recorded_pid > 0 and process_in_cgroup(recorded_pid, path):
+        try:
+            os.killpg(recorded_pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise RuntimeError("native_process_terminate_failed") from error
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise RuntimeError("native_process_terminate_failed") from error
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if not cgroup_pids(path):
+            return
+        time.sleep(0.05)
+    for pid in cgroup_pids(path):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and cgroup_pids(path):
+        time.sleep(0.05)
+    if cgroup_pids(path):
+        raise RuntimeError("native_cgroup_not_empty")
+
+
+def remove_cgroup(path, recorded_pid=None):
+    cgroup_path_from_metadata({"cgroup_path": path})
+    if not os.path.exists(path):
+        return
+    if cgroup_pids(path):
+        terminate_owned_processes(path, recorded_pid)
+    try:
+        os.rmdir(path)
+    except OSError as error:
+        raise RuntimeError("native_cgroup_remove_failed") from error
+
+
+def cleanup_metadata(state_root, metadata):
+    if not os.path.lexists(metadata):
+        return {"schema": "hostlet.runtime.native-baseline-cleanup/v1", "result": "absent"}
+    value = read_metadata(metadata)
+    path = cgroup_path_from_metadata(value)
+    terminate_relay_process(value.get("relay_pid"))
+    pid = value.get("pid")
+    remove_cgroup(path, pid if isinstance(pid, int) else None)
+    if os.path.islink(metadata) or not os.path.isfile(metadata):
+        raise RuntimeError("metadata_changed")
+    os.unlink(metadata)
+    temporary = f"{metadata}.tmp"
+    if os.path.lexists(temporary):
+        os.unlink(temporary)
+    return {"schema": "hostlet.runtime.native-baseline-cleanup/v1", "result": "cleaned", "cgroup_path": path}
+
+
+def native_relay(listen_port, target_port):
+    if not hasattr(os, "setns"):
+        raise RuntimeError("native_relay_setns_unavailable")
+    module_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hostlet-runtime-relay.py")
+    spec = importlib.util.spec_from_file_location("hostlet_m3_runtime_relay", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("native_relay_module_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    os.setsid()
+    listener = socket.create_server(("127.0.0.1", listen_port), reuse_port=False)
+    stopping = False
+
+    def stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+        listener.close()
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    while not stopping:
+        try:
+            incoming, _ = listener.accept()
+        except OSError:
+            if stopping:
+                break
+            raise
+        child = os.fork()
+        if child:
+            incoming.close()
+            continue
+        listener.close()
+        module.relay_connection(incoming, Path("/proc/self/ns/net"), "127.0.0.1", target_port)
+    listener.close()
+
+
+def child_exec(rootfs, port, cgroup_path):
+    try:
+        os.setsid()
+        with open(os.path.join(cgroup_path, "cgroup.procs"), "w", encoding="ascii") as stream:
+            stream.write(f"{os.getpid()}\n")
+        os.chroot(rootfs)
+        os.chdir("/app")
+        os.setgroups([])
+        os.setgid(NODE_UID)
+        os.setuid(NODE_UID)
+        os.execve("/usr/local/bin/node", ["/usr/local/bin/node", NODE_COMMAND], {"PATH": "/usr/local/bin:/usr/bin:/bin", "PORT": str(port)})
+    except BaseException as error:
+        print(f"native_baseline_child_{type(error).__name__}", file=sys.stderr)
+        os._exit(127)
+
+
+def start(args):
+    if os.geteuid() != 0:
+        return fail("root_required")
+    state_root, metadata = validate_state_root(args.state_root)
+    artifact_root = validate_artifact_root(args.artifact_root)
+    rootfs = validate_rootfs(args.rootfs, artifact_root)
+    if not (1 <= args.port <= 65535) or not (1 <= args.relay_port <= 65535) or args.port == args.relay_port:
+        return fail("port_invalid")
+    if os.path.lexists(metadata):
+        return fail("metadata_already_exists")
+    cgroup_path = os.path.join(CGROUP_PARENT, f"hostlet-native-baseline-{uuid.uuid4().hex}")
+    metadata_value = {"schema": "hostlet.runtime.native-baseline/v1", "rootfs": rootfs, "port": args.port, "relay_port": args.relay_port, "pid": None, "relay_pid": None, "cgroup_path": cgroup_path}
+    write_metadata(metadata, metadata_value)
+    child = None
+    relay = None
+    stop_requested = False
+    try:
+        create_cgroup_at(cgroup_path)
+        child = os.fork()
+        if child == 0:
+            child_exec(rootfs, args.port, cgroup_path)
+        metadata_value["pid"] = child
+        relay = os.fork()
+        if relay == 0:
+            try:
+                native_relay(args.relay_port, args.port)
+            except BaseException as error:
+                print(f"native_baseline_relay_{type(error).__name__}", file=sys.stderr)
+            os._exit(1)
+        metadata_value["relay_pid"] = relay
+        write_metadata(metadata, metadata_value)
+
+        def stop(signum, _frame):
+            nonlocal stop_requested
+            stop_requested = True
+            try:
+                os.killpg(child, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                os.killpg(relay, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        while True:
+            try:
+                _, status = os.waitpid(child, 0)
+                break
+            except InterruptedError:
+                continue
+        if not stop_requested and os.WIFEXITED(status) and os.WEXITSTATUS(status) != 0:
+            print(f"native_baseline_child_exit_{os.WEXITSTATUS(status)}", file=sys.stderr)
+        terminate_relay_process(relay)
+        remove_cgroup(cgroup_path, child)
+        os.unlink(metadata)
+        return 0 if stop_requested else (os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+    except Exception as error:
+        cleanup_failed = False
+        try:
+            terminate_relay_process(relay)
+        except Exception as relay_error:
+            cleanup_failed = True
+            print(f"native_baseline_relay_cleanup_{relay_error}", file=sys.stderr)
+        try:
+            remove_cgroup(cgroup_path, child)
+        except Exception as cleanup_error:
+            cleanup_failed = True
+            print(f"native_baseline_cleanup_{cleanup_error}", file=sys.stderr)
+        if not cleanup_failed:
+            try:
+                if os.path.lexists(metadata):
+                    if os.path.islink(metadata) or not os.path.isfile(metadata):
+                        raise RuntimeError("metadata_changed")
+                    os.unlink(metadata)
+            except Exception as metadata_error:
+                cleanup_failed = True
+                print(f"native_baseline_metadata_cleanup_{metadata_error}", file=sys.stderr)
+        print(f"native_baseline_{error}", file=sys.stderr)
+        return 1
+
+
+def create_cgroup_at(path):
+    absolute_directory(CGROUP_PARENT, "cgroup_parent")
+    enabled = set(read_control(os.path.join(CGROUP_PARENT, "cgroup.subtree_control"), "cgroup_subtree_control").split())
+    missing = {"cpu", "memory", "pids"} - enabled
+    if missing:
+        raise RuntimeError(f"cgroup_controllers_not_delegated_{','.join(sorted(missing))}")
+    if os.path.lexists(path):
+        raise RuntimeError("cgroup_already_exists")
+    os.mkdir(path, 0o755)
+    try:
+        if os.path.realpath(path) != path or os.stat(path).st_uid != 0:
+            raise RuntimeError("cgroup_path_changed")
+        write_control(os.path.join(path, "cpu.max"), POLICY["cpu_max"])
+        write_control(os.path.join(path, "memory.max"), POLICY["memory_max_bytes"])
+        write_control(os.path.join(path, "memory.swap.max"), POLICY["memory_swap_max_bytes"])
+        write_control(os.path.join(path, "pids.max"), POLICY["pids_max"])
+        if os.path.exists(os.path.join(path, "memory.oom.group")):
+            write_control(os.path.join(path, "memory.oom.group"), 1)
+        if read_control(os.path.join(path, "cpu.max"), "cpu_max") != POLICY["cpu_max"]:
+            raise RuntimeError("cgroup_cpu_budget_mismatch")
+        if int(read_control(os.path.join(path, "memory.max"), "memory_max")) != POLICY["memory_max_bytes"]:
+            raise RuntimeError("cgroup_memory_budget_mismatch")
+        if int(read_control(os.path.join(path, "memory.swap.max"), "memory_swap_max")) != POLICY["memory_swap_max_bytes"]:
+            raise RuntimeError("cgroup_swap_budget_mismatch")
+        if int(read_control(os.path.join(path, "pids.max"), "pids_max")) != POLICY["pids_max"]:
+            raise RuntimeError("cgroup_pids_budget_mismatch")
+    except Exception:
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+        raise
+
+
+def observe(args):
+    if os.geteuid() != 0:
+        return fail("root_required")
+    state_root, metadata = validate_state_root(args.state_root)
+    if not os.path.lexists(metadata):
+        return fail("metadata_missing")
+    value = read_metadata(metadata)
+    path = cgroup_path_from_metadata(value)
+    pid = value.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return fail("metadata_pid_invalid")
+    validate_native_process(pid, path)
+    limits = read_cgroup(path)
+    if limits["cpu_max"] != POLICY["cpu_max"] or limits["memory_max_bytes"] != POLICY["memory_max_bytes"] or limits["memory_swap_max_bytes"] != POLICY["memory_swap_max_bytes"] or limits["pids_max"] != POLICY["pids_max"]:
+        return fail("cgroup_budget_mismatch")
+    print(json.dumps({"schema": "hostlet.runtime.native-baseline-observation/v1", "pid": pid, "cgroup_path": path, "observed_limits": limits}, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def cleanup(args):
+    if os.geteuid() != 0:
+        return fail("root_required")
+    state_root, metadata = validate_state_root(args.state_root)
+    try:
+        result = cleanup_metadata(state_root, metadata)
+    except Exception as error:
+        return fail(str(error))
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="hostlet-runtime-native-baseline")
+    parser.add_argument("mode", choices=("start", "observe", "cleanup"))
+    parser.add_argument("--state-root", required=True)
+    parser.add_argument("--artifact-root")
+    parser.add_argument("--rootfs")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--relay-port", type=int)
+    args = parser.parse_args()
+    try:
+        if args.mode == "start":
+            if not args.artifact_root or not args.rootfs or args.port is None or args.relay_port is None:
+                return fail("start_arguments_missing")
+            return start(args)
+        if args.mode == "observe":
+            return observe(args)
+        return cleanup(args)
+    except Exception as error:
+        return fail(str(error))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

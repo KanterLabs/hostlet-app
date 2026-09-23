@@ -38,6 +38,10 @@ impl ApiError {
         self.code == "database_unavailable"
     }
 
+    pub(crate) fn code(&self) -> &'static str {
+        self.code
+    }
+
     pub fn bad_request(code: &'static str, message: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code, message)
     }

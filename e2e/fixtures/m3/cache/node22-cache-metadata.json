@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "profile_ids": ["m3-owned-node22-v1"],
+  "architecture": "amd64",
+  "node_version": "22.23.2",
+  "npm_version": "10.9.8",
+  "node_image": "node:22-bookworm-slim@sha256:43aeff40f4afc22e83f7589a2f37e111cff5ca84529571f1c8415bcc5fcc21b2",
+  "integrity_digest_algorithm": "sha256(sorted unique non-empty packages[*].integrity joined by newline, with a final newline)",
+  "cache_image_digest_location": "generated build profile receipt; excluded here to avoid self-reference",
+  "lockfiles": [
+    {"path":"node22-api/package-lock.json","sha256":"6aac68e46e4c3a2ddb5b16be14dfe4c6dfe2828ab138938a6d0a91d720052b77","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true}
+  ]
+}

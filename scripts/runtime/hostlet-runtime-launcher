@@ -1,0 +1,1031 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# Use an explicit integer conversion; date implementations differ on %3N.
+now_ms() { python3 -c 'import time; print(time.time_ns() // 1_000_000)'; }
+
+request= request_sha256= state_root= artifact_root= runsc=
+while (($#)); do
+  case "$1" in
+    --request-file) request=$2; shift 2;; --request-sha256) request_sha256=$2; shift 2;; --state-root) state_root=$2; shift 2;;
+    --artifact-root) artifact_root=$2; shift 2;; --runsc) runsc=$2; shift 2;;
+    *) echo runtime_launcher_usage >&2; exit 2;;
+  esac
+done
+for value in "$request" "$state_root" "$artifact_root" "$runsc"; do [[ "$value" == /* ]] || { echo runtime_path_not_absolute >&2; exit 2; }; done
+[[ -f "$request" && -x "$runsc" ]] || { echo runtime_prerequisite_missing >&2; exit 2; }
+[[ "$request_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo runtime_request_digest_mismatch >&2; exit 2; }
+[[ ! -L "$request" && "$(stat -c %F "$request")" == "regular file" && "$(stat -c %a "$request")" =~ ^(400|440|600|640)$ ]] || { echo runtime_request_permissions_invalid >&2; exit 2; }
+[[ -d "$state_root" && ! -L "$state_root" && -f "$state_root/.hostlet-runtime-owned" ]] || { echo runtime_state_root_not_owned >&2; exit 2; }
+[[ -d "$artifact_root" && ! -L "$artifact_root" && -f "$artifact_root/.hostlet-artifacts-owned" ]] || { echo runtime_artifact_root_not_owned >&2; exit 2; }
+[[ "$(cat "$state_root/.hostlet-runtime-owned")" == hostlet-runtime-state-v1 ]] || { echo runtime_state_root_not_owned >&2; exit 2; }
+[[ "$(cat "$artifact_root/.hostlet-artifacts-owned")" == hostlet-artifacts-v1 ]] || { echo runtime_artifact_root_not_owned >&2; exit 2; }
+request_copy=$(mktemp "${state_root}/.request.XXXXXX")
+trap 'rm -f -- "$request_copy"' EXIT
+cp --reflink=never -- "$request" "$request_copy"
+chmod 0400 "$request_copy"
+[[ "$(sha256sum "$request_copy" | awk '{print $1}')" == "$request_sha256" ]] || { echo runtime_request_digest_mismatch >&2; exit 2; }
+request=$request_copy
+jq -e '.schema=="hostlet.runtime.executor-request/v1" and (.profile=="owned_fixture_evaluation" or .profile=="evidence_gated_owned_fixture")' "$request" >/dev/null
+op=$(jq -r .operation "$request"); id=$(jq -r .allocation_id "$request"); generation=$(jq -r .generation "$request"); fence=$(jq -r .fence "$request")
+[[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && "$generation" =~ ^[1-9][0-9]*$ && "$fence" =~ ^[1-9][0-9]*$ ]] || { echo runtime_identity_invalid >&2; exit 2; }
+jq -e '(.profile=="owned_fixture_evaluation" and .capability_digest==null) or (.profile=="evidence_gated_owned_fixture" and (.capability_digest|test("^sha256:[0-9a-f]{64}$")))' "$request" >/dev/null || { echo runtime_isolation_unverified >&2; exit 2; }
+jq -e '.resources=={memory_bytes:536870912,memory_swap_bytes:0,cpu_quota_micros:25000,cpu_period_micros:100000,pids:128,scratch_bytes:268435456,max_connections:128,new_connections_per_second:20,new_connections_burst:40}' "$request" >/dev/null || { echo runtime_policy_not_admitted >&2; exit 2; }
+identity_hash=$(printf '%s:%s' "$id" "$generation" | sha256sum | cut -c1-10); sandbox="h${identity_hash}g${generation}"; app_ns="hostlet-app-${id}-${generation}"; gateway_ns="hostlet-gateway-${id}-${generation}"; short=$identity_hash; sink_iface="s${short}"
+cgroup_identity_hash=$(printf '%s:%s:%s' "$id" "$generation" "$fence" | sha256sum | cut -c1-16)
+cgroup_parent=/sys/fs/cgroup
+cgroup_state_file=
+cgroup_tombstone_dir="${state_root}/runtime-cgroup-tombstones"
+cgroup_tombstone_file="${cgroup_tombstone_dir}/${id}-${generation}-${fence}.json"
+cgroup_epoch=1
+cgroup_relative=
+cgroup_root=
+cgroup_inode=
+request_identity_sha256=$(jq -cS 'del(.operation,.observed_at_unix_ms,.exit_history_unix_ms)' "$request" | sha256sum | awk '{print $1}')
+generation_root="${state_root}/${id}/${generation}"; bundle="${generation_root}/bundle"; run_root="${state_root}/runsc"; evidence="${generation_root}/evidence"; cgroup_state_file="${evidence}/cgroup-state.json"
+digest=$(jq -r .artifact_digest "$request"); hex=${digest#sha256:}; rootfs="${artifact_root}/${hex}/rootfs"
+[[ "$digest" == "sha256:${hex}" && "$hex" =~ ^[0-9a-f]{64}$ ]] || { echo runtime_digest_invalid >&2; exit 2; }
+[[ "$rootfs" == "${artifact_root}/"* ]] || { echo runtime_artifact_escape >&2; exit 2; }
+mount_root=/run/hostlet-owned-fixture-mounts
+mount_root_marker="${mount_root}/.hostlet-owned"
+mount_tuple="${mount_root}/${id}-${generation}-${fence}"
+mount_tuple_marker="${mount_tuple}/.hostlet-owned"
+rootfs_mount="${mount_tuple}/rootfs"
+secret_mount="${mount_tuple}/secrets"
+rootfs_source_inode= rootfs_target_inode= rootfs_mount_identity=
+secret_target_inode= secret_mount_identity=
+prepare_cleanup_armed=false
+# The launcher owns a pre-created direct child of the cgroup-v2 root. Keeping
+# the filesystem driver avoids a transient systemd scope deleting the final
+# counters when the sandbox exits. The OCI resource fields remain the policy
+# reference; runsc leaves an already-existing cgroup configured by its caller.
+global=(--root="$run_root" --platform="$(jq -r .platform "$request")" --network=sandbox --sidecar-usage-policy=STRICT --sidecar-release-enforcement-policy=ALWAYS)
+# M3 has no tenant log delivery contract. Keep OCI stdio off the trusted receipt
+# channel; bounded tenant log capture and delivery are deferred to M4.
+runsc_quiet() { "$runsc" "${global[@]}" "$@" </dev/null >/dev/null 2>&1; }
+expected_runsc=$(jq -r '.runtime_binary_digest|sub("^sha256:";"")' "$request"); observed_runsc=$(sha256sum "$runsc" | awk '{print $1}')
+[[ "$expected_runsc" == c0f4ec0ac1198975d5cf919a78f2302426de096f69eebd33e50125c3ca42d699 && "$expected_runsc" == "$observed_runsc" ]] || { echo runtime_binary_digest_mismatch >&2; exit 1; }
+runsc_dir=$(dirname "$runsc")
+while IFS=$'\t' read -r expected relative; do
+  sidecar="$runsc_dir/$relative"
+  [[ -f "$sidecar" && ! -L "$sidecar" && "$(sha256sum "$sidecar" | awk '{print $1}')" == "$expected" ]] || { echo runtime_sidecar_digest_mismatch >&2; exit 1; }
+done <<'EOF'
+4b0c2a8eb7414d8b5f3d032e158784b454e9c98ffa3fdebbdd79047faf930d7c	containerd-shim-runsc-v1
+e29be2ab32a10eb885c4a46635f47b80ad661be6f23b5d7903f11906941c7aab	gvisor-bin/checkpointgofer
+3315d7ad7c2d3751d349e4976fa02da1da6fd7e41746c35622304e5fabe4fce0	gvisor-bin/gvisor-sentry-prewarmer
+aff3ed7dfac54b04aab14de2dde53e021402f0ba238bc7ece3ac7d4b6604b055	gvisor-bin/gvisor_sentry
+03af90d07ea466c10ecc3e3ba839b2a59540959dd3286aea3886917cba850c11	gvisor-bin/runsc-fd-parking
+02bb563cd060fe7992ccd00927024b02b70e0803b61abfa015e158d9d7e88507	gvisor-bin/runsc-metric-server
+EOF
+
+cgroup_path_for_epoch() {
+  local epoch=$1
+  printf '/hostlet-owned-runtime-%s-e%s' "$cgroup_identity_hash" "$epoch"
+}
+
+validate_cgroup_parent() {
+  local available enabled controller
+  [[ -d "$cgroup_parent" && ! -L "$cgroup_parent" ]] || return 1
+  [[ "$(realpath -e -- "$cgroup_parent")" == "$cgroup_parent" ]] || return 1
+  [[ "$(stat -fc %T -- "$cgroup_parent")" == cgroup2fs ]] || return 1
+  [[ -f "$cgroup_parent/cgroup.controllers" && -f "$cgroup_parent/cgroup.subtree_control" ]] || return 1
+  available=$(cat -- "$cgroup_parent/cgroup.controllers") || return 1
+  enabled=$(cat -- "$cgroup_parent/cgroup.subtree_control") || return 1
+  [[ -n "$available" ]] || return 1
+  for controller in $available; do
+    [[ " $enabled " == *" $controller "* ]] || return 1
+  done
+}
+
+validate_cgroup_identity() {
+  local relative=$1 epoch=$2 inode=${3:-} root expected_epoch
+  [[ "$relative" =~ ^/hostlet-owned-runtime-${cgroup_identity_hash}-e([1-9][0-9]*)$ ]] || return 1
+  expected_epoch=${BASH_REMATCH[1]}
+  [[ "$expected_epoch" == "$epoch" ]] || return 1
+  root="${cgroup_parent}${relative}"
+  [[ ! -L "$root" ]] || return 1
+  if [[ -e "$root" ]]; then
+    [[ -d "$root" && "$(realpath -e -- "$root")" == "$root" ]] || return 1
+    if [[ -n "$inode" ]]; then
+      [[ "$inode" =~ ^[1-9][0-9]*$ && "$(stat -Lc %i -- "$root")" == "$inode" ]] || return 1
+    fi
+  fi
+  return 0
+}
+
+write_cgroup_state() {
+  local epoch=$1 relative=$2 inode=${3:-} temporary
+  [[ "$epoch" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ -d "$evidence" && ! -L "$evidence" ]] || return 1
+  validate_cgroup_identity "$relative" "$epoch" "$inode" || return 1
+  temporary="${cgroup_state_file}.new"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  if [[ -n "$inode" ]]; then
+    jq -cn --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+      --arg identity "$cgroup_identity_hash" --arg path "$relative" --argjson epoch "$epoch" --argjson inode "$inode" \
+      '{schema:"hostlet.runtime.cgroup-state/v1",allocation_id:$id,generation:$generation,fence:$fence,identity_hash:$identity,cgroup_path:$path,cgroup_epoch:$epoch,cgroup_inode:$inode}' > "$temporary"
+  else
+    jq -cn --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+      --arg identity "$cgroup_identity_hash" --arg path "$relative" --argjson epoch "$epoch" \
+      '{schema:"hostlet.runtime.cgroup-state/v1",allocation_id:$id,generation:$generation,fence:$fence,identity_hash:$identity,cgroup_path:$path,cgroup_epoch:$epoch,cgroup_inode:null}' > "$temporary"
+  fi
+  chmod 0600 -- "$temporary"
+  mv -- "$temporary" "$cgroup_state_file"
+}
+
+load_cgroup_state() {
+  [[ -f "$cgroup_state_file" && ! -L "$cgroup_state_file" ]] || return 1
+  jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+    --arg identity "$cgroup_identity_hash" \
+    '.schema=="hostlet.runtime.cgroup-state/v1" and .allocation_id==$id and .generation==$generation and .fence==$fence and .identity_hash==$identity and (.cgroup_epoch|type=="number" and floor==. and . >= 1) and (.cgroup_path|type=="string") and ((.cgroup_inode==null) or (.cgroup_inode|type=="number" and floor==. and . >= 1))' \
+    "$cgroup_state_file" >/dev/null || return 1
+  cgroup_epoch=$(jq -r '.cgroup_epoch' "$cgroup_state_file")
+  cgroup_relative=$(jq -r '.cgroup_path' "$cgroup_state_file")
+  cgroup_inode=$(jq -r '.cgroup_inode // empty' "$cgroup_state_file")
+  validate_cgroup_identity "$cgroup_relative" "$cgroup_epoch" "$cgroup_inode" || return 1
+  cgroup_root="${cgroup_parent}${cgroup_relative}"
+}
+
+record_cgroup_ownership() {
+  local ownership="$generation_root/OWNERSHIP.json" temporary
+  [[ -f "$ownership" && ! -L "$ownership" ]] || return 1
+  temporary="${ownership}.new"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  jq --arg path "$cgroup_relative" --argjson epoch "$cgroup_epoch" --argjson inode "${cgroup_inode:-null}" \
+    --arg identity "$cgroup_identity_hash" '. + {cgroup_identity_hash:$identity,cgroup_path:$path,cgroup_epoch:$epoch,cgroup_inode:$inode}' "$ownership" > "$temporary"
+  chmod 0600 -- "$temporary"
+  mv -- "$temporary" "$ownership"
+}
+
+create_budget_cgroup() {
+  local existing_inode controls_ok=false
+  validate_cgroup_parent || { echo runtime_cgroup_parent_invalid >&2; return 1; }
+  load_cgroup_state || { echo runtime_cgroup_state_invalid >&2; return 1; }
+  if [[ -e "$cgroup_root" || -L "$cgroup_root" ]]; then
+    [[ -d "$cgroup_root" && ! -L "$cgroup_root" && "$(realpath -e -- "$cgroup_root")" == "$cgroup_root" ]] || { echo runtime_cgroup_path_changed >&2; return 1; }
+    existing_inode=$(stat -Lc %i -- "$cgroup_root")
+    [[ -n "$cgroup_inode" && "$existing_inode" == "$cgroup_inode" ]] || { echo runtime_cgroup_collision >&2; return 1; }
+    # A same-epoch leaf is durable evidence for this attempt. Reusing it would
+    # erase memory/PID/CPU counters and could hide an interrupted worker.
+    echo runtime_cgroup_exists >&2
+    return 1
+  fi
+  mkdir -- "$cgroup_root" || { echo runtime_cgroup_create_failed >&2; return 1; }
+  cgroup_inode=$(stat -Lc %i -- "$cgroup_root")
+  [[ "$cgroup_inode" =~ ^[1-9][0-9]*$ ]] || { echo runtime_cgroup_inode_invalid >&2; return 1; }
+  write_cgroup_state "$cgroup_epoch" "$cgroup_relative" "$cgroup_inode" || return 1
+  record_cgroup_ownership || { echo runtime_cgroup_ownership_failed >&2; return 1; }
+  if
+    printf '25000 100000\n' > "$cgroup_root/cpu.max" &&
+    printf '536870912\n' > "$cgroup_root/memory.max" &&
+    printf '0\n' > "$cgroup_root/memory.swap.max" &&
+    printf '128\n' > "$cgroup_root/pids.max" &&
+    printf '1\n' > "$cgroup_root/memory.oom.group" &&
+    [[ "$(cat -- "$cgroup_root/cpu.max")" == '25000 100000' ]] &&
+    [[ "$(cat -- "$cgroup_root/memory.max")" == 536870912 ]] &&
+    [[ "$(cat -- "$cgroup_root/memory.swap.max")" == 0 ]] &&
+    [[ "$(cat -- "$cgroup_root/pids.max")" == 128 ]] &&
+    [[ "$(cat -- "$cgroup_root/memory.oom.group")" == 1 ]]
+  then
+    controls_ok=true
+  fi
+  if [[ "$controls_ok" != true ]]; then
+    # The path and inode are already journaled. Remove only that exact empty
+    # leaf; if a writer appeared, retain it for ownership-checked cleanup.
+    remove_budget_cgroup || true
+    echo runtime_cgroup_limits_invalid >&2
+    return 1
+  fi
+  return 0
+}
+
+remove_budget_cgroup() {
+  validate_cgroup_parent || { echo runtime_cgroup_parent_invalid >&2; return 1; }
+  load_cgroup_state || { echo runtime_cgroup_state_invalid >&2; return 1; }
+  [[ ! -e "$cgroup_root" && ! -L "$cgroup_root" ]] && return 0
+  [[ -d "$cgroup_root" && ! -L "$cgroup_root" && "$(realpath -e -- "$cgroup_root")" == "$cgroup_root" ]] || { echo runtime_cgroup_path_changed >&2; return 1; }
+  [[ -n "$cgroup_inode" ]] || { echo runtime_cgroup_inode_missing >&2; return 1; }
+  [[ "$(stat -Lc %i -- "$cgroup_root")" == "$cgroup_inode" ]] || { echo runtime_cgroup_inode_changed >&2; return 1; }
+  [[ -z "$(cat -- "$cgroup_root/cgroup.procs")" ]] || { echo runtime_cgroup_not_empty >&2; return 1; }
+  [[ "$(awk '$1=="populated"{print $2}' "$cgroup_root/cgroup.events")" == 0 ]] || { echo runtime_cgroup_descendants_present >&2; return 1; }
+  rmdir -- "$cgroup_root" || { echo runtime_cgroup_remove_failed >&2; return 1; }
+}
+
+advance_budget_epoch() {
+  load_cgroup_state || return 1
+  remove_budget_cgroup || return 1
+  cgroup_epoch=$((cgroup_epoch + 1))
+  cgroup_relative=$(cgroup_path_for_epoch "$cgroup_epoch")
+  cgroup_inode=
+  write_cgroup_state "$cgroup_epoch" "$cgroup_relative" "" || return 1
+  record_cgroup_ownership
+}
+
+validate_cgroup_config_path() {
+  [[ -f "$bundle/config.json" && ! -L "$bundle/config.json" ]] || return 1
+  jq -e --arg path "$cgroup_relative" '.linux.cgroupsPath==$path' "$bundle/config.json" >/dev/null
+}
+
+update_cgroup_config_path() {
+  local temporary="${bundle}/config.json.new"
+  validate_cgroup_identity "$cgroup_relative" "$cgroup_epoch" "" || return 1
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  jq --arg path "$cgroup_relative" '.linux.cgroupsPath=$path' "$bundle/config.json" > "$temporary"
+  chmod 0600 -- "$temporary"
+  mv -- "$temporary" "$bundle/config.json"
+  validate_cgroup_config_path || return 1
+  sha256sum "$bundle/config.json" "$evidence/gateway-ruleset.txt" > "$evidence/SHA256SUMS"
+}
+
+write_cgroup_tombstone() {
+  local temporary
+  load_cgroup_state || return 1
+  [[ ! -e "$cgroup_root" && ! -L "$cgroup_root" ]] || { echo runtime_cgroup_not_removed >&2; return 1; }
+  if [[ ! -e "$cgroup_tombstone_dir" ]]; then
+    mkdir -m 0700 -- "$cgroup_tombstone_dir" || return 1
+    chown 0:0 -- "$cgroup_tombstone_dir" || return 1
+  fi
+  [[ -d "$cgroup_tombstone_dir" && ! -L "$cgroup_tombstone_dir" && "$(realpath -e -- "$cgroup_tombstone_dir")" == "$cgroup_tombstone_dir" ]] || return 1
+  [[ "$(stat -c '%u:%a' -- "$cgroup_tombstone_dir")" == 0:700 ]] || return 1
+  temporary="${cgroup_tombstone_file}.new"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  jq -cn --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+    --arg identity "$cgroup_identity_hash" --arg path "$cgroup_relative" --argjson epoch "$cgroup_epoch" --argjson inode "${cgroup_inode:-null}" \
+    '{schema:"hostlet.runtime.cgroup-tombstone/v1",allocation_id:$id,generation:$generation,fence:$fence,identity_hash:$identity,cgroup_path:$path,cgroup_epoch:$epoch,cgroup_inode:$inode}' > "$temporary"
+  chmod 0600 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -- "$temporary" "$cgroup_tombstone_file"
+}
+
+load_cgroup_tombstone() {
+  local path epoch inode
+  [[ -f "$cgroup_tombstone_file" && ! -L "$cgroup_tombstone_file" ]] || return 1
+  [[ -d "$cgroup_tombstone_dir" && ! -L "$cgroup_tombstone_dir" && "$(realpath -e -- "$cgroup_tombstone_dir")" == "$cgroup_tombstone_dir" ]] || return 1
+  [[ "$(stat -c '%u:%a' -- "$cgroup_tombstone_dir")" == 0:700 ]] || return 1
+  [[ "$(stat -c '%u:%a' -- "$cgroup_tombstone_file")" == 0:600 && "$(realpath -e -- "$cgroup_tombstone_file")" == "$cgroup_tombstone_file" ]] || return 1
+  jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+    --arg identity "$cgroup_identity_hash" \
+    '.schema=="hostlet.runtime.cgroup-tombstone/v1" and .allocation_id==$id and .generation==$generation and .fence==$fence and .identity_hash==$identity and (.cgroup_epoch|type=="number" and floor==. and . >= 1) and (.cgroup_path|type=="string") and ((.cgroup_inode==null) or (.cgroup_inode|type=="number" and floor==. and . >= 1))' \
+    "$cgroup_tombstone_file" >/dev/null || return 1
+  path=$(jq -r '.cgroup_path' "$cgroup_tombstone_file")
+  epoch=$(jq -r '.cgroup_epoch' "$cgroup_tombstone_file")
+  inode=$(jq -r '.cgroup_inode // empty' "$cgroup_tombstone_file")
+  validate_cgroup_identity "$path" "$epoch" "$inode" || return 1
+  cgroup_relative=$path
+  cgroup_epoch=$epoch
+  cgroup_inode=$inode
+  cgroup_root="${cgroup_parent}${cgroup_relative}"
+}
+
+remove_tombstoned_cgroup() {
+  validate_cgroup_parent || { echo runtime_cgroup_parent_invalid >&2; return 1; }
+  load_cgroup_tombstone || { echo runtime_cgroup_tombstone_invalid >&2; return 1; }
+  [[ ! -e "$cgroup_root" && ! -L "$cgroup_root" ]] && return 0
+  [[ -d "$cgroup_root" && ! -L "$cgroup_root" && "$(realpath -e -- "$cgroup_root")" == "$cgroup_root" ]] || { echo runtime_cgroup_path_changed >&2; return 1; }
+  [[ "$(stat -Lc %i -- "$cgroup_root")" == "$cgroup_inode" ]] || { echo runtime_cgroup_inode_changed >&2; return 1; }
+  [[ -z "$(cat -- "$cgroup_root/cgroup.procs")" ]] || { echo runtime_cgroup_not_empty >&2; return 1; }
+  [[ "$(awk '$1=="populated"{print $2}' "$cgroup_root/cgroup.events")" == 0 ]] || { echo runtime_cgroup_descendants_present >&2; return 1; }
+  rmdir -- "$cgroup_root" || { echo runtime_cgroup_remove_failed >&2; return 1; }
+}
+
+observe_scratch() {
+  local raw block_size total_blocks available_blocks extra capacity_bytes available_bytes
+  raw=$(/usr/bin/timeout --signal=KILL --kill-after=1s 2s "$runsc" "${global[@]}" exec "$sandbox" /usr/bin/stat -f --format='%S:%b:%a' /tmp </dev/null 2>/dev/null) || return 1
+  IFS=: read -r block_size total_blocks available_blocks extra <<< "$raw"
+  [[ -z "$extra" && "$block_size" =~ ^[1-9][0-9]*$ && "$total_blocks" =~ ^[1-9][0-9]*$ && "$available_blocks" =~ ^[0-9]+$ ]] || return 1
+  (( block_size <= 1048576 && total_blocks <= 1048576 && available_blocks <= total_blocks )) || return 1
+  capacity_bytes=$((block_size * total_blocks)); available_bytes=$((block_size * available_blocks))
+  [[ "$capacity_bytes" == 268435456 && "$available_bytes" -le "$capacity_bytes" ]] || return 1
+  jq -cn --argjson capacity "$capacity_bytes" --argjson available "$available_bytes" \
+    '{capacity_bytes:$capacity,available_bytes:$available}'
+}
+
+emit() {
+  local status=$1 reason=$2 health=${3:-false} result=${4:-passed} observed_at config_digest= rules_digest= app_inode= gateway_inode= runsc_status= observed=null scratch_observation=null health_json cleanup_json network_json cgroup_absent=false
+  observed_at=$(now_ms)
+  [[ -f "$bundle/config.json" ]] && config_digest="sha256:$(sha256sum "$bundle/config.json" | awk '{print $1}')"
+  [[ -f "$evidence/gateway-ruleset.txt" ]] && rules_digest="sha256:$(sha256sum "$evidence/gateway-ruleset.txt" | awk '{print $1}')"
+  [[ -e "/run/netns/$app_ns" ]] && app_inode=$(stat -Lc %i "/run/netns/$app_ns")
+  [[ -e "/run/netns/$gateway_ns" ]] && gateway_inode=$(stat -Lc %i "/run/netns/$gateway_ns")
+  if "$runsc" "${global[@]}" state "$sandbox" > "$evidence/runsc-state.json" 2>/dev/null; then runsc_status=$(jq -r .status "$evidence/runsc-state.json"); observed=$(observe_cgroup "$evidence/runsc-state.json"); fi
+  [[ "$observed" != null ]] || observed=$(observe_cgroup "")
+  if [[ "$observed" != null ]]; then
+    [[ "$(jq -r '.pids_events.max > 0' <<<"$observed")" == true ]] && reason=process_limit_exceeded
+    [[ "$(jq -r '.memory_events.oom_kill > 0' <<<"$observed")" == true ]] && reason=runtime_oom
+    [[ "$(jq -r '.cpu_nr_throttled > 0' <<<"$observed")" == true && "$reason" == runtime_started ]] && reason=cpu_throttled
+  fi
+  health_json=$(health_observation "$health")
+  counters='[]'; if [[ -e "/run/netns/$gateway_ns" ]]; then counters=$(ip netns exec "$gateway_ns" nft -j list counters 2>/dev/null | jq '[.nftables[]|select(.counter)|.counter|{name,packets,bytes}]' || echo '[]'); fi
+  if [[ ( "$reason" == runtime_started || "$reason" == cpu_throttled ) && "$(jq '[.[]|select(.name=="connection_limited")|.packets]|add//0' <<<"$counters")" -gt 0 ]]; then reason=network_connection_limit; fi
+  if [[ "$runsc_status" == running ]]; then
+    scratch_observation=$(observe_scratch || true)
+    if [[ -z "$scratch_observation" ]] || ! jq -e 'type == "object" and .capacity_bytes == 268435456 and (.available_bytes|type == "number" and floor == . and . >= 0 and . <= 268435456)' <<<"$scratch_observation" >/dev/null 2>&1; then
+      scratch_observation=null
+    elif [[ "$(jq -r .available_bytes <<<"$scratch_observation")" == 0 ]]; then
+      case "$reason" in
+        runtime_started|health_failed|cpu_throttled) reason=scratch_limit_exceeded ;;
+      esac
+    fi
+  fi
+  network_json=$(jq -cn --arg rules "$rules_digest" --arg app "$app_inode" --arg gateway "$gateway_inode" --argjson counters "$counters" '{rules_digest:(if $rules=="" then null else $rules end),application_namespace_inode:(if $app=="" then null else ($app|tonumber) end),gateway_namespace_inode:(if $gateway=="" then null else ($gateway|tonumber) end),counters:$counters}')
+  if load_cgroup_state >/dev/null 2>&1; then
+    [[ ! -e "$cgroup_root" && ! -L "$cgroup_root" ]] && cgroup_absent=true
+  fi
+  cleanup_json=$(jq -cn --argjson sandbox "$([[ -z "$runsc_status" ]] && echo true || echo false)" --argjson app "$([[ -e /run/netns/$app_ns ]] && echo false || echo true)" --argjson gateway "$([[ -e /run/netns/$gateway_ns ]] && echo false || echo true)" --argjson cgroup "$cgroup_absent" --argjson retained "$([[ -e $generation_root ]] && echo true || echo false)" --argjson mounts "$([[ ! -e $mount_tuple ]] && echo true || echo false)" '{sandbox_absent:$sandbox,application_namespace_absent:$app,gateway_namespace_absent:$gateway,cgroup_absent:$cgroup,mounts_absent:$mounts,state_retained:$retained}')
+  jq -cn --slurpfile r "$request" --arg result "$result" --arg status "$status" --arg reason "$reason" --arg sandbox "$sandbox" --arg runsc_status "$runsc_status" --arg config "$config_digest" --argjson observed_at "$observed_at" --argjson observed "$observed" --argjson scratch "$scratch_observation" --argjson health "$health_json" --argjson network "$network_json" --argjson cleanup "$cleanup_json" '{schema:"hostlet.runtime.executor-receipt/v1",operation:$r[0].operation,result:$result,status:$status,reason_code:$reason,allocation_id:$r[0].allocation_id,generation:$r[0].generation,fence:$r[0].fence,observed_at_unix_ms:$observed_at,profile:$r[0].profile,artifact_digest:$r[0].artifact_digest,runtime_binary_digest:$r[0].runtime_binary_digest,policy_digest:$r[0].policy_digest,capability_digest:$r[0].capability_digest,platform:$r[0].platform,sandbox_id:$sandbox,runsc_status:(if $runsc_status=="" then null else $runsc_status end),oci_config_digest:(if $config=="" then null else $config end),namespace_inodes:([$network.application_namespace_inode,$network.gateway_namespace_inode]|map(select(.!=null))),observed_limits:$observed,health:$health,network:$network,cleanup:$cleanup} + (if $scratch == null then {} else {scratch_observation:$scratch} end)'
+}
+observe_cgroup() {
+  local state_file=$1 pid=0 process_relative= root= resolved= cpu_usage=0 cpu_nr=0 cpu_throttled=0
+  load_cgroup_state >/dev/null 2>&1 || { echo null; return; }
+  [[ -n "$cgroup_inode" ]] || { echo null; return; }
+  root="$cgroup_root"; [[ -d "$root" && ! -L "$root" ]] || { echo null; return; }
+  resolved=$(realpath -e -- "$root" 2>/dev/null || true)
+  [[ "$resolved" == "$root" ]] || { echo null; return; }
+  if [[ -n "$state_file" && -f "$state_file" ]]; then pid=$(jq -r '.pid // 0' "$state_file" 2>/dev/null || echo 0); fi
+  if [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/cgroup" ]]; then
+    process_relative=$(awk -F: '$1=="0"{print $3}' "/proc/$pid/cgroup")
+    [[ "$process_relative" == "$cgroup_relative" ]] || { echo null; return; }
+  fi
+  cpu_usage=$(awk '$1=="usage_usec"{print $2}' "$root/cpu.stat"); cpu_nr=$(awk '$1=="nr_throttled"{print $2}' "$root/cpu.stat"); cpu_throttled=$(awk '$1=="throttled_usec"{print $2}' "$root/cpu.stat")
+  jq -cn --arg path "$cgroup_relative" --arg cpu_max "$(cat "$root/cpu.max")" --argjson memory "$(cat "$root/memory.max")" --argjson swap "$(cat "$root/memory.swap.max")" --argjson pids "$(cat "$root/pids.max")" --argjson current "$(cat "$root/memory.current")" --argjson peak "$(cat "$root/memory.peak")" --argjson pcurrent "$(cat "$root/pids.current")" --argjson usage "${cpu_usage:-0}" --argjson nr "${cpu_nr:-0}" --argjson throttled "${cpu_throttled:-0}" --argjson me "$(awk '{printf "%s\"%s\":%s",sep,$1,$2;sep=","} END{print ""}' "$root/memory.events" | sed 's/^/{/;s/$/}/')" --argjson pe "$(awk '{printf "%s\"%s\":%s",sep,$1,$2;sep=","} END{print ""}' "$root/pids.events" | sed 's/^/{/;s/$/}/')" '{cgroup_path:$path,cpu_max:$cpu_max,memory_max_bytes:$memory,memory_swap_max_bytes:$swap,pids_max:$pids,memory_current_bytes:$current,memory_peak_bytes:$peak,pids_current:$pcurrent,cpu_usage_usec:$usage,cpu_nr_throttled:$nr,cpu_throttled_usec:$throttled,memory_events:{low:($me.low//0),high:($me.high//0),max:($me.max//0),oom:($me.oom//0),oom_kill:($me.oom_kill//0)},pids_events:{max:($pe.max//0)}}'
+}
+configure_cgroup() {
+  local state_file="$evidence/runsc-created.json" pid relative observed
+  "$runsc" "${global[@]}" state "$sandbox" > "$state_file" 2>/dev/null
+  pid=$(jq -r '.pid // 0' "$state_file"); [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/cgroup" ]] || return 1
+  load_cgroup_state || return 1
+  relative=$(awk -F: '$1=="0"{print $3}' "/proc/$pid/cgroup")
+  [[ "$relative" == "$cgroup_relative" ]] || return 1
+  [[ -n "$cgroup_inode" && -d "$cgroup_root" && ! -L "$cgroup_root" && "$(stat -Lc %i -- "$cgroup_root")" == "$cgroup_inode" ]] || return 1
+  [[ -f "$cgroup_root/memory.oom.group" && "$(cat -- "$cgroup_root/memory.oom.group")" == 1 ]] || return 1
+  observed=$(observe_cgroup "$state_file")
+  [[ "$observed" != null ]] || return 1
+  jq -e '.cpu_max=="25000 100000" and .memory_max_bytes==536870912 and .memory_swap_max_bytes==0 and .pids_max==128' <<<"$observed" >/dev/null
+}
+health_observation() {
+  local requested=$1 app4 port path started ended code passed=false reason=health_not_checked
+  [[ "$requested" == true ]] || { echo '{"passing":false,"checks":[]}'; return; }
+  app4=$(jq -r .network.application_ipv4 "$request"); port=$(jq -r .health_port "$request"); path=$(jq -r .health_path "$request"); started=$(now_ms)
+  code=$(ip netns exec "$gateway_ns" curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 "http://${app4}:${port}${path}" 2>/dev/null || true); ended=$(now_ms)
+  [[ "$code" == 200 ]] && { passed=true; reason=health_passed; } || reason=health_failed
+  jq -cn --arg address "$app4" --argjson port "$port" --arg path "$path" --arg code "$code" --argjson passed "$passed" --argjson elapsed "$((ended-started))" --arg reason "$reason" '{passing:$passed,checks:[{kind:"http",address:$address,port:$port,path:$path,status_code:(if ($code|test("^[0-9]{3}$")) then ($code|tonumber) else null end),passed:$passed,elapsed_ms:$elapsed,reason_code:$reason}]}'
+}
+
+network_link_json() {
+  local namespace=$1 name=$2
+  ip -n "$namespace" -j -d link show dev "$name"
+}
+
+validate_veth_link_json() {
+  local json=$1 expected_name=$2 expected_ifindex=$3 expected_peer_ifindex=$4 expected_mac=$5
+  local actual_name actual_ifindex actual_peer_ifindex actual_mac
+  actual_name=$(jq -er --arg name "$expected_name" 'if length == 1 and .[0].ifname == $name and .[0].linkinfo.info_kind == "veth" then .[0].ifname else error("veth_identity_invalid") end' <<<"$json") || return 1
+  actual_ifindex=$(jq -er 'if length == 1 and (.[0].ifindex|type == "number") and .[0].ifindex > 0 then .[0].ifindex else error("veth_ifindex_invalid") end' <<<"$json") || return 1
+  actual_peer_ifindex=$(jq -er 'if length == 1 and (.[0].link_index|type == "number") and .[0].link_index > 0 then .[0].link_index else error("veth_peer_ifindex_invalid") end' <<<"$json") || return 1
+  actual_mac=$(jq -er 'if length == 1 and (.[0].address|type == "string") and .[0].address != "" then .[0].address else error("veth_address_invalid") end' <<<"$json") || return 1
+  [[ "$actual_name" == "$expected_name" && "$actual_ifindex" == "$expected_ifindex" && "$actual_peer_ifindex" == "$expected_peer_ifindex" && "$actual_mac" == "$expected_mac" ]] || return 1
+  jq -e 'length == 1 and (.[0].flags|index("UP") != null)' <<<"$json" >/dev/null || return 1
+}
+
+record_network_veth_ownership() {
+  local ownership=$1 app_name="a${short}" gateway_name="g${short}" app_json gateway_json app_ifindex gateway_ifindex app_peer_ifindex gateway_peer_ifindex app_mac gateway_mac temporary
+  [[ -f "$ownership" && ! -L "$ownership" ]] || return 1
+  app_json=$(network_link_json "$app_ns" "$app_name") || return 1
+  gateway_json=$(network_link_json "$gateway_ns" "$gateway_name") || return 1
+  app_ifindex=$(jq -er --arg name "$app_name" 'if length == 1 and .[0].ifname == $name and .[0].linkinfo.info_kind == "veth" and (.[0].ifindex|type == "number") and .[0].ifindex > 0 then .[0].ifindex else error("veth_identity_invalid") end' <<<"$app_json") || return 1
+  gateway_ifindex=$(jq -er --arg name "$gateway_name" 'if length == 1 and .[0].ifname == $name and .[0].linkinfo.info_kind == "veth" and (.[0].ifindex|type == "number") and .[0].ifindex > 0 then .[0].ifindex else error("veth_identity_invalid") end' <<<"$gateway_json") || return 1
+  app_peer_ifindex=$(jq -er 'if length == 1 and (.[0].link_index|type == "number") and .[0].link_index > 0 then .[0].link_index else error("veth_peer_ifindex_invalid") end' <<<"$app_json") || return 1
+  gateway_peer_ifindex=$(jq -er 'if length == 1 and (.[0].link_index|type == "number") and .[0].link_index > 0 then .[0].link_index else error("veth_peer_ifindex_invalid") end' <<<"$gateway_json") || return 1
+  app_mac=$(jq -er 'if length == 1 and (.[0].address|type == "string") and .[0].address != "" then .[0].address else error("veth_address_invalid") end' <<<"$app_json") || return 1
+  gateway_mac=$(jq -er 'if length == 1 and (.[0].address|type == "string") and .[0].address != "" then .[0].address else error("veth_address_invalid") end' <<<"$gateway_json") || return 1
+  [[ "$app_peer_ifindex" == "$gateway_ifindex" && "$gateway_peer_ifindex" == "$app_ifindex" ]] || return 1
+  validate_veth_link_json "$app_json" "$app_name" "$app_ifindex" "$app_peer_ifindex" "$app_mac" || return 1
+  validate_veth_link_json "$gateway_json" "$gateway_name" "$gateway_ifindex" "$gateway_peer_ifindex" "$gateway_mac" || return 1
+  temporary="${ownership}.new"
+  [[ ! -e "$temporary" && ! -L "$temporary" ]] || return 1
+  if ! jq --arg app_name "$app_name" --arg gateway_name "$gateway_name" \
+      --argjson app_ifindex "$app_ifindex" --argjson gateway_ifindex "$gateway_ifindex" \
+      --argjson app_peer_ifindex "$app_peer_ifindex" --argjson gateway_peer_ifindex "$gateway_peer_ifindex" \
+      --arg app_mac "$app_mac" --arg gateway_mac "$gateway_mac" \
+      '. + {application_veth_name:$app_name,gateway_veth_name:$gateway_name,application_veth_ifindex:$app_ifindex,gateway_veth_ifindex:$gateway_ifindex,application_veth_peer_ifindex:$app_peer_ifindex,gateway_veth_peer_ifindex:$gateway_peer_ifindex,application_veth_mac:$app_mac,gateway_veth_mac:$gateway_mac}' "$ownership" > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  chmod 0600 -- "$temporary" || { rm -f -- "$temporary"; return 1; }
+  mv -- "$temporary" "$ownership"
+}
+
+validate_network_ownership() {
+  local ownership="$generation_root/OWNERSHIP.json" app_name="a${short}" gateway_name="g${short}" app_inode gateway_inode app_ifindex gateway_ifindex app_peer_ifindex gateway_peer_ifindex app_mac gateway_mac app_json gateway_json
+  [[ -f "$ownership" && ! -L "$ownership" ]] || return 1
+  jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" \
+    --arg app_name "$app_name" --arg gateway_name "$gateway_name" \
+    '.allocation_id==$id and .generation==$generation and .fence==$fence and .application_veth_name==$app_name and .gateway_veth_name==$gateway_name' "$ownership" >/dev/null || return 1
+  app_inode=$(jq -er '.application_namespace_inode // error("application_namespace_inode_missing")' "$ownership") || return 1
+  gateway_inode=$(jq -er '.gateway_namespace_inode // error("gateway_namespace_inode_missing")' "$ownership") || return 1
+  app_ifindex=$(jq -er '.application_veth_ifindex // error("application_veth_ifindex_missing")' "$ownership") || return 1
+  gateway_ifindex=$(jq -er '.gateway_veth_ifindex // error("gateway_veth_ifindex_missing")' "$ownership") || return 1
+  app_peer_ifindex=$(jq -er '.application_veth_peer_ifindex // error("application_veth_peer_ifindex_missing")' "$ownership") || return 1
+  gateway_peer_ifindex=$(jq -er '.gateway_veth_peer_ifindex // error("gateway_veth_peer_ifindex_missing")' "$ownership") || return 1
+  app_mac=$(jq -er '.application_veth_mac // error("application_veth_mac_missing")' "$ownership") || return 1
+  gateway_mac=$(jq -er '.gateway_veth_mac // error("gateway_veth_mac_missing")' "$ownership") || return 1
+  [[ "$app_inode" =~ ^[1-9][0-9]*$ && "$gateway_inode" =~ ^[1-9][0-9]*$ && "$app_ifindex" =~ ^[1-9][0-9]*$ && "$gateway_ifindex" =~ ^[1-9][0-9]*$ && "$app_peer_ifindex" =~ ^[1-9][0-9]*$ && "$gateway_peer_ifindex" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ -e "/run/netns/$app_ns" && ! -L "/run/netns/$app_ns" && "$(realpath -e -- "/run/netns/$app_ns")" == "/run/netns/$app_ns" && "$(stat -Lc %i "/run/netns/$app_ns")" == "$app_inode" ]] || return 1
+  [[ -e "/run/netns/$gateway_ns" && ! -L "/run/netns/$gateway_ns" && "$(realpath -e -- "/run/netns/$gateway_ns")" == "/run/netns/$gateway_ns" && "$(stat -Lc %i "/run/netns/$gateway_ns")" == "$gateway_inode" ]] || return 1
+  app_json=$(network_link_json "$app_ns" "$app_name") || return 1
+  gateway_json=$(network_link_json "$gateway_ns" "$gateway_name") || return 1
+  validate_veth_link_json "$app_json" "$app_name" "$app_ifindex" "$app_peer_ifindex" "$app_mac" || return 1
+  validate_veth_link_json "$gateway_json" "$gateway_name" "$gateway_ifindex" "$gateway_peer_ifindex" "$gateway_mac" || return 1
+  [[ "$app_peer_ifindex" == "$gateway_ifindex" && "$gateway_peer_ifindex" == "$app_ifindex" ]] || return 1
+}
+
+validate_gateway_addresses() {
+  local ownership="$generation_root/OWNERSHIP.json" gateway_name="g${short}" gw4 gw6 addresses
+  gw4=$(jq -er '.gateway_ipv4 // error("gateway_ipv4_missing")' "$ownership") || return 1
+  gw6=$(jq -er '.gateway_ipv6 // error("gateway_ipv6_missing")' "$ownership") || return 1
+  addresses=$(ip -n "$gateway_ns" -j -4 addr show dev "$gateway_name") || return 1
+  jq -e --arg address "$gw4" 'length == 1 and any(.[0].addr_info[]?; .local == $address and .prefixlen == 30)' <<<"$addresses" >/dev/null || return 1
+  addresses=$(ip -n "$gateway_ns" -j -6 addr show dev "$gateway_name") || return 1
+  jq -e --arg address "$gw6" 'length == 1 and any(.[0].addr_info[]?; .local == $address and .prefixlen == 126)' <<<"$addresses" >/dev/null || return 1
+}
+
+restore_application_network() {
+  local ownership="$generation_root/OWNERSHIP.json" app_name="a${short}" app4 app6 gw4 gw6 addresses routes
+  validate_network_ownership || { echo runtime_network_ownership_invalid >&2; return 1; }
+  app4=$(jq -er '.application_ipv4 // error("application_ipv4_missing")' "$ownership") || return 1
+  app6=$(jq -er '.application_ipv6 // error("application_ipv6_missing")' "$ownership") || return 1
+  gw4=$(jq -er '.gateway_ipv4 // error("gateway_ipv4_missing")' "$ownership") || return 1
+  gw6=$(jq -er '.gateway_ipv6 // error("gateway_ipv6_missing")' "$ownership") || return 1
+  jq -e --arg app4 "$(jq -r '.network.application_ipv4' "$request")" --arg app6 "$(jq -r '.network.application_ipv6' "$request")" \
+    --arg gw4 "$(jq -r '.network.gateway_ipv4' "$request")" --arg gw6 "$(jq -r '.network.gateway_ipv6' "$request")" \
+    '.application_ipv4==$app4 and .application_ipv6==$app6 and .gateway_ipv4==$gw4 and .gateway_ipv6==$gw6' "$ownership" >/dev/null || { echo runtime_network_request_mismatch >&2; return 1; }
+  validate_gateway_addresses || { echo runtime_gateway_network_invalid >&2; return 1; }
+  ip -n "$app_ns" addr replace "${app4}/30" dev "$app_name" || return 1
+  ip -n "$app_ns" -6 addr replace "${app6}/126" dev "$app_name" nodad || return 1
+  ip -n "$app_ns" route replace default via "$gw4" dev "$app_name" || return 1
+  ip -n "$app_ns" -6 route replace default via "$gw6" dev "$app_name" || return 1
+  addresses=$(ip -n "$app_ns" -j -4 addr show dev "$app_name") || return 1
+  jq -e --arg address "$app4" 'length == 1 and any(.[0].addr_info[]?; .local == $address and .prefixlen == 30)' <<<"$addresses" >/dev/null || return 1
+  addresses=$(ip -n "$app_ns" -j -6 addr show dev "$app_name") || return 1
+  jq -e --arg address "$app6" 'length == 1 and any(.[0].addr_info[]?; .local == $address and .prefixlen == 126)' <<<"$addresses" >/dev/null || return 1
+  routes=$(ip -n "$app_ns" -j route show default dev "$app_name") || return 1
+  jq -e --arg gateway "$gw4" 'any(.[]; .gateway == $gateway)' <<<"$routes" >/dev/null || return 1
+  routes=$(ip -n "$app_ns" -j -6 route show default dev "$app_name") || return 1
+  jq -e --arg gateway "$gw6" 'any(.[]; .gateway == $gateway)' <<<"$routes" >/dev/null || return 1
+}
+
+owned_absent_or_dir() { [[ ! -e "$1" || -d "$1" ]] || { echo runtime_owned_path_invalid >&2; exit 1; }; }
+
+mount_identity() {
+  local target=$1
+  findmnt -n -o ID,SOURCE,FSROOT,TARGET,FSTYPE,OPTIONS --mountpoint "$target" 2>/dev/null
+}
+
+ensure_mount_root() {
+  local created=false
+  if [[ ! -e "$mount_root" ]]; then
+    mkdir -m 0711 "$mount_root"
+    chown root:root "$mount_root"
+    created=true
+  fi
+  [[ -d "$mount_root" && ! -L "$mount_root" && "$(stat -c %u:%g:%a "$mount_root")" == 0:0:711 ]] || { echo runtime_mount_root_not_owned >&2; return 1; }
+  if [[ "$created" == true ]]; then
+    printf 'hostlet-runtime-mount-root-v1\n' > "$mount_root_marker"
+    chown root:root "$mount_root_marker"
+    chmod 0600 "$mount_root_marker"
+  fi
+  [[ -f "$mount_root_marker" && ! -L "$mount_root_marker" && "$(cat "$mount_root_marker")" == hostlet-runtime-mount-root-v1 ]] || { echo runtime_mount_root_not_owned >&2; return 1; }
+  [[ "$(stat -c %u:%g:%a "$mount_root_marker")" == 0:0:600 ]] || { echo runtime_mount_root_not_owned >&2; return 1; }
+}
+
+create_mount_tuple() {
+  ensure_mount_root || return 1
+  [[ ! -e "$mount_tuple" ]] || { echo runtime_mount_collision >&2; return 1; }
+  mkdir "$mount_tuple"
+  chown root:100000 "$mount_tuple"
+  chmod 0710 "$mount_tuple"
+  printf 'hostlet-runtime-mount-v1 allocation=%s generation=%s fence=%s\n' "$id" "$generation" "$fence" > "$mount_tuple_marker"
+  chown root:root "$mount_tuple_marker"
+  chmod 0600 "$mount_tuple_marker"
+  mkdir "$rootfs_mount"
+  chown root:100000 "$rootfs_mount"
+  chmod 0710 "$rootfs_mount"
+}
+
+validate_mount_tuple() {
+  [[ -d "$mount_tuple" && ! -L "$mount_tuple" && "$(stat -c %u:%g:%a "$mount_tuple")" == 0:100000:710 ]] || return 1
+  [[ -f "$mount_tuple_marker" && ! -L "$mount_tuple_marker" && "$(cat "$mount_tuple_marker")" == "hostlet-runtime-mount-v1 allocation=$id generation=$generation fence=$fence" ]] || return 1
+  [[ "$(stat -c %u:%g:%a "$mount_tuple_marker")" == 0:0:600 ]] || return 1
+}
+
+mount_target_empty() {
+  local target=$1
+  [[ ! -e "$target" ]] && return 0
+  [[ -d "$target" && ! -L "$target" ]] || return 1
+  mountpoint -q "$target" && return 1
+  [[ -z "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
+}
+
+validate_rootfs_mount() {
+  local expected_identity=$1 expected_source=$2 expected_source_inode=$3 expected_target_inode=$4 record mount_id source fsroot target fstype options
+  [[ -n "$expected_identity" && -d "$rootfs_mount" && ! -L "$rootfs_mount" ]] || return 1
+  record=$(mount_identity "$rootfs_mount") || return 1
+  [[ "$record" == "$expected_identity" ]] || return 1
+  read -r mount_id source fsroot target fstype options <<< "$record"
+  [[ -n "$mount_id" && -n "$source" && -n "$fsroot" && "$target" == "$rootfs_mount" && -n "$fstype" && -n "$expected_source" ]] || return 1
+  [[ ",$options," == *,ro,* && ",$options," == *,nosuid,* && ",$options," == *,nodev,* && ",$options," != *,noexec,* ]] || return 1
+  [[ "$(stat -Lc %i "$rootfs")" == "$expected_source_inode" && "$(stat -Lc %i "$rootfs_mount")" == "$expected_target_inode" ]] || return 1
+}
+
+validate_rootfs_mount_basic() {
+  local expected_identity=$1 expected_source=$2 expected_source_inode=$3 expected_target_inode=$4 record mount_id source fsroot target fstype options
+  [[ -n "$expected_identity" && -d "$rootfs_mount" && ! -L "$rootfs_mount" ]] || return 1
+  record=$(mount_identity "$rootfs_mount") || return 1
+  [[ "$record" == "$expected_identity" ]] || return 1
+  read -r mount_id source fsroot target fstype options <<< "$record"
+  [[ -n "$mount_id" && -n "$source" && -n "$fsroot" && "$target" == "$rootfs_mount" && -n "$fstype" && -n "$expected_source" ]] || return 1
+  [[ "$(stat -Lc %i "$rootfs")" == "$expected_source_inode" && "$(stat -Lc %i "$rootfs_mount")" == "$expected_target_inode" ]] || return 1
+}
+
+validate_secret_mount() {
+  local expected_identity=$1 expected_target_inode=$2 record mount_id source fsroot target fstype options
+  [[ -n "$expected_identity" && -d "$secret_mount" && ! -L "$secret_mount" ]] || return 1
+  record=$(mount_identity "$secret_mount") || return 1
+  [[ "$record" == "$expected_identity" ]] || return 1
+  read -r mount_id source fsroot target fstype options <<< "$record"
+  [[ -n "$mount_id" && "$source" == tmpfs && "$target" == "$secret_mount" && "$fstype" == tmpfs ]] || return 1
+  [[ ",$options," == *,nosuid,* && ",$options," == *,nodev,* && ",$options," == *,noexec,* ]] || return 1
+  [[ "$(stat -Lc %i "$secret_mount")" == "$expected_target_inode" ]] || return 1
+}
+
+copy_secret_file() {
+  local source=$1 target=$2
+  [[ ! -e "$target" && ! -L "$target" ]] || return 1
+  cp --reflink=never -- "$source" "$target"
+  chown 165532:165532 -- "$target"
+  chmod 0400 -- "$target"
+  [[ "$(stat -c %u:%g:%a "$target")" == 165532:165532:400 ]]
+}
+
+cleanup_secret_input() {
+  local input="${state_root}/secret-input/${id}/${fence}" input_parent="${state_root}/secret-input/${id}" input_root expected path name version
+  [[ -e "$input" || -L "$input" ]] || return 0
+  input_root="${state_root}/secret-input"
+  [[ -d "$input_root" && ! -L "$input_root" && -d "$input_parent" && ! -L "$input_parent" && -d "$input" && ! -L "$input" ]] || return 1
+  expected="$(realpath -e -- "$state_root")/secret-input/${id}/${fence}"
+  [[ "$(realpath -e -- "$input")" == "$expected" ]] || return 1
+  [[ -f "$input/OWNERSHIP.json" && ! -L "$input/OWNERSHIP.json" && "$(stat -c %a "$input/OWNERSHIP.json")" == 400 ]] || return 1
+  jq -e --arg id "$id" --argjson fence "$fence" '.allocation_id==$id and .fence==$fence' "$input/OWNERSHIP.json" >/dev/null || return 1
+  while IFS= read -r -d '' path; do
+    name=${path##*/}
+    [[ "$name" == OWNERSHIP.json ]] && continue
+    [[ "$name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+    jq -e --arg version "$name" 'any(.secret_version_refs[]; .version_id==$version)' "$request" >/dev/null || return 1
+    [[ -f "$path" && ! -L "$path" && "$(stat -c %F:%a "$path")" == regular\ file:400 ]] || return 1
+    shred -u -- "$path" || return 1
+  done < <(find "$input" -mindepth 1 -maxdepth 1 -print0)
+  rm -f -- "$input/OWNERSHIP.json" || return 1
+  rmdir -- "$input" || return 1
+  [[ -d "$input_parent" && ! -L "$input_parent" ]] || return 1
+  [[ -z "$(find "$input_parent" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || return 0
+  rmdir -- "$input_parent"
+}
+
+prepare_exit_cleanup() {
+  local status=$?
+  trap - EXIT ERR
+  if [[ "$prepare_cleanup_armed" == true && "$status" -ne 0 ]]; then
+    partial_mount_cleanup || true
+  fi
+  rm -f -- "$request_copy" || true
+  exit "$status"
+}
+
+unmount_recorded_mount() {
+  local target=$1 expected_identity=$2 source_kind=$3 source=$4 source_inode=$5 target_inode=$6 record
+  [[ -n "$target" && -n "$expected_identity" ]] || return 1
+  [[ ! -e "$target" ]] && return 0
+  [[ -d "$target" && ! -L "$target" ]] || return 1
+  if mountpoint -q "$target"; then
+    record=$(mount_identity "$target") || return 1
+    [[ "$record" == "$expected_identity" ]] || return 1
+    if [[ "$source_kind" == rootfs ]]; then
+      validate_rootfs_mount "$expected_identity" "$source" "$source_inode" "$target_inode" || return 1
+    elif [[ "$source_kind" == rootfs_partial ]]; then
+      validate_rootfs_mount_basic "$expected_identity" "$source" "$source_inode" "$target_inode" || return 1
+    else
+      validate_secret_mount "$expected_identity" "$target_inode" || return 1
+    fi
+    umount -- "$target" || return 1
+  else
+    [[ -z "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || return 1
+  fi
+  [[ ! -e "$target" ]] || rmdir -- "$target"
+}
+
+remove_mount_tuple() {
+  [[ ! -e "$mount_tuple" ]] && return 0
+  validate_mount_tuple || return 1
+  [[ ! -e "$rootfs_mount" && ! -e "$secret_mount" ]] || return 1
+  rm -f -- "$mount_tuple_marker"
+  rmdir -- "$mount_tuple"
+}
+
+record_rootfs_mount() {
+  local ownership=$1
+  jq --arg tuple "$mount_tuple" --arg source "$rootfs" --argjson source_inode "$rootfs_source_inode" --arg target "$rootfs_mount" --argjson target_inode "$rootfs_target_inode" --arg identity "$rootfs_mount_identity" '. + {mount_tuple:$tuple,mounts:{rootfs:{source:$source,source_inode:$source_inode,target:$target,target_inode:$target_inode,identity:$identity,readonly:true,options:["ro","nosuid","nodev"]},secret:null}}' "$ownership" > "$ownership.new"
+  mv -- "$ownership.new" "$ownership"
+}
+
+record_secret_mount() {
+  local ownership=$1
+  jq --arg target "$secret_mount" --argjson target_inode "$secret_target_inode" --arg identity "$secret_mount_identity" '.mounts.secret={source:"tmpfs",source_inode:null,target:$target,target_inode:$target_inode,identity:$identity,readonly:false,options:["nodev","nosuid","noexec"]}' "$ownership" > "$ownership.new"
+  mv -- "$ownership.new" "$ownership"
+}
+
+mount_runtime_rootfs() {
+  [[ -d "$rootfs" && ! -L "$rootfs" ]] || { echo runtime_rootfs_invalid >&2; return 1; }
+  rootfs_source_inode=$(stat -Lc %i "$rootfs")
+  [[ "$rootfs_source_inode" =~ ^[1-9][0-9]*$ ]] || { echo runtime_rootfs_invalid >&2; return 1; }
+  mount --bind -- "$rootfs" "$rootfs_mount"
+  rootfs_mount_identity=$(mount_identity "$rootfs_mount")
+  rootfs_target_inode=$(stat -Lc %i "$rootfs_mount")
+  mount -o remount,bind,ro,nosuid,nodev -- "$rootfs_mount"
+  rootfs_mount_identity=$(mount_identity "$rootfs_mount")
+  validate_rootfs_mount "$rootfs_mount_identity" "$rootfs" "$rootfs_source_inode" "$rootfs_target_inode" || { echo runtime_rootfs_mount_invalid >&2; return 1; }
+}
+
+mount_runtime_secrets() {
+  mkdir "$secret_mount"
+  chown root:100000 "$secret_mount"
+  chmod 0710 "$secret_mount"
+  mount -t tmpfs -o nodev,nosuid,noexec,mode=0710,size=1m tmpfs "$secret_mount"
+  secret_target_inode=$(stat -Lc %i "$secret_mount")
+  secret_mount_identity=$(mount_identity "$secret_mount")
+  chown 165532:100000 "$secret_mount"
+  chmod 0550 "$secret_mount"
+  secret_mount_identity=$(mount_identity "$secret_mount")
+  validate_secret_mount "$secret_mount_identity" "$secret_target_inode" || { echo runtime_secret_mount_invalid >&2; return 1; }
+}
+
+validate_recorded_mounts() {
+  local ownership=$1 mode=${2:-strict} secret_state rootfs_state
+  ensure_mount_root || return 1
+  validate_mount_tuple || { echo runtime_mount_ownership_invalid >&2; return 1; }
+  rootfs_state=$(jq -r 'if (.mounts? | type) == "object" and (.mounts.rootfs? | type) == "object" then "present" else "absent" end' "$ownership")
+  if [[ "$rootfs_state" == absent ]]; then
+    [[ "$mode" == cleanup ]] && mount_target_empty "$rootfs_mount" || { echo runtime_mount_ownership_invalid >&2; return 1; }
+    rootfs_source_inode= rootfs_target_inode= rootfs_mount_identity=
+  else
+    rootfs_source_inode=$(jq -r '.mounts.rootfs.source_inode // empty' "$ownership")
+    rootfs_target_inode=$(jq -r '.mounts.rootfs.target_inode // empty' "$ownership")
+    rootfs_mount_identity=$(jq -r '.mounts.rootfs.identity // empty' "$ownership")
+    [[ "$(jq -r '.mount_tuple // empty' "$ownership")" == "$mount_tuple" && "$(jq -r '.mounts.rootfs.source // empty' "$ownership")" == "$rootfs" && "$(jq -r '.mounts.rootfs.target // empty' "$ownership")" == "$rootfs_mount" && "$rootfs_source_inode" =~ ^[1-9][0-9]*$ && "$rootfs_target_inode" =~ ^[1-9][0-9]*$ ]] || { echo runtime_mount_ownership_invalid >&2; return 1; }
+    if mountpoint -q "$rootfs_mount"; then
+      validate_rootfs_mount "$rootfs_mount_identity" "$rootfs" "$rootfs_source_inode" "$rootfs_target_inode" || { echo runtime_rootfs_mount_invalid >&2; return 1; }
+    elif [[ "$mode" == cleanup ]]; then
+      mount_target_empty "$rootfs_mount" || { echo runtime_rootfs_mount_invalid >&2; return 1; }
+    else
+      echo runtime_rootfs_mount_invalid >&2; return 1
+    fi
+  fi
+  secret_state=$(jq -r 'if .mounts.secret == null then "absent" else "present" end' "$ownership")
+  if [[ "$secret_state" == present ]]; then
+    secret_target_inode=$(jq -r '.mounts.secret.target_inode // empty' "$ownership")
+    secret_mount_identity=$(jq -r '.mounts.secret.identity // empty' "$ownership")
+    [[ "$(jq -r '.mounts.secret.source // empty' "$ownership")" == tmpfs && "$(jq -r '.mounts.secret.target // empty' "$ownership")" == "$secret_mount" && "$secret_target_inode" =~ ^[1-9][0-9]*$ ]] || { echo runtime_secret_mount_invalid >&2; return 1; }
+    if mountpoint -q "$secret_mount"; then
+      validate_secret_mount "$secret_mount_identity" "$secret_target_inode" || { echo runtime_secret_mount_invalid >&2; return 1; }
+    elif [[ "$mode" == cleanup ]]; then
+      mount_target_empty "$secret_mount" || { echo runtime_secret_mount_invalid >&2; return 1; }
+    else
+      echo runtime_secret_mount_invalid >&2; return 1
+    fi
+  else
+    if [[ "$mode" == cleanup ]]; then
+      mount_target_empty "$secret_mount" || { echo runtime_secret_mount_invalid >&2; return 1; }
+    else
+      [[ ! -e "$secret_mount" ]] || { echo runtime_secret_mount_invalid >&2; return 1; }
+    fi
+  fi
+}
+
+partial_mount_cleanup() {
+  set +e
+  local identity target_inode
+  if [[ -e "$secret_mount" ]]; then
+    identity=${secret_mount_identity:-}
+    target_inode=${secret_target_inode:-}
+    if [[ -z "$identity" ]] && mountpoint -q "$secret_mount"; then identity=$(mount_identity "$secret_mount"); fi
+    if [[ -z "$target_inode" && -e "$secret_mount" ]]; then target_inode=$(stat -Lc %i "$secret_mount" 2>/dev/null); fi
+    if [[ -n "$identity" ]]; then
+      unmount_recorded_mount "$secret_mount" "$identity" secret tmpfs "" "$target_inode"
+    elif ! mountpoint -q "$secret_mount" && [[ -z "$(find "$secret_mount" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+      rmdir -- "$secret_mount"
+    fi
+  fi
+  if [[ -e "$rootfs_mount" ]]; then
+    identity=${rootfs_mount_identity:-}
+    target_inode=${rootfs_target_inode:-}
+    if [[ -z "$identity" ]] && mountpoint -q "$rootfs_mount"; then identity=$(mount_identity "$rootfs_mount"); fi
+    if [[ -z "$target_inode" && -e "$rootfs_mount" ]]; then target_inode=$(stat -Lc %i "$rootfs_mount" 2>/dev/null); fi
+    if [[ -n "$identity" ]]; then
+      unmount_recorded_mount "$rootfs_mount" "$identity" rootfs_partial "$rootfs" "$rootfs_source_inode" "$target_inode"
+    elif ! mountpoint -q "$rootfs_mount" && [[ -z "$(find "$rootfs_mount" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+      rmdir -- "$rootfs_mount"
+    fi
+  fi
+  cleanup_secret_input || true
+  ip netns del "$app_ns" 2>/dev/null || true
+  ip netns del "$gateway_ns" 2>/dev/null || true
+  remove_budget_cgroup || true
+}
+
+prepare() {
+  trap 'prepare_exit_cleanup' EXIT
+  artifact_dir="${artifact_root}/${hex}"; manifest="${artifact_dir}/manifest.json"
+  [[ -d "$rootfs" && -f "$manifest" && -f "$artifact_dir/.hostlet-artifact-owned" ]] || { echo runtime_rootfs_missing >&2; exit 1; }
+  [[ "$(cat "$artifact_dir/.hostlet-artifact-owned")" == hostlet-runtime-artifact-v1 ]] || { echo runtime_artifact_not_owned >&2; exit 1; }
+  jq -e --arg digest "$digest" '.schema=="hostlet.runtime-artifact/v1" and .archive_digest==$digest and .workdir=="/app" and (.base_image|test("^node:(22|24)-bookworm-slim@sha256:[0-9a-f]{64}$")) and ([.build_manifest_digest,.base_manifest_digest,.base_rootfs_digest,.rootfs_tree_digest,.build_profile_digest,.secret_env_shim_digest]|all(test("^sha256:[0-9a-f]{64}$"))) and (.source_commit|test("^[0-9a-f]{40}$|^[0-9a-f]{64}$"))' "$manifest" >/dev/null || { echo runtime_artifact_manifest_invalid >&2; exit 1; }
+  [[ "sha256:$(sha256sum "$rootfs/hostlet/bin/secret-env" | awk '{print $1}')" == "$(jq -r .secret_env_shim_digest "$manifest")" ]] || { echo runtime_artifact_shim_mismatch >&2; exit 1; }
+  observed_tree=$(python3 "$(dirname "$0")/prepare-artifact.py" --tree-digest "$rootfs") || { echo runtime_artifact_tree_invalid >&2; exit 1; }; expected_tree=$(jq -r .rootfs_tree_digest "$manifest")
+  [[ "$observed_tree" == "$expected_tree" ]] || { echo runtime_artifact_tree_mismatch >&2; exit 1; }
+  validate_cgroup_parent || { echo runtime_cgroup_parent_invalid >&2; exit 1; }
+  request_sha=$request_sha256
+  if [[ -e "$generation_root" ]]; then
+    jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" --arg identity_sha "$request_identity_sha256" --arg cgroup_identity "$cgroup_identity_hash" '.allocation_id==$id and .generation==$generation and .fence==$fence and .request_identity_sha256==$identity_sha and .cgroup_identity_hash==$cgroup_identity' "$generation_root/OWNERSHIP.json" >/dev/null || { echo runtime_generation_collision >&2; exit 1; }
+    [[ -f "$bundle/config.json" && -f "$evidence/gateway-ruleset.txt" && -e "/run/netns/$app_ns" && -e "/run/netns/$gateway_ns" ]] || { echo runtime_incomplete_state >&2; exit 1; }
+    [[ "$(stat -Lc %i "/run/netns/$app_ns")" == "$(jq -r .application_namespace_inode "$generation_root/OWNERSHIP.json")" && "$(stat -Lc %i "/run/netns/$gateway_ns")" == "$(jq -r .gateway_namespace_inode "$generation_root/OWNERSHIP.json")" ]] || { echo runtime_generation_collision >&2; exit 1; }
+    validate_network_ownership || { echo runtime_network_ownership_invalid >&2; exit 1; }
+    validate_recorded_mounts "$generation_root/OWNERSHIP.json" || { echo runtime_incomplete_state >&2; exit 1; }
+    load_cgroup_state || { echo runtime_cgroup_state_invalid >&2; exit 1; }
+    validate_cgroup_config_path || { echo runtime_cgroup_config_invalid >&2; exit 1; }
+    trap 'rm -f -- "$request_copy"' EXIT
+    emit prepared runtime_prepared; return
+  fi
+  prepare_cleanup_armed=true
+  cgroup_epoch=1; cgroup_relative=$(cgroup_path_for_epoch "$cgroup_epoch"); cgroup_inode=
+  mkdir -p "$bundle" "$evidence" "$run_root"
+  jq -cn --slurpfile r "$request" --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" --arg request_sha "$request_sha" --arg identity_sha "$request_identity_sha256" --arg cgroup_identity "$cgroup_identity_hash" --arg cgroup_path "$cgroup_relative" --argjson cgroup_epoch "$cgroup_epoch" '{allocation_id:$id,generation:$generation,fence:$fence,request_sha256:$request_sha,request_identity_sha256:$identity_sha,cgroup_identity_hash:$cgroup_identity,cgroup_path:$cgroup_path,cgroup_epoch:$cgroup_epoch,cgroup_inode:null,application_ipv4:$r[0].network.application_ipv4,application_ipv6:$r[0].network.application_ipv6,application_port:$r[0].application_port,outbound_destinations:$r[0].network.outbound_destinations}' > "$generation_root/OWNERSHIP.json"
+  write_cgroup_state "$cgroup_epoch" "$cgroup_relative" ""
+  ensure_mount_root
+  create_mount_tuple
+  mount_runtime_rootfs
+  record_rootfs_mount "$generation_root/OWNERSHIP.json"
+  app4=$(jq -r .network.application_ipv4 "$request"); gw4=$(jq -r .network.gateway_ipv4 "$request"); app6=$(jq -r .network.application_ipv6 "$request"); gw6=$(jq -r .network.gateway_ipv6 "$request")
+  for address in "$app4" "$gw4"; do [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || { echo runtime_network_invalid >&2; exit 2; }; done
+  for address in "$app6" "$gw6"; do [[ "$address" =~ ^[0-9a-f:]+$ ]] || { echo runtime_network_invalid >&2; exit 2; }; done
+  python3 - "$app4" "$gw4" "$app6" "$gw6" <<'PY' || { echo runtime_network_invalid >&2; exit 2; }
+import ipaddress, sys
+a4,g4,a6,g6=map(ipaddress.ip_address,sys.argv[1:])
+assert a4 != g4 and a6 != g6
+assert ipaddress.ip_network(f"{a4}/30",False) == ipaddress.ip_network(f"{g4}/30",False)
+assert ipaddress.ip_network(f"{a6}/126",False) == ipaddress.ip_network(f"{g6}/126",False)
+PY
+  while IFS=$'\t' read -r address port protocol; do
+    [[ "$protocol" == tcp || "$protocol" == udp ]] || { echo runtime_network_invalid >&2; exit 2; }
+    [[ "$port" =~ ^[1-9][0-9]*$ && "$port" -le 65535 ]] || { echo runtime_network_invalid >&2; exit 2; }
+    [[ "$address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$address" =~ ^[0-9a-f:]+$ ]] || { echo runtime_network_invalid >&2; exit 2; }
+  done < <(jq -r '(.network.ingress_sources + .network.outbound_destinations)[]|[.address,(.port|tostring),.protocol]|@tsv' "$request")
+  ip netns add "$app_ns"; ip netns add "$gateway_ns"
+  ip link add "a${short}" type veth peer name "g${short}"; ip link set "a${short}" netns "$app_ns"; ip link set "g${short}" netns "$gateway_ns"
+  ip -n "$app_ns" link set lo up; ip -n "$gateway_ns" link set lo up
+  ip netns exec "$gateway_ns" sysctl -q -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
+  ip -n "$app_ns" addr add "${app4}/30" dev "a${short}"; ip -n "$gateway_ns" addr add "${gw4}/30" dev "g${short}"
+  ip -n "$app_ns" -6 addr add "${app6}/126" dev "a${short}" nodad; ip -n "$gateway_ns" -6 addr add "${gw6}/126" dev "g${short}" nodad
+  ip -n "$app_ns" link set "a${short}" up; ip -n "$gateway_ns" link set "g${short}" up
+  ip -n "$app_ns" route add default via "$gw4"; ip -n "$app_ns" -6 route add default via "$gw6"
+  # Keep undeclared packets on an exact namespace-local sink long enough for
+  # the forward-chain forbidden counter to observe and drop them. The sink has
+  # no peer or address, so this adds no host or Internet uplink; declared peer
+  # routes remain more specific and continue through their allow rules.
+  ip -n "$gateway_ns" link add "$sink_iface" type dummy
+  ip -n "$gateway_ns" link set "$sink_iface" up
+  ip -n "$gateway_ns" route add default dev "$sink_iface"
+  ip -n "$gateway_ns" -6 route add default dev "$sink_iface"
+  app_inode=$(stat -Lc %i "/run/netns/$app_ns"); gateway_inode=$(stat -Lc %i "/run/netns/$gateway_ns")
+  jq --argjson app_inode "$app_inode" --argjson gateway_inode "$gateway_inode" --arg gw4 "$gw4" --arg gw6 "$gw6" '. + {application_namespace_inode:$app_inode,gateway_namespace_inode:$gateway_inode,gateway_ipv4:$gw4,gateway_ipv6:$gw6}' "$generation_root/OWNERSHIP.json" > "$generation_root/OWNERSHIP.json.new"; mv "$generation_root/OWNERSHIP.json.new" "$generation_root/OWNERSHIP.json"
+  record_network_veth_ownership "$generation_root/OWNERSHIP.json" || { echo runtime_network_ownership_invalid >&2; exit 1; }
+  rules="${generation_root}/gateway.nft"; printf 'table inet hostlet {\n counter allowed {}\n counter connection_limited {}\n counter forbidden {}\n set connlimit4 { type ipv4_addr; flags dynamic; }\n set connlimit6 { type ipv6_addr; flags dynamic; }\n chain forward { type filter hook forward priority 0; policy drop; ct state established,related counter name allowed accept\n ct state new limit rate over 20/second burst 40 packets counter name connection_limited drop\n ip protocol tcp ct state new add @connlimit4 { ip saddr ct count over 128 } counter name connection_limited drop\n ip6 nexthdr tcp ct state new add @connlimit6 { ip6 saddr ct count over 128 } counter name connection_limited drop\n' > "$rules"
+  while IFS=$'\t' read -r address port protocol; do family=ip; [[ "$address" == *:* ]] && family=ip6; printf ' %s daddr %s %s dport %s counter name allowed accept\n' "$family" "$address" "$protocol" "$port" >> "$rules"; done < <(jq -r '.network.outbound_destinations[]|[.address,(.port|tostring),.protocol]|@tsv' "$request")
+  while IFS=$'\t' read -r address port protocol; do family=ip; [[ "$address" == *:* ]] && family=ip6; printf ' %s saddr %s %s dport %s counter name allowed accept\n' "$family" "$address" "$protocol" "$port" >> "$rules"; done < <(jq -r '.network.ingress_sources[]|[.address,(.port|tostring),.protocol]|@tsv' "$request")
+  printf ' counter name forbidden drop\n }\n}\n' >> "$rules"; ip netns exec "$gateway_ns" nft -f "$rules"; ip netns exec "$gateway_ns" nft list ruleset > "$evidence/gateway-ruleset.txt"
+  secret_mounts="$generation_root/secret-mounts.json"; printf '[]' > "$secret_mounts"
+  if [[ "$(jq '.secret_version_refs|length' "$request")" -gt 0 ]]; then
+    secret_input="$state_root/secret-input/$id/$fence"; jq -e --arg id "$id" --argjson fence "$fence" '.allocation_id==$id and .fence==$fence' "$secret_input/OWNERSHIP.json" >/dev/null || { echo runtime_secret_input_not_owned >&2; exit 1; }
+    while IFS=$'\t' read -r name version; do source="$secret_input/$version"; [[ "$name" =~ ^[A-Z0-9_]+$ && "$version" =~ ^[0-9a-f-]{36}$ && -f "$source" && ! -L "$source" && "$(stat -c %a "$source")" == 400 ]] || { echo runtime_secret_input_invalid >&2; exit 1; }; done < <(jq -r '.secret_version_refs[]|[.name,.version_id]|@tsv' "$request")
+    mount_runtime_secrets
+    while IFS=$'\t' read -r name version; do source="$secret_input/$version"; copy_secret_file "$source" "$secret_mount/$name"; done < <(jq -r '.secret_version_refs[]|[.name,.version_id]|@tsv' "$request")
+    jq --arg source "$secret_mount" '. + [{destination:"/run/secrets",type:"bind",source:$source,options:["rbind","ro","nosuid","nodev","noexec"]}]' "$secret_mounts" > "$secret_mounts.new"; mv "$secret_mounts.new" "$secret_mounts"
+    while IFS= read -r version; do shred -u -- "$secret_input/$version"; done < <(jq -r '.secret_version_refs[].version_id' "$request")
+    rm -f -- "$secret_input/OWNERSHIP.json"; rmdir "$secret_input"
+    if [[ -z "$(find "$state_root/secret-input/$id" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then rmdir -- "$state_root/secret-input/$id"; fi
+    record_secret_mount "$generation_root/OWNERSHIP.json"
+  fi
+  jq --slurpfile secrets "$secret_mounts" --arg root "$rootfs_mount" --arg netns "/run/netns/${app_ns}" --arg cgroup "$cgroup_relative" '{ociVersion:"1.2.0",process:{terminal:false,user:{uid:65532,gid:65532},args:(["/hostlet/bin/secret-env"]+.argv),env:["PATH=/usr/local/bin:/usr/bin:/bin"],cwd:"/app",noNewPrivileges:true,capabilities:{bounding:[],effective:[],inheritable:[],permitted:[],ambient:[]}},root:{path:$root,readonly:true},hostname:"hostlet-fixture",mounts:([{destination:"/proc",type:"proc",source:"proc",options:["nosuid","noexec","nodev"]},{destination:"/dev",type:"tmpfs",source:"tmpfs",options:["nosuid","strictatime","mode=755","size=65536k"]},{destination:"/run",type:"tmpfs",source:"tmpfs",options:["nosuid","noexec","nodev","mode=755","size=1m"]},{destination:"/tmp",type:"tmpfs",source:"tmpfs",options:["nosuid","noexec","nodev","mode=1777","size=256m"]}] + $secrets[0]),linux:{devices:[{path:"/dev/null",type:"c",major:1,minor:3,fileMode:438,uid:0,gid:0},{path:"/dev/zero",type:"c",major:1,minor:5,fileMode:438,uid:0,gid:0},{path:"/dev/full",type:"c",major:1,minor:7,fileMode:438,uid:0,gid:0},{path:"/dev/random",type:"c",major:1,minor:8,fileMode:438,uid:0,gid:0},{path:"/dev/urandom",type:"c",major:1,minor:9,fileMode:438,uid:0,gid:0}],cgroupsPath:$cgroup,resources:{memory:{limit:.resources.memory_bytes,swap:(.resources.memory_bytes + .resources.memory_swap_bytes)},cpu:{quota:.resources.cpu_quota_micros,period:.resources.cpu_period_micros},pids:{limit:.resources.pids},devices:[{allow:false,access:"rwm"}]},namespaces:[{type:"pid"},{type:"mount"},{type:"ipc"},{type:"uts"},{type:"user"},{type:"cgroup"},{type:"time"},{type:"network",path:$netns}],uidMappings:[{containerID:0,hostID:100000,size:65536}],gidMappings:[{containerID:0,hostID:100000,size:65536}],maskedPaths:["/proc/acpi","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/timer_list","/proc/timer_stats","/proc/sched_debug","/sys/firmware","/sys/devices/virtual/powercap"],readonlyPaths:["/proc/asound","/proc/bus","/proc/fs","/proc/irq","/proc/sys","/proc/sysrq-trigger"]}}' "$request" > "$bundle/config.json"
+  sha256sum "$bundle/config.json" "$evidence/gateway-ruleset.txt" > "$evidence/SHA256SUMS"
+  emit prepared runtime_prepared
+  trap 'rm -f -- "$request_copy"' EXIT
+}
+
+if [[ "$op" != prepare && "$op" != cleanup ]]; then
+  [[ -f "$generation_root/OWNERSHIP.json" && ! -L "$generation_root/OWNERSHIP.json" ]] || { echo runtime_ownership_missing >&2; exit 1; }
+  jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" --arg identity_sha "$request_identity_sha256" --arg cgroup_identity "$cgroup_identity_hash" '.allocation_id==$id and .generation==$generation and .fence==$fence and .request_identity_sha256==$identity_sha and .cgroup_identity_hash==$cgroup_identity' "$generation_root/OWNERSHIP.json" >/dev/null || { echo runtime_ownership_mismatch >&2; exit 1; }
+  load_cgroup_state || { echo runtime_cgroup_state_invalid >&2; exit 1; }
+fi
+
+case "$op" in
+  prepare) prepare;;
+  start)
+    [[ -f "$bundle/config.json" ]] || { echo runtime_not_prepared >&2; exit 1; }
+    validate_cgroup_config_path || { emit stopped runtime_isolation_unverified false failed; exit 1; }
+    if ! create_budget_cgroup; then
+      emit stopped runtime_isolation_unverified false failed
+      exit 1
+    fi
+    if ! runsc_quiet create --bundle "$bundle" "$sandbox"; then
+      remove_budget_cgroup || true
+      emit stopped runtime_internal_failure false failed
+      exit 1
+    fi
+    if ! configure_cgroup; then
+      runsc_quiet delete --force "$sandbox" || true
+      if ! remove_budget_cgroup; then
+        emit cleanup_pending runtime_cleanup_incomplete false failed
+      else
+        emit stopped runtime_isolation_unverified false failed
+      fi
+      exit 1
+    fi
+    if ! restore_application_network; then
+      runsc_quiet delete --force "$sandbox" || true
+      if ! remove_budget_cgroup; then
+        emit cleanup_pending runtime_cleanup_incomplete false failed
+      else
+        emit stopped runtime_isolation_unverified false failed
+      fi
+      exit 1
+    fi
+    if ! runsc_quiet start "$sandbox"; then
+      runsc_quiet delete --force "$sandbox" || true
+      if ! remove_budget_cgroup; then
+        emit cleanup_pending runtime_cleanup_incomplete false failed
+      else
+        emit stopped runtime_internal_failure false failed
+      fi
+      exit 1
+    fi
+    emit running runtime_started;;
+  inspect) state=$("$runsc" "${global[@]}" state "$sandbox" 2>/dev/null | jq -r .status || true); if [[ "$state" == running ]]; then emit running runtime_started true; else emit stopped runtime_exit false failed; fi;;
+  reconcile)
+    now=$(date +%s); restart_file="$generation_root/restart-state.json"; [[ -f "$restart_file" ]] || echo '{"exits":[],"healthy_since":null}' > "$restart_file"
+    state=$("$runsc" "${global[@]}" state "$sandbox" 2>/dev/null | jq -r .status || true)
+    if [[ "$state" == running ]]; then
+      health=$(health_observation true); if [[ "$(jq -r .passing <<<"$health")" == true ]]; then since=$(jq -r '.healthy_since // empty' "$restart_file"); [[ -n "$since" ]] || since=$now; if (( now - since >= 600 )); then jq --argjson now "$now" '.exits=[]|.healthy_since=$now' "$restart_file" > "$restart_file.new"; else jq --argjson since "$since" '.healthy_since=$since' "$restart_file" > "$restart_file.new"; fi; mv "$restart_file.new" "$restart_file"; emit running runtime_started true; else emit running health_failed true failed; fi
+    else
+      exit_reason=runtime_exit
+      "$runsc" "${global[@]}" state "$sandbox" > "$evidence/runsc-exit-state.json" 2>/dev/null || rm -f -- "$evidence/runsc-exit-state.json"
+      exit_observed=$(observe_cgroup "$evidence/runsc-exit-state.json")
+      if [[ "$exit_observed" != null ]]; then
+        printf '%s\n' "$exit_observed" > "$evidence/last-observed.json"
+        [[ "$(jq -r '.cpu_nr_throttled > 0' <<<"$exit_observed")" == true ]] && exit_reason=cpu_throttled
+        [[ "$(jq -r '.pids_events.max > 0' <<<"$exit_observed")" == true ]] && exit_reason=process_limit_exceeded
+        [[ "$(jq -r '.memory_events.oom_kill > 0' <<<"$exit_observed")" == true ]] && exit_reason=runtime_oom
+      fi
+      cutoff=$((now-600)); jq --argjson now "$now" --argjson cutoff "$cutoff" '.exits=([.exits[]|select(. >= $cutoff)]+[$now])|.healthy_since=null' "$restart_file" > "$restart_file.new"; mv "$restart_file.new" "$restart_file"; count=$(jq '.exits|length' "$restart_file")
+      if (( count > 6 )); then emit crash_loop_backoff crash_loop_backoff false; exit 0; fi
+      delays=(1 2 4 8 16 30); delay=${delays[$((count-1))]}; sleep "$delay"
+      if ! runsc_quiet delete --force "$sandbox"; then
+        emit restart_scheduled runtime_internal_failure false failed
+        exit 1
+      fi
+      if ! advance_budget_epoch || ! update_cgroup_config_path || ! create_budget_cgroup; then
+        emit restart_scheduled runtime_isolation_unverified false failed
+        exit 1
+      fi
+      if ! runsc_quiet create --bundle "$bundle" "$sandbox"; then
+        emit restart_scheduled runtime_internal_failure false failed
+        exit 1
+      fi
+      if ! configure_cgroup; then
+        runsc_quiet delete --force "$sandbox" || true
+        emit restart_scheduled runtime_internal_failure false failed
+        exit 1
+      fi
+      if ! restore_application_network; then
+        runsc_quiet delete --force "$sandbox" || true
+        emit restart_scheduled runtime_isolation_unverified false failed
+        exit 1
+      fi
+      if ! runsc_quiet start "$sandbox"; then
+        runsc_quiet delete --force "$sandbox" || true
+        emit restart_scheduled runtime_internal_failure false failed
+        exit 1
+      fi
+      # The reason belongs to the retired epoch; observed_limits comes only
+      # from the newly created epoch and cannot inherit old events.
+      emit restart_scheduled "$exit_reason" false
+    fi;;
+  stop)
+    if "$runsc" "${global[@]}" state "$sandbox" > "$evidence/runsc-state.json" 2>/dev/null; then
+      state=$(jq -r .status "$evidence/runsc-state.json")
+      case "$state" in
+        running)
+          stop_observed=$(observe_cgroup "$evidence/runsc-state.json")
+          [[ "$stop_observed" == null ]] || printf '%s\n' "$stop_observed" > "$evidence/last-observed.json"
+          if ! runsc_quiet kill "$sandbox" TERM; then
+            state=$("$runsc" "${global[@]}" state "$sandbox" 2>/dev/null | jq -r .status || true)
+            [[ "$state" == stopped || "$state" == created || -z "$state" ]] || { emit cleanup_pending runtime_internal_failure false failed; exit 1; }
+          fi
+          for _ in {1..50}; do
+            state=$("$runsc" "${global[@]}" state "$sandbox" 2>/dev/null | jq -r .status || true)
+            [[ "$state" == stopped || "$state" == created || -z "$state" ]] && break
+            sleep .1
+          done
+          if [[ "$state" == running ]]; then
+            runsc_quiet kill "$sandbox" KILL || {
+              state=$("$runsc" "${global[@]}" state "$sandbox" 2>/dev/null | jq -r .status || true)
+              [[ "$state" == stopped || "$state" == created || -z "$state" ]] || { emit cleanup_pending runtime_internal_failure false failed; exit 1; }
+            }
+          fi
+          ;;
+        created|stopped)
+          # A stopped or never-started runsc object needs deletion only; TERM
+          # against it is an error in the pinned runtime.
+          ;;
+        *)
+          emit cleanup_pending runtime_internal_failure false failed
+          exit 1
+          ;;
+      esac
+      if ! runsc_quiet delete --force "$sandbox"; then
+        "$runsc" "${global[@]}" state "$sandbox" >/dev/null 2>&1 && { emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; }
+      fi
+    fi
+    emit stopped runtime_stopped;;
+  cleanup)
+    failed=false
+    if [[ ! -e "$generation_root" ]]; then
+      sandbox_absent=true; app_absent=true; gateway_absent=true; cgroup_absent=false; mounts_absent=true
+      "$runsc" "${global[@]}" state "$sandbox" >/dev/null 2>&1 && sandbox_absent=false
+      [[ ! -e "/run/netns/$app_ns" ]] || app_absent=false
+      [[ ! -e "/run/netns/$gateway_ns" ]] || gateway_absent=false
+      [[ ! -e "$mount_tuple" ]] || mounts_absent=false
+      if load_cgroup_tombstone; then
+        if ! remove_tombstoned_cgroup; then
+          failed=true
+        else
+          cgroup_absent=true
+        fi
+      else
+        # Without the durable exact path/inode journal, absence cannot be
+        # proved safely after the generation directory has been removed.
+        failed=true
+      fi
+      result=failed; status=cleanup_pending; reason=runtime_cleanup_incomplete
+      [[ "$failed" == false && "$sandbox_absent" == true && "$app_absent" == true && "$gateway_absent" == true && "$cgroup_absent" == true && "$mounts_absent" == true ]] && { result=passed; status=cleaned; reason=runtime_cleaned; }
+      jq -cn --slurpfile r "$request" --arg result "$result" --arg status "$status" --arg reason "$reason" --arg sandbox "$sandbox" --argjson observed_at "$(now_ms)" --argjson sandbox_absent "$sandbox_absent" --argjson app_absent "$app_absent" --argjson gateway_absent "$gateway_absent" --argjson cgroup_absent "$cgroup_absent" --argjson mounts_absent "$mounts_absent" '{schema:"hostlet.runtime.executor-receipt/v1",operation:"cleanup",result:$result,status:$status,reason_code:$reason,allocation_id:$r[0].allocation_id,generation:$r[0].generation,fence:$r[0].fence,observed_at_unix_ms:$observed_at,profile:$r[0].profile,artifact_digest:$r[0].artifact_digest,runtime_binary_digest:$r[0].runtime_binary_digest,policy_digest:$r[0].policy_digest,capability_digest:$r[0].capability_digest,platform:$r[0].platform,sandbox_id:$sandbox,runsc_status:null,oci_config_digest:null,namespace_inodes:[],observed_limits:null,health:null,network:null,cleanup:{sandbox_absent:$sandbox_absent,application_namespace_absent:$app_absent,gateway_namespace_absent:$gateway_absent,cgroup_absent:$cgroup_absent,mounts_absent:$mounts_absent,state_retained:false}}'
+      [[ "$result" == passed ]] || exit 1
+      exit 0
+    fi
+    [[ -f "$generation_root/OWNERSHIP.json" && ! -L "$generation_root/OWNERSHIP.json" ]] || { echo runtime_ownership_missing >&2; exit 1; }
+    jq -e --arg id "$id" --argjson generation "$generation" --argjson fence "$fence" --arg identity_sha "$request_identity_sha256" --arg cgroup_identity "$cgroup_identity_hash" '.allocation_id==$id and .generation==$generation and .fence==$fence and .request_identity_sha256==$identity_sha and .cgroup_identity_hash==$cgroup_identity' "$generation_root/OWNERSHIP.json" >/dev/null || { echo runtime_ownership_mismatch >&2; exit 1; }
+    load_cgroup_state || { emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; }
+    validate_recorded_mounts "$generation_root/OWNERSHIP.json" cleanup || { emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; }
+    expected_app=$(jq -r '.application_namespace_inode // empty' "$generation_root/OWNERSHIP.json"); expected_gateway=$(jq -r '.gateway_namespace_inode // empty' "$generation_root/OWNERSHIP.json")
+    if [[ -e "/run/netns/$app_ns" && "$(stat -Lc %i "/run/netns/$app_ns")" != "$expected_app" ]]; then emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; fi
+    if [[ -e "/run/netns/$gateway_ns" && "$(stat -Lc %i "/run/netns/$gateway_ns")" != "$expected_gateway" ]]; then emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; fi
+    if "$runsc" "${global[@]}" state "$sandbox" >/dev/null 2>&1; then runsc_quiet delete --force "$sandbox" || failed=true; fi
+    [[ ! -e "/run/netns/$app_ns" ]] || ip netns del "$app_ns" || failed=true
+    [[ ! -e "/run/netns/$gateway_ns" ]] || ip netns del "$gateway_ns" || failed=true
+    if [[ "$(jq -r 'if .mounts.secret == null then "absent" else "present" end' "$generation_root/OWNERSHIP.json")" == present ]]; then
+      if [[ -n "$secret_mount_identity" ]]; then
+        unmount_recorded_mount "$secret_mount" "$secret_mount_identity" secret tmpfs "" "$secret_target_inode" || failed=true
+      else
+        mount_target_empty "$secret_mount" || failed=true
+      fi
+    fi
+    if [[ -n "$rootfs_mount_identity" ]]; then
+      unmount_recorded_mount "$rootfs_mount" "$rootfs_mount_identity" rootfs "$rootfs" "$rootfs_source_inode" "$rootfs_target_inode" || failed=true
+    else
+      mount_target_empty "$rootfs_mount" || failed=true
+    fi
+    cleanup_secret_input || failed=true
+    cleanup_observed=$(observe_cgroup "")
+    [[ "$cleanup_observed" == null ]] || printf '%s\n' "$cleanup_observed" > "$evidence/last-observed.json"
+    remove_budget_cgroup || failed=true
+    "$runsc" "${global[@]}" state "$sandbox" >/dev/null 2>&1 && failed=true
+    cgroup_absent=false
+    if load_cgroup_state && [[ ! -e "$cgroup_root" && ! -L "$cgroup_root" ]]; then cgroup_absent=true; else failed=true; fi
+    [[ ! -e "/run/netns/$app_ns" && ! -e "/run/netns/$gateway_ns" && "$cgroup_absent" == true ]] || failed=true
+    remove_mount_tuple || failed=true
+    if [[ "$failed" == true ]]; then emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; fi
+    write_cgroup_tombstone || { emit cleanup_pending runtime_cleanup_incomplete false failed; exit 1; }
+    receipt=$(mktemp "${state_root}/.cleanup-receipt.XXXXXX"); emit cleaned runtime_cleaned > "$receipt"
+    [[ "$generation_root" == "${state_root}/${id}/${generation}" ]] || exit 1
+    rm -rf --one-file-system "$generation_root"
+    jq -c '.cleanup.state_retained=false | .cleanup.cgroup_absent=true | .cleanup.sandbox_absent=true | .cleanup.application_namespace_absent=true | .cleanup.gateway_namespace_absent=true' "$receipt"
+    rm -f -- "$receipt";;
+  *) echo runtime_operation_invalid >&2; exit 2;;
+esac

@@ -5,7 +5,7 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-pub const READER_SCHEMA_VERSION: i64 = 5;
+pub const READER_SCHEMA_VERSION: i64 = 6;
 pub(crate) const HOSTLET_MIGRATION_LOCK: i64 = 0x484f_5354_4c45_5401;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
@@ -55,6 +55,40 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "public.compatibility_reports",
     "public.portfolio_preview_contexts",
     "public.portfolio_preview_project_contexts",
+    "public.m3_policy_clock",
+    "public.source_materializations",
+    "public.build_jobs",
+    "public.build_job_services",
+    "public.build_job_secret_refs",
+    "public.build_attempts",
+    "public.build_artifacts",
+    "public.build_effects",
+    "public.build_attempt_receipts",
+    "public.build_usage_reservations",
+    "public.build_request_receipts",
+    "public.tenant_databases",
+    "public.tenant_database_credentials",
+    "public.tenant_database_archives",
+    "public.tenant_database_recoveries",
+    "public.tenant_database_operations",
+    "public.tenant_database_operation_attempts",
+    "public.tenant_database_migrations",
+    "public.runtime_evaluation_intents",
+    "public.runtime_evaluations",
+    "public.runtime_allocations",
+    "public.runtime_restore_probe_intents",
+    "public.runtime_observations",
+    "public.application_releases",
+    "public.project_release_routes",
+    "public.release_reconciliations",
+    "public.release_reconciliation_attempts",
+    "public.application_release_events",
+    "public.portfolio_approved_revisions",
+    "public.portfolio_deployment_fact_revisions",
+    "public.portfolio_readiness_events",
+    "public.portfolio_public_sites",
+    "public.portfolio_publications",
+    "public.portfolio_publication_attempts",
 ];
 
 pub fn lazy_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
@@ -201,6 +235,7 @@ async fn inspect_prefix(connection: &mut PgConnection) -> Result<SchemaPrefix, S
         2 => 19,
         3 => 25,
         4 => 26,
+        5 => 44,
         _ => REQUIRED_RELATIONS.len(),
     };
     let relations_present: bool = sqlx::query_scalar(

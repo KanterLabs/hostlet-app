@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "updated": "2026-09-22",
+  "updated": "2026-09-23",
   "project": "HOST",
   "repository": "KanterLabs/hostlet-app",
   "release": "Hostlet 0.1 \u2014 paid pilot readiness",
@@ -284,8 +284,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "active",
+      "dependency_state": "owned"
     },
     {
       "key": "HOST-223",
@@ -324,8 +324,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "active",
+      "dependency_state": "owned"
     },
     {
       "key": "HOST-227",
@@ -645,7 +645,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M1 is complete at HOST-242. Two clean full E2E runs each passed54 assertions at5d72bd0, including a retained-binary rebuild, populated recovery and verified private receipts. See docs/M1-HANDOFF.md. All23 later cards remain unclaimed; stop before M2. Routine make check is not product E2E evidence."
+    "current_status": "M1 and M2 are complete at HOST-242 and HOST-243. Their handoffs record two clean full E2E runs per milestone, including rebuilt retained binaries, populated recovery and verified private receipts. M3 implementation and acceptance are in progress through HOST-233; no M3 gate is complete. Stop before M4. Routine make check is not product E2E evidence."
   },
   "milestones": [
     {
@@ -736,21 +736,26 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 11667,
-    "read_at": "2026-09-22T02:19:03.729765954Z",
+    "project_revision": 11758,
+    "read_at": "2026-09-23T05:23:44.611638342Z",
     "completed": 13,
-    "active": 0,
-    "backlog": 18,
-    "active_task": null,
-    "assigned_stop": "HOST-243",
-    "stopped_at": "HOST-243"
+    "active": 2,
+    "backlog": 16,
+    "active_task": "HOST-222",
+    "assigned_stop": "HOST-233",
+    "stopped_at": null,
+    "active_tasks": [
+      "HOST-222",
+      "HOST-225"
+    ]
   },
   "assignment": {
     "milestone": "M3",
     "stop_gate": "HOST-233",
-    "workers": "gpt-5.6-sol medium",
+    "workers": "luna_worker; Sol owns integration and verification",
     "authorized_at": "2026-09-22",
-    "tracking": "Helm resume HOST-222 rejected HTTP 507 agent mutation resource budget exhausted; live states unchanged; local implementation authorized",
-    "data_preservation": "Retained clean M2 binary and source/hash manifest before M3 code changes; fresh verified backup, populated additive upgrade and actual retained-binary compatibility required"
+    "tracking": "Helm HOST-222 and HOST-225 are claimed for runtime and disposable-VM build verification. HOST-223 and HOST-227 have satisfied prerequisites; dependent M3 and all M4/M5 cards remain unclaimed. No M3 gate is complete.",
+    "data_preservation": "Retained clean M2 binary and source/hash manifest before M3 code changes; fresh verified backup, populated additive upgrade and actual retained-binary compatibility required",
+    "runtime_decision": "docs/M3-RUNTIME-DECISION.md; measured 50% throughput target remains unmet, production readiness deferred, owned-fixture-only evaluation retains all mandatory controls."
   }
 }

@@ -2,7 +2,8 @@
 
 Written before M3 implementation. Scope is HOST-222, HOST-223, HOST-225,
 HOST-227, HOST-226, HOST-229 and the HOST-233 stop. The September 22 assignment
-authorizes Sol Medium workers and owned local fixtures through this gate.
+authorizes owned local fixtures through this gate; the resumed assignment uses
+Luna workers with Sol owning integration and verification.
 These are planned observable outcomes, not completed evidence. Stop before M4.
 No post-implementation unit tests will be added.
 
@@ -15,6 +16,10 @@ PostgreSQL, actual backup/export/restore commands, and an independent static
 server. No Hostlet internal method mock can satisfy an assertion. Runtime
 compatibility may be explicitly deferred for a pattern only with observed
 failure evidence and fail-closed admission for that pattern.
+The observed throughput shortfall and the separate owned-fixture admission
+decision are recorded in [M3-RUNTIME-DECISION.md](M3-RUNTIME-DECISION.md).
+The 50% throughput target remains measured and reported; missing or inconsistent
+assessment rejects the evaluation. No production-readiness claim is permitted.
 
 The main owned repository has a static frontend, a Node API, a locked dependency
 set, an additive database migration, populated related rows and a health route.
@@ -74,6 +79,53 @@ explicit separate empty owned target and compare all relevant relations.
   without starving the other tenant/control service. Backoff is bounded and
   restart attempts cannot bypass budgets. A malformed or over-limit policy
   rejects before execution; limits cannot be silently omitted by the launcher.
+  The owned process-pressure fixture must record both synchronous spawn errors
+  and asynchronous child errors. The 2026-09-23 pressure diagnostic observed
+  `spawn ENOMEM` with `pids.current=128`, a nonzero `pids.events.max`, and zero
+  memory-limit/OOM events. Either `EAGAIN` or this observed `ENOMEM` can support
+  the PID-limit oracle only alongside the exact configured limit, a nonzero
+  kernel PID-limit event, and no OOM event. An errno alone is not enforcement
+  evidence; an unhandled fixture HTTP 500 remains a failure. Repeated real
+  pressure also demonstrated that the sandbox can exit before returning a
+  response. That outcome may pass only with a retained kernel PID-limit event,
+  the exact configured PID budget, zero memory-limit/OOM events, a matching
+  owner-visible `process_limit_exceeded` observation, and healthy peer/control
+  evidence. A timeout or generic exit without those receipts must fail.
+  Resource counters must remain observable after the sandbox exits, including
+  group OOM termination. A missing counter cannot become a guessed enforcement
+  reason. Restart must preserve the previous failure receipt while allowing
+  fresh observations for the new attempt; an earlier OOM must not label a
+  healthy replacement as OOM. Counter ownership, budget limits and cleanup must
+  remain tied to the exact allocation/generation/fence, with no shared host
+  unit changes or unmanaged remnants.
+  A restarted process must become reachable through the existing owned gateway;
+  recreating a process alone is not health evidence. Restore only the exact
+  owned namespace configuration, preserving peer attachments and network policy.
+
+### Relay cleanup failure inventory
+
+The 2026-09-23 pressure run exposed a cleanup boundary failure after an
+aborted or half-closed loopback request: a forked root relay handler remained
+in `CLOSE-WAIT` after the runner leader had exited, and its inherited stdout
+and stderr pipes kept the runner alive. The relay stop boundary now records the
+allocation, generation, fence, relay PID, process-group ID and Linux starttime
+from the ownership map. The privileged stop helper validates every member of
+that one process group, signals only pidfds for the exact root relay command,
+and records bounded TERM/KILL outcomes. The runner then reaps its leader and a
+second exact verification must prove no group member and no ownership map
+remain. Any unowned process-group member, PID reuse, timeout, retained map or
+surviving worker fails cleanup and retains the bounded receipt for diagnosis.
+During `/proc` teardown races the helper re-inspects the exact group for at
+most 500 ms so a child can become verifiably owned or disappear; it never
+signals an unrecognized member or treats an unrecognized zombie as absent. A
+persistent mismatch emits only bounded PID, UID, PGID, state, PPID, starttime
+and command-match fields, never the raw command line.
+The relay handler keeps legitimate TCP half-close response draining only until
+a five-second deadline, then closes both sockets and its selector. It closes
+inherited runner stdout/stderr in the forked handler, so a worker cannot keep
+those pipes open after the request ends. This is an E2E boundary check; no
+post-implementation unit test substitutes for the process-absence oracle.
+
 - **M3-RUNTIME-04:** With no visitor traffic, verify the same allocated app and
   database remain usable across a documented observation interval and scheduler
   activity. Build allowance exhaustion does not stop them. Runtime restart,
@@ -159,7 +211,10 @@ explicit separate empty owned target and compare all relevant relations.
   original promotion. No dump restore/data rewind occurs. Ineligible target,
   cross-owner action, concurrent promotion, stale completion and restart retain
   one coherent active pointer and truthful history. Failed builds and candidates
-  do not consume a successful-retention position.
+  do not consume a successful-retention position. Rollback eligibility requires
+  the retained release's exact owned allocation generation and fence to remain
+  healthy. M3 rejects a stopped or cleaned retained allocation; it does not claim
+  generalized retained-allocation restart or replacement-generation recovery.
 
 ## Owner approvals and fact synchronization — HOST-227
 

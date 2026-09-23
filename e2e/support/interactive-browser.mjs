@@ -34,7 +34,7 @@ function browserEnvironment() {
   return environment;
 }
 
-function loopbackPageUrl(value) {
+function loopbackPageUrl(value, ownedHttpsHostname = null) {
   if (value === "about:blank") return value;
   let parsed;
   try {
@@ -43,7 +43,8 @@ function loopbackPageUrl(value) {
     throw new Error("browser navigation URL is invalid");
   }
   const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "[::1]";
-  if (!loopback || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+  const ownedHttps = ownedHttpsHostname !== null && parsed.hostname === ownedHttpsHostname && parsed.protocol === "https:";
+  if ((!loopback && !ownedHttps) || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     throw new Error("browser navigation is restricted to loopback HTTP");
   }
   return parsed.href;
@@ -232,7 +233,8 @@ function assertInside(parent, child) {
 
 export async function beginBrowser(
   context,
-  { url = "about:blank", width = 1440, height = 1000, label = "interactive", timeoutMs = DEFAULT_TIMEOUT_MS } = {},
+  { url = "about:blank", width = 1440, height = 1000, label = "interactive", timeoutMs = DEFAULT_TIMEOUT_MS,
+    ownedHttpsHostname = null, certificateSpkiSha256 = null } = {},
 ) {
   if (!context?.chromiumPath || !context?.tempDir || !context?.artifactDir) {
     throw new Error("interactive browser requires a complete E2E context");
@@ -242,6 +244,19 @@ export async function beginBrowser(
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 250 || timeoutMs > 120_000) {
     throw new Error("browser timeout is invalid");
+  }
+  if ((ownedHttpsHostname === null) !== (certificateSpkiSha256 === null)) {
+    throw new Error("owned browser TLS hostname and SPKI must be supplied together");
+  }
+  if (ownedHttpsHostname !== null) {
+    if (typeof ownedHttpsHostname !== "string" || ownedHttpsHostname !== ownedHttpsHostname.toLowerCase() ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.localowned\.test$/.test(ownedHttpsHostname)) {
+      throw new Error("owned browser TLS hostname is invalid");
+    }
+    if (typeof certificateSpkiSha256 !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(certificateSpkiSha256) ||
+        Buffer.from(certificateSpkiSha256, "base64").length !== 32) {
+      throw new Error("owned browser certificate SPKI digest is invalid");
+    }
   }
 
   const ownedLabel = safeLabel(label);
@@ -274,6 +289,10 @@ export async function beginBrowser(
       `--remote-debugging-port=${debuggingPort}`,
       `--user-data-dir=${profile}`,
       `--window-size=${width},${height}`,
+      ...(ownedHttpsHostname === null ? [] : [
+        `--host-resolver-rules=MAP ${ownedHttpsHostname} 127.0.0.1,EXCLUDE localhost`,
+        `--ignore-certificate-errors-spki-list=${certificateSpkiSha256}`,
+      ]),
       "about:blank",
     ],
     { cwd: context.repo, env: browserEnvironment() },
@@ -361,7 +380,7 @@ export async function beginBrowser(
       waitForExpression(expressionForPredicate(selectorOrPredicate), waitTimeoutMs);
 
     const navigate = async (destination) => {
-      const safeUrl = loopbackPageUrl(destination);
+      const safeUrl = loopbackPageUrl(destination, ownedHttpsHostname);
       const result = await connection.send("Page.navigate", { url: safeUrl });
       if (result?.errorText) throw new Error("browser navigation failed");
       await waitFor(() => document.readyState === "complete");

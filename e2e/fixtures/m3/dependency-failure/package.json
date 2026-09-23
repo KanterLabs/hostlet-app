@@ -1,0 +1,1 @@
+{"name":"hostlet-owned-dependency-cache-miss","version":"1.0.0","private":true,"type":"module","scripts":{"build":"node build.mjs"},"dependencies":{"is-number":"7.0.0"}}

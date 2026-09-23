@@ -26,6 +26,10 @@ const MAX_TREE_ENTRIES: usize = 2_000;
 const MAX_SOURCE_FILES: usize = 40;
 const MAX_SOURCE_FILE_BYTES: usize = 64 * 1024;
 const MAX_SOURCE_BYTES: usize = 512 * 1024;
+const MAX_BUILD_TREE_ENTRIES: usize = 10_000;
+const MAX_BUILD_BLOB_BYTES: usize = 8 * 1024 * 1024;
+const MAX_BUILD_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_BUILD_TREE_RESPONSE: usize = 8 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1_024;
 const MAX_USER_TOKEN_LIFETIME_SECONDS: i64 = 8 * 60 * 60;
 
@@ -133,6 +137,21 @@ pub(crate) struct SourceSnapshot {
 pub(crate) struct SourceFile {
     pub path: String,
     pub content: Vec<u8>,
+}
+
+pub(crate) struct BuildSourceSnapshot {
+    pub repository: GitHubRepository,
+    pub authorized_ref: String,
+    pub commit_sha: String,
+    pub tree_sha: String,
+    pub files: Vec<BuildSourceFile>,
+}
+
+pub(crate) struct BuildSourceFile {
+    pub path: String,
+    pub executable: bool,
+    pub blob_sha: String,
+    pub content: Zeroizing<Vec<u8>>,
 }
 
 #[derive(Deserialize)]
@@ -558,6 +577,38 @@ impl GitHubProvider {
         .await
     }
 
+    /// Reads every regular blob at the already selected commit for the trusted
+    /// M3 materializer. It neither checks out nor executes repository content.
+    pub(crate) async fn read_build_source(
+        &self,
+        request: GitHubSourceRequest<'_>,
+        commit_sha: &str,
+        expected_tree_sha: &str,
+    ) -> Result<BuildSourceSnapshot, ApiError> {
+        validate_full_ref(request.authorized_ref)?;
+        validate_sha1(commit_sha)?;
+        validate_sha1(expected_tree_sha)?;
+        self.with_operation_timeout(async {
+            let membership = self.current_membership_inner(&request.membership).await?;
+            let installation_token = Zeroizing::new(
+                self.installation_token(
+                    request.membership.installation_id,
+                    request.membership.repository_id,
+                )
+                .await?,
+            );
+            self.read_build_source_inner(
+                membership.repository,
+                request.authorized_ref,
+                commit_sha,
+                expected_tree_sha,
+                &installation_token,
+            )
+            .await
+        })
+        .await
+    }
+
     pub(crate) fn webhook_secret(&self) -> &[u8] {
         &self.webhook_secret.0
     }
@@ -917,6 +968,129 @@ impl GitHubProvider {
         })
     }
 
+    async fn read_build_source_inner(
+        &self,
+        repository: GitHubRepository,
+        authorized_ref: &str,
+        commit_sha: &str,
+        expected_tree_sha: &str,
+        token: &str,
+    ) -> Result<BuildSourceSnapshot, ApiError> {
+        let commit = self.get_commit(&repository, commit_sha, token).await?;
+        if commit.sha != commit_sha || commit.tree.sha != expected_tree_sha {
+            return Err(invalid_source());
+        }
+        let mut tree_url = endpoint(
+            &self.api_origin,
+            &[
+                "repos",
+                &repository.owner,
+                &repository.name,
+                "git",
+                "trees",
+                expected_tree_sha,
+            ],
+        )?;
+        tree_url.query_pairs_mut().append_pair("recursive", "1");
+        let tree: TreeResponse = self
+            .send_json(self.api_get_url(tree_url, token), MAX_BUILD_TREE_RESPONSE)
+            .await?;
+        if tree.truncated
+            || tree.sha != expected_tree_sha
+            || tree.tree.len() > MAX_BUILD_TREE_ENTRIES
+        {
+            return Err(provider_limit());
+        }
+        let mut selected = Vec::new();
+        let mut exact = HashSet::with_capacity(tree.tree.len());
+        let mut folded = HashSet::with_capacity(tree.tree.len());
+        for entry in tree.tree {
+            if let Err(error) = validate_tree_entry(&entry) {
+                if error.code() == "github_provider_unavailable" {
+                    return Err(build_source_rejected());
+                }
+                return Err(error);
+            }
+            if !exact.insert(entry.path.clone()) || !folded.insert(entry.path.to_lowercase()) {
+                return Err(ApiError::unprocessable(
+                    "unsupported_github_source",
+                    "the repository contains duplicate or case-colliding source paths",
+                ));
+            }
+            if entry.kind == "blob" {
+                let size = entry.size.ok_or_else(build_source_rejected)?;
+                if size > MAX_BUILD_BLOB_BYTES as u64 {
+                    return Err(provider_limit());
+                }
+                selected.push((entry.path, entry.mode == "100755", entry.sha, size));
+            }
+        }
+        selected.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        let mut files = Vec::with_capacity(selected.len());
+        let mut total = 0usize;
+        for (path, executable, blob_sha, expected_size) in selected {
+            let response_limit = MAX_BUILD_BLOB_BYTES
+                .saturating_mul(2)
+                .saturating_add(65_536);
+            let mut blob: BlobResponse = self
+                .send_json(
+                    self.api_get(
+                        &[
+                            "repos",
+                            &repository.owner,
+                            &repository.name,
+                            "git",
+                            "blobs",
+                            &blob_sha,
+                        ],
+                        token,
+                    )?,
+                    response_limit,
+                )
+                .await?;
+            if blob.sha != blob_sha
+                || blob.encoding != "base64"
+                || blob.size != expected_size
+                || blob.size > MAX_BUILD_BLOB_BYTES as u64
+            {
+                return Err(build_source_rejected());
+            }
+            let mut compact = Zeroizing::new(std::mem::take(&mut blob.content));
+            compact.retain(|character| !character.is_ascii_whitespace());
+            let content = STANDARD
+                .decode(compact.as_bytes())
+                .map_err(|_| build_source_rejected())?;
+            if content.len() != blob.size as usize || git_blob_sha1(&content) != blob_sha {
+                return Err(build_source_rejected());
+            }
+            if content.starts_with(b"version https://git-lfs.github.com/spec/v1\n") {
+                return Err(ApiError::unprocessable(
+                    "unsupported_github_source",
+                    "Git LFS pointer sources are outside the owned build profile",
+                ));
+            }
+            total = total
+                .checked_add(content.len())
+                .ok_or_else(provider_limit)?;
+            if total > MAX_BUILD_SOURCE_BYTES {
+                return Err(provider_limit());
+            }
+            files.push(BuildSourceFile {
+                path,
+                executable,
+                blob_sha,
+                content: Zeroizing::new(content),
+            });
+        }
+        Ok(BuildSourceSnapshot {
+            repository,
+            authorized_ref: authorized_ref.to_owned(),
+            commit_sha: commit.sha,
+            tree_sha: commit.tree.sha,
+            files,
+        })
+    }
+
     async fn get_commit(
         &self,
         repository: &GitHubRepository,
@@ -1067,6 +1241,76 @@ fn validate_tree_entry(entry: &TreeEntry) -> Result<(), ApiError> {
     }
 }
 
+fn validate_sha1(value: &str) -> Result<(), ApiError> {
+    if value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        Err(invalid_source())
+    }
+}
+
+// Small, self-contained SHA-1 implementation used only to verify Git's
+// `blob <length>\0<data>` object identity. SHA-1 is not used for security.
+fn git_blob_sha1(content: &[u8]) -> String {
+    let mut bytes = format!("blob {}\0", content.len()).into_bytes();
+    bytes.extend_from_slice(content);
+    let bit_len = (bytes.len() as u64).wrapping_mul(8);
+    bytes.push(0x80);
+    while bytes.len() % 64 != 56 {
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&bit_len.to_be_bytes());
+    let mut h = [
+        0x67452301u32,
+        0xefcdab89,
+        0x98badcfe,
+        0x10325476,
+        0xc3d2e1f0,
+    ];
+    for block in bytes.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (index, word) in block.chunks_exact(4).enumerate() {
+            w[index] = u32::from_be_bytes(word.try_into().expect("four byte word"));
+        }
+        for index in 16..80 {
+            w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = h;
+        for (index, value) in w.iter().enumerate() {
+            let (f, k) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5a827999),
+                20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+                _ => (b ^ c ^ d, 0xca62c1d6),
+            };
+            let next = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*value);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = next;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+    format!(
+        "{:08x}{:08x}{:08x}{:08x}{:08x}",
+        h[0], h[1], h[2], h[3], h[4]
+    )
+}
+
 fn allowed_source_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let file = lower.rsplit('/').next().unwrap_or(&lower);
@@ -1108,6 +1352,10 @@ fn validate_repo_path(path: &str) -> Result<(), ApiError> {
         || path.len() > MAX_PATH_BYTES
         || path.starts_with('/')
         || path.contains('\\')
+        || (path.len() >= 3
+            && path.as_bytes()[0].is_ascii_alphabetic()
+            && path.as_bytes()[1] == b':'
+            && path.as_bytes()[2] == b'/')
         || path.bytes().any(|byte| byte.is_ascii_control())
         || path
             .split('/')
@@ -1300,6 +1548,13 @@ fn provider_limit() -> ApiError {
     ApiError::unprocessable(
         "github_provider_limit_exceeded",
         "the GitHub response exceeds Hostlet limits",
+    )
+}
+
+fn build_source_rejected() -> ApiError {
+    ApiError::unprocessable(
+        "build_source_rejected",
+        "the exact build source failed immutable source verification",
     )
 }
 

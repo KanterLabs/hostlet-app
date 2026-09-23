@@ -1,0 +1,1608 @@
+#!/usr/bin/env python3
+"""Attach an owned PostgreSQL namespace to one or more runtime gateways."""
+
+from __future__ import annotations
+
+import contextlib
+import copy
+import fcntl
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Iterator
+
+
+IP = "/usr/sbin/ip"
+DOCKER = "/usr/bin/docker"
+NSENTER = "/usr/bin/nsenter"
+SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
+STATE_MARKER = "hostlet-runtime-state-v1"
+REGISTRY_NAME = "runtime-peer-registry"
+TARGET_SCHEMA = "hostlet.runtime.peer-target/v1"
+PEER_SCHEMA = "hostlet.runtime.postgres-peer/v2"
+ATTACHMENT_SCHEMA = "hostlet.runtime.peer-attachment/v1"
+REQUEST_SCHEMA = "hostlet.runtime.peer-request/v1"
+RECEIPT_SCHEMA = "hostlet.runtime.peer-receipt/v1"
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CONTAINER_RE = re.compile(r"^[0-9a-f]{64}$")
+IFACE_RE = re.compile(r"^[pd][0-9a-f]{10}$")
+MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
+POSITIVE_FIELDS = ("database_namespace_inode", "gateway_namespace_inode", "interface_ifindex", "gateway_interface_ifindex", "interface_peer_ifindex", "gateway_interface_peer_ifindex")
+MEMBER_FIELDS = frozenset(("allocation_id", "runtime_generation", "runtime_fence", "container_id", "database_namespace_inode", "gateway_namespace_inode", "interface", "gateway_interface", "interface_ifindex", "gateway_interface_ifindex", "interface_peer_ifindex", "gateway_interface_peer_ifindex", "interface_mac", "gateway_interface_mac", "transport_ipv4", "transport_ipv6", "transport_gateway_ipv4", "transport_gateway_ipv6", "application_ipv4", "application_ipv6", "application_route_ipv4", "application_route_ipv6", "gateway_route_ipv4", "gateway_route_ipv6"))
+ATTACHMENT_ROUTE_NAMES = ("gateway_ipv4", "gateway_ipv6", "application_ipv4", "application_ipv6")
+ATTACHMENT_PHASES = {"preparing", "ready", "committing", "rollback"}
+ATTACHMENT_EFFECT_PHASES = {"absent", "adding", "owned"}
+ATTACHMENT_VETH_PHASES = {"absent", "creating", "host", "gateway_moved", "database_moved", "ready"}
+MAX_MEMBERS = 256
+
+
+class PeerError(Exception):
+    def __init__(self, message: str, status: int = 1) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+class CommandError(Exception):
+    pass
+
+
+def fail(message: str, status: int = 1) -> None:
+    raise PeerError(message, status)
+
+
+def require(condition: bool, message: str, status: int = 1) -> None:
+    if not condition:
+        fail(message, status)
+
+
+def is_regular(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def is_directory(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def exact_realpath(path: Path) -> bool:
+    try:
+        return os.path.realpath(path) == str(path)
+    except OSError:
+        return False
+
+
+def mode(path: Path) -> int:
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+def owner(path: Path) -> int:
+    return os.lstat(path).st_uid
+
+
+def read_json(path: Path) -> Any:
+    require(is_regular(path) and exact_realpath(path) and owner(path) == 0 and mode(path) == 0o600, "peer_record_permissions_invalid")
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(fd)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_uid == 0 and stat.S_IMODE(opened.st_mode) == 0o600, "peer_record_permissions_invalid")
+        with os.fdopen(fd, "rb") as handle:
+            fd = None
+            return json.loads(handle.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        fail("peer_record_invalid")
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def run_command(args: list[str], timeout: float = 15.0) -> str:
+    try:
+        result = subprocess.run(args, env=SAFE_ENV, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        raise CommandError from None
+    if result.returncode != 0:
+        raise CommandError
+    try:
+        return result.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        raise CommandError from None
+
+
+def run_json(args: list[str], timeout: float = 15.0) -> Any:
+    try:
+        return json.loads(run_command(args, timeout))
+    except (CommandError, json.JSONDecodeError):
+        raise CommandError from None
+
+
+def ns_command(pid: int, args: list[str]) -> list[str]:
+    return [NSENTER, "-t", str(pid), "-n", *args]
+
+
+def ns_json(pid: int, args: list[str]) -> Any:
+    return run_json(ns_command(pid, args))
+
+
+def gateway_command(namespace: str, args: list[str]) -> list[str]:
+    return [IP, "-n", namespace, *args]
+
+
+def gateway_json(namespace: str, args: list[str]) -> Any:
+    return run_json(gateway_command(namespace, args))
+
+
+def hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def atomic_write_json(path: Path, value: Any, expected_mode: int = 0o600) -> None:
+    require(is_directory(path.parent) and exact_realpath(path.parent), "peer_record_parent_invalid")
+    temporary: Path | None = None
+    try:
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+        temporary = Path(temporary_name)
+        os.fchmod(fd, expected_mode)
+        if os.geteuid() == 0:
+            os.fchown(fd, 0, 0)
+        payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        fail("peer_record_write_failed")
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+
+def make_owned_directory(path: Path) -> None:
+    try:
+        path.mkdir(mode=0o700)
+        if os.geteuid() == 0:
+            os.chown(path, 0, 0)
+        os.chmod(path, 0o700)
+    except FileExistsError:
+        pass
+    except OSError:
+        fail("peer_registry_create_failed")
+    validate_owned_directory(path, "peer_registry_permissions_invalid")
+
+
+def validate_owned_directory(path: Path, error: str) -> None:
+    require(is_directory(path) and not path.is_symlink() and exact_realpath(path), error)
+    require(owner(path) == 0 and mode(path) == 0o700, error)
+
+
+def validate_uuid(value: Any, error: str = "peer_identity_invalid") -> str:
+    require(isinstance(value, str) and UUID_RE.fullmatch(value) is not None, error, 2)
+    return value
+
+
+def validate_positive(value: Any, error: str) -> int:
+    require(isinstance(value, int) and not isinstance(value, bool) and value > 0, error)
+    return value
+
+
+def parse_request(source: Path, digest: str, state_root: Path) -> tuple[dict[str, Any], Path]:
+    require(source.is_absolute() and state_root.is_absolute(), "peer_usage", 2)
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, "peer_usage", 2)
+    require(is_regular(source) and exact_realpath(source), "peer_root_not_owned", 2)
+    marker = state_root / ".hostlet-runtime-owned"
+    require(is_directory(state_root) and not state_root.is_symlink() and exact_realpath(state_root), "peer_root_not_owned", 2)
+    require(is_regular(marker) and exact_realpath(marker), "peer_root_not_owned", 2)
+    try:
+        require(marker.read_text(encoding="utf-8").rstrip("\n") == STATE_MARKER, "peer_root_not_owned", 2)
+    except OSError:
+        fail("peer_root_not_owned", 2)
+    temporary: Path | None = None
+    try:
+        fd, name = tempfile.mkstemp(prefix=".peer-request.", dir=state_root)
+        temporary = Path(name)
+        os.fchmod(fd, 0o400)
+        if os.geteuid() == 0:
+            os.fchown(fd, 0, 0)
+        with source.open("rb") as input_handle, os.fdopen(fd, "wb") as output_handle:
+            payload = input_handle.read()
+            output_handle.write(payload)
+            output_handle.flush()
+            os.fsync(output_handle.fileno())
+        require(hashlib.sha256(payload).hexdigest() == digest, "peer_request_digest_mismatch", 2)
+        try:
+            request = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            fail("peer_request_invalid", 2)
+        require(isinstance(request, dict), "peer_request_invalid", 2)
+        require(request.get("schema") == REQUEST_SCHEMA and request.get("operation") in {"attach_postgres", "detach_postgres"}, "peer_request_invalid", 2)
+        return request, temporary
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        fail("peer_request_invalid", 2)
+    except PeerError:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+        raise
+
+
+def validate_request(request: dict[str, Any]) -> dict[str, Any]:
+    required = ("allocation_id", "runtime_generation", "runtime_fence", "container_id", "run_id", "tenant_database_id", "database_generation", "restore_target", "endpoint_ipv4", "endpoint_ipv6", "gateway_ipv4", "gateway_ipv6")
+    require(all(name in request for name in required), "peer_request_invalid", 2)
+    for name in ("allocation_id", "run_id", "tenant_database_id", "database_generation"):
+        validate_uuid(request[name])
+    require(isinstance(request["runtime_generation"], int) and not isinstance(request["runtime_generation"], bool) and request["runtime_generation"] > 0, "peer_identity_invalid", 2)
+    require(isinstance(request["runtime_fence"], int) and not isinstance(request["runtime_fence"], bool) and request["runtime_fence"] > 0, "peer_identity_invalid", 2)
+    require(isinstance(request["container_id"], str) and CONTAINER_RE.fullmatch(request["container_id"]) is not None, "peer_identity_invalid", 2)
+    require(isinstance(request["restore_target"], bool), "peer_identity_invalid", 2)
+    require(all(isinstance(request[name], str) for name in ("endpoint_ipv4", "endpoint_ipv6", "gateway_ipv4", "gateway_ipv6")), "peer_endpoint_invalid", 2)
+    try:
+        endpoint4 = ipaddress.ip_address(request["endpoint_ipv4"])
+        gateway4 = ipaddress.ip_address(request["gateway_ipv4"])
+        endpoint6 = ipaddress.ip_address(request["endpoint_ipv6"])
+        gateway6 = ipaddress.ip_address(request["gateway_ipv6"])
+    except ValueError:
+        fail("peer_endpoint_invalid", 2)
+    require(endpoint4.version == gateway4.version == 4 and endpoint6.version == gateway6.version == 6, "peer_endpoint_invalid", 2)
+    require(endpoint4 != gateway4 and endpoint6 != gateway6, "peer_endpoint_invalid", 2)
+    network4 = ipaddress.ip_network(f"{endpoint4}/30", strict=False)
+    network6 = ipaddress.ip_network(f"{endpoint6}/126", strict=False)
+    require(gateway4 in network4 and gateway6 in network6, "peer_endpoint_invalid", 2)
+    require(endpoint4 not in {network4.network_address, network4.broadcast_address} and gateway4 not in {network4.network_address, network4.broadcast_address}, "peer_endpoint_invalid", 2)
+    require(endpoint6 not in {network6.network_address, network6.broadcast_address} and gateway6 not in {network6.network_address, network6.broadcast_address}, "peer_endpoint_invalid", 2)
+    return request
+
+
+def inspect_container(container: str, request: dict[str, Any]) -> tuple[int, str]:
+    try:
+        inspected = run_json([DOCKER, "inspect", container], 15.0)
+    except CommandError:
+        fail("peer_container_invalid")
+    require(isinstance(inspected, list) and len(inspected) == 1 and isinstance(inspected[0], dict), "peer_container_invalid")
+    value = inspected[0]
+    require(value.get("Id") == container and value.get("State", {}).get("Running") is True and value.get("HostConfig", {}).get("NetworkMode") == "none", "peer_container_invalid")
+    labels = value.get("Config", {}).get("Labels")
+    require(isinstance(labels, dict), "peer_container_labels_invalid")
+    expected = {
+        "io.hostlet.scope": "m3-e2e",
+        "io.hostlet.run-id": request["run_id"],
+        "io.hostlet.resource": "tenant-postgres",
+        "io.hostlet.database-id": request["tenant_database_id"],
+        "io.hostlet.database-generation": request["database_generation"],
+        "io.hostlet.restore-target": "true" if request["restore_target"] else "false",
+    }
+    require(all(labels.get(key) == value for key, value in expected.items()), "peer_container_labels_invalid")
+    try:
+        pid = int(value.get("State", {}).get("Pid"))
+    except (TypeError, ValueError):
+        fail("peer_container_invalid")
+    require(pid > 0 and Path(f"/proc/{pid}").is_dir(), "peer_container_invalid")
+    try:
+        namespace_inode = os.stat(f"/proc/{pid}/ns/net").st_ino
+    except OSError:
+        fail("peer_container_namespace_invalid")
+    return pid, str(namespace_inode)
+
+
+def validate_ownership(state_root: Path, request: dict[str, Any], gateway_ns: str) -> tuple[Path, dict[str, Any], str]:
+    allocation = request["allocation_id"]
+    generation = request["runtime_generation"]
+    allocation_root = state_root / allocation
+    generation_root = state_root / allocation / str(generation)
+    ownership_path = generation_root / "OWNERSHIP.json"
+    require(is_directory(allocation_root) and not allocation_root.is_symlink() and exact_realpath(allocation_root) and owner(allocation_root) == 0 and mode(allocation_root) == 0o700, "peer_runtime_not_owned")
+    require(is_directory(generation_root) and not generation_root.is_symlink() and exact_realpath(generation_root) and owner(generation_root) == 0 and mode(generation_root) == 0o700, "peer_runtime_not_owned")
+    require(is_regular(ownership_path) and exact_realpath(ownership_path) and owner(ownership_path) == 0 and mode(ownership_path) == 0o600, "peer_runtime_not_owned")
+    ownership = read_json(ownership_path)
+    require(isinstance(ownership, dict) and ownership.get("allocation_id") == allocation and ownership.get("generation") == generation and ownership.get("fence") == request["runtime_fence"], "peer_runtime_fence_mismatch")
+    gateway_path = Path("/run/netns") / gateway_ns
+    require(is_regular(gateway_path) and exact_realpath(gateway_path), "peer_runtime_not_owned")
+    try:
+        gateway_inode = os.stat(gateway_path).st_ino
+    except OSError:
+        fail("peer_runtime_not_owned")
+    require(str(gateway_inode) == str(ownership.get("gateway_namespace_inode")), "peer_namespace_mismatch")
+    return generation_root, ownership, str(gateway_inode)
+
+
+def validate_outbound_and_app(ownership: dict[str, Any], request: dict[str, Any]) -> tuple[str, str]:
+    destinations = ownership.get("outbound_destinations")
+    require(isinstance(destinations, list), "peer_endpoint_not_allowed")
+    allowed = {(item.get("address"), item.get("port"), item.get("protocol")) for item in destinations if isinstance(item, dict)}
+    require((request["endpoint_ipv4"], 5432, "tcp") in allowed and (request["endpoint_ipv6"], 5432, "tcp") in allowed, "peer_endpoint_not_allowed")
+    app4 = ownership.get("application_ipv4")
+    app6 = ownership.get("application_ipv6")
+    try:
+        require(ipaddress.ip_address(app4).version == 4 and ipaddress.ip_address(app6).version == 6, "peer_application_endpoint_invalid")
+    except ValueError:
+        fail("peer_application_endpoint_invalid")
+    return app4, app6
+
+
+def link_list_pid(pid: int) -> list[dict[str, Any]]:
+    try:
+        value = ns_json(pid, [IP, "-j", "link", "show"])
+    except CommandError:
+        fail("peer_namespace_link_inspect_failed")
+    require(isinstance(value, list), "peer_namespace_link_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def link_list_gateway(namespace: str) -> list[dict[str, Any]]:
+    try:
+        value = gateway_json(namespace, ["-j", "link", "show"])
+    except CommandError:
+        fail("peer_gateway_link_inspect_failed")
+    require(isinstance(value, list), "peer_gateway_link_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def link_details(items: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    matches = [item for item in items if item.get("ifname") == name]
+    require(len(matches) <= 1, "peer_interface_collision")
+    return matches[0] if matches else None
+
+
+def link_identity(item: dict[str, Any] | None, name: str, links: list[dict[str, Any]] | None = None) -> tuple[int, int, str]:
+    require(item is not None and item.get("ifname") == name, "peer_interface_missing")
+    try:
+        index = int(item["ifindex"])
+    except (KeyError, TypeError, ValueError):
+        fail("peer_interface_invalid")
+    peer_index_value = item.get("link_index")
+    peer_item: dict[str, Any] | None = None
+    if peer_index_value is None:
+        peer_reference = item.get("link")
+        if isinstance(peer_reference, str):
+            peer_item = link_details(links or [], peer_reference)
+            require(peer_item is not None, "peer_interface_invalid")
+            peer_index_value = peer_item.get("ifindex")
+        else:
+            peer_index_value = peer_reference
+    try:
+        peer_index = int(peer_index_value)
+    except (TypeError, ValueError):
+        fail("peer_interface_invalid")
+    address = item.get("address", "").lower()
+    require(index > 0 and peer_index > 0 and MAC_RE.fullmatch(address) is not None, "peer_interface_invalid")
+    if peer_item is not None:
+        try:
+            reciprocal = peer_item.get("link_index")
+            if reciprocal is None and isinstance(peer_item.get("link"), str):
+                reciprocal_item = link_details(links or [], peer_item["link"])
+                require(reciprocal_item is not None and int(reciprocal_item.get("ifindex")) == index, "peer_interface_invalid")
+            else:
+                require(int(reciprocal) == index, "peer_interface_invalid")
+        except (TypeError, ValueError):
+            fail("peer_interface_invalid")
+    return index, peer_index, address
+
+
+def addresses_pid(pid: int) -> list[dict[str, Any]]:
+    try:
+        value = ns_json(pid, [IP, "-j", "address", "show"])
+    except CommandError:
+        fail("peer_namespace_address_inspect_failed")
+    require(isinstance(value, list), "peer_namespace_address_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def addresses_gateway(namespace: str) -> list[dict[str, Any]]:
+    try:
+        value = gateway_json(namespace, ["-j", "address", "show"])
+    except CommandError:
+        fail("peer_gateway_address_inspect_failed")
+    require(isinstance(value, list), "peer_gateway_address_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def local_addresses(items: list[dict[str, Any]]) -> dict[str, tuple[str, int]]:
+    result: dict[str, tuple[str, int]] = {}
+    for interface in items:
+        name = interface.get("ifname")
+        for info in interface.get("addr_info", []):
+            if not isinstance(info, dict) or not isinstance(info.get("local"), str):
+                continue
+            try:
+                result[info["local"]] = (str(name), int(info["prefixlen"]))
+            except (TypeError, ValueError):
+                continue
+    return result
+
+
+def route_entries_pid(pid: int, address: str, family: int) -> list[dict[str, Any]]:
+    args = [IP, "-j"]
+    if family == 6:
+        args.append("-6")
+    args += ["route", "show", "exact", f"{address}/{32 if family == 4 else 128}"]
+    try:
+        value = ns_json(pid, args)
+    except CommandError:
+        fail("peer_route_inspect_failed")
+    require(isinstance(value, list), "peer_route_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def route_entries_gateway(namespace: str, address: str, family: int) -> list[dict[str, Any]]:
+    args = ["-j"]
+    if family == 6:
+        args.append("-6")
+    args += ["route", "show", "exact", f"{address}/{32 if family == 4 else 128}"]
+    try:
+        value = gateway_json(namespace, args)
+    except CommandError:
+        fail("peer_route_inspect_failed")
+    require(isinstance(value, list), "peer_route_invalid")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def route_matches(entries: list[dict[str, Any]], target: str, gateway: str, interface: str, family: int) -> bool:
+    prefix = 32 if family == 4 else 128
+    try:
+        expected = ipaddress.ip_network(f"{target}/{prefix}", strict=False)
+    except ValueError:
+        return False
+    for item in entries:
+        destination = item.get("dst")
+        if not isinstance(destination, str):
+            continue
+        try:
+            observed = ipaddress.ip_network(destination if "/" in destination else f"{destination}/{prefix}", strict=False)
+        except ValueError:
+            continue
+        if observed == expected and item.get("gateway") == gateway and item.get("dev") == interface:
+            return True
+    return False
+
+
+def validate_member_shape(member: Any) -> None:
+    require(isinstance(member, dict), "peer_registry_member_invalid")
+    require(set(member) == MEMBER_FIELDS, "peer_registry_member_invalid")
+    validate_uuid(member.get("allocation_id"), "peer_registry_member_invalid")
+    for field in POSITIVE_FIELDS:
+        validate_positive(member.get(field), "peer_registry_member_invalid")
+    require(isinstance(member.get("runtime_generation"), int) and not isinstance(member["runtime_generation"], bool) and member["runtime_generation"] > 0 and isinstance(member.get("runtime_fence"), int) and not isinstance(member["runtime_fence"], bool) and member["runtime_fence"] > 0, "peer_registry_member_invalid")
+    require(isinstance(member.get("container_id"), str) and CONTAINER_RE.fullmatch(member["container_id"]) is not None, "peer_registry_member_invalid")
+    for field in ("interface", "gateway_interface"):
+        require(isinstance(member.get(field), str) and IFACE_RE.fullmatch(member[field]) is not None, "peer_registry_member_invalid")
+    for field in ("interface_mac", "gateway_interface_mac"):
+        require(isinstance(member.get(field), str) and MAC_RE.fullmatch(member[field]) is not None, "peer_registry_member_invalid")
+    for field in ("transport_ipv4", "transport_gateway_ipv4", "application_ipv4"):
+        try:
+            require(ipaddress.ip_address(member.get(field)).version == 4, "peer_registry_member_invalid")
+        except ValueError:
+            fail("peer_registry_member_invalid")
+    for field in ("transport_ipv6", "transport_gateway_ipv6", "application_ipv6"):
+        try:
+            require(ipaddress.ip_address(member.get(field)).version == 6, "peer_registry_member_invalid")
+        except ValueError:
+            fail("peer_registry_member_invalid")
+    require(member["application_route_ipv4"] == f"{member['application_ipv4']}/32" and member["application_route_ipv6"] == f"{member['application_ipv6']}/128", "peer_registry_member_invalid")
+    try:
+        require(ipaddress.ip_network(member["gateway_route_ipv4"], strict=False).prefixlen == 32 and ipaddress.ip_network(member["gateway_route_ipv6"], strict=False).prefixlen == 128, "peer_registry_member_invalid")
+    except ValueError:
+        fail("peer_registry_member_invalid")
+
+
+def validate_target_shape(value: Any, target_key: str | None = None) -> dict[str, Any]:
+    require(isinstance(value, dict), "peer_registry_target_invalid")
+    expected = {"schema", "state", "target_key", "run_id", "container_id", "tenant_database_id", "database_generation", "restore_target", "endpoint_ipv4", "endpoint_ipv6", "gateway_ipv4", "gateway_ipv6", "database_namespace_inode", "loopback_aliases_present", "members", "detached_members"}
+    require(set(value) == expected and value.get("schema") == TARGET_SCHEMA, "peer_registry_target_invalid")
+    key = value.get("target_key")
+    require(isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key) is not None and (target_key is None or key == target_key), "peer_registry_target_invalid")
+    require(value.get("state") in {"preparing", "active", "empty"}, "peer_registry_target_invalid")
+    validate_uuid(value.get("run_id"), "peer_registry_target_invalid")
+    require(isinstance(value.get("container_id"), str) and CONTAINER_RE.fullmatch(value["container_id"]) is not None, "peer_registry_target_invalid")
+    validate_uuid(value.get("tenant_database_id"), "peer_registry_target_invalid")
+    validate_uuid(value.get("database_generation"), "peer_registry_target_invalid")
+    require(isinstance(value.get("restore_target"), bool), "peer_registry_target_invalid")
+    try:
+        require(ipaddress.ip_address(value.get("endpoint_ipv4")).version == 4 and ipaddress.ip_address(value.get("gateway_ipv4")).version == 4 and ipaddress.ip_address(value.get("endpoint_ipv6")).version == 6 and ipaddress.ip_address(value.get("gateway_ipv6")).version == 6, "peer_registry_target_invalid")
+    except ValueError:
+        fail("peer_registry_target_invalid")
+    validate_positive(value.get("database_namespace_inode"), "peer_registry_target_invalid")
+    require(isinstance(value.get("loopback_aliases_present"), bool) and isinstance(value.get("members"), list) and isinstance(value.get("detached_members"), list), "peer_registry_target_invalid")
+    seen: set[tuple[str, int, int]] = set()
+    require(len(value["members"]) <= MAX_MEMBERS and len(value["detached_members"]) <= MAX_MEMBERS, "peer_registry_target_invalid")
+    used_interfaces: set[str] = set()
+    used_gateways: set[str] = set()
+    used_transport4: set[str] = set()
+    used_transport6: set[str] = set()
+    for member in value["members"]:
+        validate_member_shape(member)
+        member_key = (member["allocation_id"], member["runtime_generation"], member["runtime_fence"])
+        require(member_key not in seen, "peer_registry_target_invalid")
+        require(member["interface"] not in used_interfaces and member["gateway_interface"] not in used_gateways, "peer_registry_target_invalid")
+        require(not ({member["transport_ipv4"], member["transport_gateway_ipv4"]} & used_transport4) and not ({member["transport_ipv6"], member["transport_gateway_ipv6"]} & used_transport6), "peer_registry_target_invalid")
+        seen.add(member_key)
+        used_interfaces.add(member["interface"])
+        used_gateways.add(member["gateway_interface"])
+        used_transport4.update((member["transport_ipv4"], member["transport_gateway_ipv4"]))
+        used_transport6.update((member["transport_ipv6"], member["transport_gateway_ipv6"]))
+    detached_seen: set[tuple[str, int, int]] = set()
+    for member in value["detached_members"]:
+        validate_member_shape(member)
+        member_key = (member["allocation_id"], member["runtime_generation"], member["runtime_fence"])
+        require(member_key not in detached_seen and member_key not in seen, "peer_registry_target_invalid")
+        detached_seen.add(member_key)
+    require((value["state"] == "active") == bool(value["members"]), "peer_registry_target_invalid")
+    require(value["state"] != "empty" or (not value["members"] and value["loopback_aliases_present"] is False and value["detached_members"]), "peer_registry_target_invalid")
+    return value
+
+
+def attachment_key(target_key: str, request: dict[str, Any]) -> str:
+    return hash_text(":".join((target_key, request["allocation_id"], str(request["runtime_generation"]), str(request["runtime_fence"]))))
+
+
+def planned_mac(target_key: str, side: str) -> str:
+    raw = bytearray.fromhex(hash_text(f"{target_key}:{side}")[:12])
+    raw[0] = (raw[0] | 0x02) & 0xFE
+    return ":".join(f"{value:02x}" for value in raw)
+
+
+def validate_identity_triplet(value: Any, error: str = "peer_attachment_invalid") -> None:
+    require(isinstance(value, list) and len(value) == 3, error)
+    validate_positive(value[0], error)
+    validate_positive(value[1], error)
+    require(isinstance(value[2], str) and MAC_RE.fullmatch(value[2]) is not None, error)
+
+
+def validate_attachment_shape(value: Any, attachment_key_value: str | None = None) -> dict[str, Any]:
+    require(isinstance(value, dict), "peer_attachment_invalid")
+    expected = {
+        "schema", "state", "target_key", "allocation_id", "runtime_generation", "runtime_fence",
+        "run_id", "container_id", "tenant_database_id", "database_generation", "restore_target",
+        "database_namespace_inode", "gateway_namespace_inode", "pid", "endpoint_ipv4", "endpoint_ipv6",
+        "gateway_ipv4", "gateway_ipv6", "application_ipv4", "application_ipv6", "interface",
+        "gateway_interface", "interface_mac", "gateway_interface_mac", "transport_ipv4",
+        "transport_gateway_ipv4", "transport_ipv6", "transport_gateway_ipv6", "target_created",
+        "target_before", "alias4", "alias6", "veth", "host_interface_identity", "host_gateway_identity",
+        "route_states", "member", "peer_written",
+    }
+    require(set(value) == expected and value.get("schema") == ATTACHMENT_SCHEMA, "peer_attachment_invalid")
+    key = value.get("target_key")
+    require(isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key) is not None, "peer_attachment_invalid")
+    if attachment_key_value is not None:
+        require(re.fullmatch(r"[0-9a-f]{64}", attachment_key_value) is not None, "peer_attachment_invalid")
+        require(attachment_key(key, value) == attachment_key_value, "peer_attachment_invalid")
+    require(value.get("state") in ATTACHMENT_PHASES, "peer_attachment_invalid")
+    validate_uuid(value.get("allocation_id"), "peer_attachment_invalid")
+    validate_uuid(value.get("run_id"), "peer_attachment_invalid")
+    validate_uuid(value.get("tenant_database_id"), "peer_attachment_invalid")
+    validate_uuid(value.get("database_generation"), "peer_attachment_invalid")
+    require(isinstance(value.get("runtime_generation"), int) and not isinstance(value["runtime_generation"], bool) and value["runtime_generation"] > 0, "peer_attachment_invalid")
+    require(isinstance(value.get("runtime_fence"), int) and not isinstance(value["runtime_fence"], bool) and value["runtime_fence"] > 0, "peer_attachment_invalid")
+    require(isinstance(value.get("container_id"), str) and CONTAINER_RE.fullmatch(value["container_id"]) is not None, "peer_attachment_invalid")
+    require(isinstance(value.get("restore_target"), bool) and isinstance(value.get("target_created"), bool) and isinstance(value.get("peer_written"), bool), "peer_attachment_invalid")
+    for field in ("database_namespace_inode", "gateway_namespace_inode", "pid"):
+        validate_positive(value.get(field), "peer_attachment_invalid")
+    for field in ("endpoint_ipv4", "gateway_ipv4", "application_ipv4", "transport_ipv4", "transport_gateway_ipv4"):
+        try:
+            require(ipaddress.ip_address(value.get(field)).version == 4, "peer_attachment_invalid")
+        except ValueError:
+            fail("peer_attachment_invalid")
+    for field in ("endpoint_ipv6", "gateway_ipv6", "application_ipv6", "transport_ipv6", "transport_gateway_ipv6"):
+        try:
+            require(ipaddress.ip_address(value.get(field)).version == 6, "peer_attachment_invalid")
+        except ValueError:
+            fail("peer_attachment_invalid")
+    for field in ("interface", "gateway_interface"):
+        require(isinstance(value.get(field), str) and IFACE_RE.fullmatch(value[field]) is not None, "peer_attachment_invalid")
+    for field in ("interface_mac", "gateway_interface_mac"):
+        require(isinstance(value.get(field), str) and MAC_RE.fullmatch(value[field]) is not None, "peer_attachment_invalid")
+    require(value["interface_mac"] == planned_mac(key, "database") and value["gateway_interface_mac"] == planned_mac(key, "gateway"), "peer_attachment_invalid")
+    target_before = value.get("target_before")
+    require(target_before is None or isinstance(target_before, dict), "peer_attachment_invalid")
+    if target_before is not None:
+        validate_target_shape(target_before, key)
+    require(value.get("alias4") in ATTACHMENT_EFFECT_PHASES and value.get("alias6") in ATTACHMENT_EFFECT_PHASES, "peer_attachment_invalid")
+    require(value.get("veth") in ATTACHMENT_VETH_PHASES, "peer_attachment_invalid")
+    for field in ("host_interface_identity", "host_gateway_identity"):
+        identity = value.get(field)
+        require(identity is None or isinstance(identity, list), "peer_attachment_invalid")
+        if identity is not None:
+            validate_identity_triplet(identity)
+    route_states = value.get("route_states")
+    require(isinstance(route_states, dict) and set(route_states) == set(ATTACHMENT_ROUTE_NAMES), "peer_attachment_invalid")
+    require(all(route_states[name] in ATTACHMENT_EFFECT_PHASES for name in ATTACHMENT_ROUTE_NAMES), "peer_attachment_invalid")
+    member = value.get("member")
+    require(member is None or isinstance(member, dict), "peer_attachment_invalid")
+    if member is not None:
+        validate_member_shape(member)
+        require(member["allocation_id"] == value["allocation_id"] and member["runtime_generation"] == value["runtime_generation"] and member["runtime_fence"] == value["runtime_fence"] and member["interface"] == value["interface"] and member["gateway_interface"] == value["gateway_interface"] and member["interface_mac"] == value["interface_mac"] and member["gateway_interface_mac"] == value["gateway_interface_mac"], "peer_attachment_invalid")
+    return value
+
+
+def member_from_peer(value: dict[str, Any]) -> dict[str, Any]:
+    require(value.get("schema") == PEER_SCHEMA, "peer_record_invalid")
+    member = value.get("member")
+    validate_member_shape(member)
+    return member
+
+
+def validate_peer_shape(value: Any, request: dict[str, Any], target_key: str, pid: int, gateway_inode: str) -> dict[str, Any]:
+    require(isinstance(value, dict), "peer_record_invalid")
+    expected = {"schema", "allocation_id", "runtime_generation", "runtime_fence", "run_id", "container_id", "tenant_database_id", "database_generation", "restore_target", "target_key", "pid", "member"}
+    require(set(value) == expected and value.get("schema") == PEER_SCHEMA, "peer_record_invalid")
+    require(value.get("allocation_id") == request["allocation_id"] and value.get("runtime_generation") == request["runtime_generation"] and value.get("runtime_fence") == request["runtime_fence"], "peer_record_mismatch")
+    require(value.get("run_id") == request["run_id"] and value.get("container_id") == request["container_id"] and value.get("tenant_database_id") == request["tenant_database_id"] and value.get("database_generation") == request["database_generation"] and value.get("restore_target") == request["restore_target"] and value.get("target_key") == target_key, "peer_record_mismatch")
+    validate_positive(value.get("pid"), "peer_record_invalid")
+    require(value["pid"] == pid, "peer_record_mismatch")
+    member = member_from_peer(value)
+    require(member["allocation_id"] == request["allocation_id"] and member["runtime_generation"] == request["runtime_generation"] and member["runtime_fence"] == request["runtime_fence"] and member["container_id"] == request["container_id"] and str(member["gateway_namespace_inode"]) == gateway_inode and str(member["database_namespace_inode"]) == str(os.stat(f"/proc/{pid}/ns/net").st_ino), "peer_record_mismatch")
+    return value
+
+
+def target_identity(request: dict[str, Any]) -> str:
+    raw = ":".join((request["run_id"], request["container_id"], request["tenant_database_id"], request["database_generation"], "true" if request["restore_target"] else "false", request["endpoint_ipv4"], request["endpoint_ipv6"], request["gateway_ipv4"], request["gateway_ipv6"]))
+    return hash_text(raw)
+
+
+class Registry:
+    def __init__(self, state_root: Path) -> None:
+        self.root = state_root / REGISTRY_NAME
+        self.targets = self.root / "targets"
+        self.attachments = self.root / "attachments"
+        self.lock_path = self.root / ".lock"
+        self.lock_fd: int | None = None
+
+    def prepare(self) -> None:
+        if self.root.exists() or self.root.is_symlink():
+            validate_owned_directory(self.root, "peer_registry_permissions_invalid")
+        else:
+            make_owned_directory(self.root)
+        if self.targets.exists() or self.targets.is_symlink():
+            validate_owned_directory(self.targets, "peer_registry_permissions_invalid")
+        else:
+            make_owned_directory(self.targets)
+        if self.attachments.exists() or self.attachments.is_symlink():
+            validate_owned_directory(self.attachments, "peer_registry_permissions_invalid")
+        else:
+            make_owned_directory(self.attachments)
+        try:
+            self.lock_fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            os.fchmod(self.lock_fd, 0o600)
+            if os.geteuid() == 0:
+                os.fchown(self.lock_fd, 0, 0)
+            fcntl.flock(self.lock_fd, fcntl.LOCK_EX)
+        except OSError:
+            fail("peer_registry_lock_failed")
+        require(is_regular(self.lock_path) and exact_realpath(self.lock_path) and owner(self.lock_path) == 0 and mode(self.lock_path) == 0o600, "peer_registry_lock_invalid")
+        for child in self.targets.iterdir():
+            require(not child.is_symlink() and child.name.endswith(".json") and re.fullmatch(r"[0-9a-f]{64}\.json", child.name) is not None and is_regular(child) and exact_realpath(child) and owner(child) == 0 and mode(child) == 0o600, "peer_registry_child_invalid")
+        for child in self.attachments.iterdir():
+            require(not child.is_symlink() and child.name.endswith(".json") and re.fullmatch(r"[0-9a-f]{64}\.json", child.name) is not None and is_regular(child) and exact_realpath(child) and owner(child) == 0 and mode(child) == 0o600, "peer_registry_attachment_invalid")
+
+    def close(self) -> None:
+        if self.lock_fd is not None:
+            try:
+                fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                os.close(self.lock_fd)
+            except OSError:
+                pass
+            self.lock_fd = None
+
+    def target_path(self, key: str) -> Path:
+        require(re.fullmatch(r"[0-9a-f]{64}", key) is not None, "peer_registry_target_invalid")
+        return self.targets / f"{key}.json"
+
+    def load_target(self, key: str) -> dict[str, Any] | None:
+        path = self.target_path(key)
+        if not path.exists() and not path.is_symlink():
+            return None
+        require(is_regular(path) and exact_realpath(path) and owner(path) == 0 and mode(path) == 0o600, "peer_registry_target_invalid")
+        return validate_target_shape(read_json(path), key)
+
+    def write_target(self, target: dict[str, Any]) -> None:
+        validate_target_shape(target, target["target_key"])
+        atomic_write_json(self.target_path(target["target_key"]), target)
+
+    def remove_target(self, key: str) -> None:
+        path = self.target_path(key)
+        require(is_regular(path) and exact_realpath(path), "peer_registry_target_invalid")
+        try:
+            path.unlink()
+        except OSError:
+            fail("peer_registry_target_remove_failed")
+
+    def all_targets(self) -> list[dict[str, Any]]:
+        values = []
+        for child in self.targets.iterdir():
+            require(not child.is_symlink() and re.fullmatch(r"[0-9a-f]{64}\.json", child.name) is not None and is_regular(child) and exact_realpath(child) and owner(child) == 0 and mode(child) == 0o600, "peer_registry_child_invalid")
+            values.append(validate_target_shape(read_json(child), child.stem))
+        return values
+
+    def attachment_path(self, key: str) -> Path:
+        require(re.fullmatch(r"[0-9a-f]{64}", key) is not None, "peer_attachment_invalid")
+        return self.attachments / f"{key}.json"
+
+    def load_attachment(self, key: str) -> dict[str, Any] | None:
+        path = self.attachment_path(key)
+        if not path.exists() and not path.is_symlink():
+            return None
+        require(is_regular(path) and exact_realpath(path) and owner(path) == 0 and mode(path) == 0o600, "peer_attachment_invalid")
+        return validate_attachment_shape(read_json(path), key)
+
+    def write_attachment(self, value: dict[str, Any]) -> None:
+        validate_attachment_shape(value, attachment_key(value["target_key"], value))
+        atomic_write_json(self.attachment_path(attachment_key(value["target_key"], value)), value)
+
+    def remove_attachment(self, value_or_key: dict[str, Any] | str) -> None:
+        key = value_or_key if isinstance(value_or_key, str) else attachment_key(value_or_key["target_key"], value_or_key)
+        path = self.attachment_path(key)
+        require(is_regular(path) and exact_realpath(path), "peer_attachment_invalid")
+        try:
+            path.unlink()
+        except OSError:
+            fail("peer_attachment_remove_failed")
+
+    def all_attachments(self) -> list[dict[str, Any]]:
+        values = []
+        for child in self.attachments.iterdir():
+            require(not child.is_symlink() and re.fullmatch(r"[0-9a-f]{64}\.json", child.name) is not None and is_regular(child) and exact_realpath(child) and owner(child) == 0 and mode(child) == 0o600, "peer_registry_attachment_invalid")
+            values.append(validate_attachment_shape(read_json(child), child.stem))
+        return values
+
+
+@contextlib.contextmanager
+def locked_registry(state_root: Path) -> Iterator[Registry]:
+    registry = Registry(state_root)
+    registry.prepare()
+    try:
+        yield registry
+    finally:
+        registry.close()
+
+
+def transport_candidate(registry: Registry, allocation: str, generation: int, fence: int, pid: int) -> tuple[str, str, str, str]:
+    used4: set[str] = set()
+    used6: set[str] = set()
+    for target in registry.all_targets():
+        for member in target["members"]:
+            used4.update((member["transport_ipv4"], member["transport_gateway_ipv4"]))
+            used6.update((member["transport_ipv6"], member["transport_gateway_ipv6"]))
+    for attachment in registry.all_attachments():
+        used4.update((attachment["transport_ipv4"], attachment["transport_gateway_ipv4"]))
+        used6.update((attachment["transport_ipv6"], attachment["transport_gateway_ipv6"]))
+    addresses = local_addresses(addresses_pid(pid))
+    seed = int(hash_text(f"{allocation}:{generation}:{fence}")[:8], 16) % 16384
+    for offset in range(16384):
+        slot = (seed + offset) % 16384
+        base4 = ipaddress.ip_address("10.250.0.0") + slot * 4
+        endpoint4 = str(base4 + 2)
+        gateway4 = str(base4 + 1)
+        endpoint6 = str(ipaddress.ip_address(f"fd77:250:{slot:x}::2"))
+        gateway6 = str(ipaddress.ip_address(f"fd77:250:{slot:x}::1"))
+        if endpoint4 in used4 or gateway4 in used4 or endpoint6 in used6 or gateway6 in used6:
+            continue
+        if endpoint4 in addresses or gateway4 in addresses or endpoint6 in addresses or gateway6 in addresses:
+            continue
+        if route_entries_pid(pid, endpoint4, 4) or route_entries_pid(pid, endpoint6, 6):
+            continue
+        return endpoint4, gateway4, endpoint6, gateway6
+    fail("peer_transport_pool_exhausted")
+
+
+def validate_target_identity(target: dict[str, Any], request: dict[str, Any], key: str, db_inode: str) -> None:
+    expected = {
+        "target_key": key,
+        "run_id": request["run_id"],
+        "container_id": request["container_id"],
+        "tenant_database_id": request["tenant_database_id"],
+        "database_generation": request["database_generation"],
+        "restore_target": request["restore_target"],
+        "endpoint_ipv4": request["endpoint_ipv4"],
+        "endpoint_ipv6": request["endpoint_ipv6"],
+        "gateway_ipv4": request["gateway_ipv4"],
+        "gateway_ipv6": request["gateway_ipv6"],
+    }
+    require(all(target.get(name) == value for name, value in expected.items()) and str(target["database_namespace_inode"]) == db_inode, "peer_registry_target_mismatch")
+
+
+def make_member(request: dict[str, Any], db_inode: str, gateway_inode: str, iface: str, gateway_iface: str, db_link: dict[str, Any] | None, gateway_link: dict[str, Any] | None, transport: tuple[str, str, str, str], app4: str, app6: str, db_links: list[dict[str, Any]] | None = None, gateway_links: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    db_index, db_peer_index, db_mac = link_identity(db_link, iface, db_links)
+    gateway_index, gateway_peer_index, gateway_mac = link_identity(gateway_link, gateway_iface, gateway_links)
+    require(db_peer_index == gateway_index and gateway_peer_index == db_index, "peer_interface_mismatch")
+    transport4, transport_gateway4, transport6, transport_gateway6 = transport
+    return {
+        "allocation_id": request["allocation_id"],
+        "runtime_generation": request["runtime_generation"],
+        "runtime_fence": request["runtime_fence"],
+        "container_id": request["container_id"],
+        "database_namespace_inode": int(db_inode),
+        "gateway_namespace_inode": int(gateway_inode),
+        "interface": iface,
+        "gateway_interface": gateway_iface,
+        "interface_ifindex": db_index,
+        "gateway_interface_ifindex": gateway_index,
+        "interface_peer_ifindex": db_peer_index,
+        "gateway_interface_peer_ifindex": gateway_peer_index,
+        "interface_mac": db_mac,
+        "gateway_interface_mac": gateway_mac,
+        "transport_ipv4": transport4,
+        "transport_ipv6": transport6,
+        "transport_gateway_ipv4": transport_gateway4,
+        "transport_gateway_ipv6": transport_gateway6,
+        "application_ipv4": app4,
+        "application_ipv6": app6,
+        "application_route_ipv4": f"{app4}/32",
+        "application_route_ipv6": f"{app6}/128",
+        "gateway_route_ipv4": f"{request['endpoint_ipv4']}/32",
+        "gateway_route_ipv6": f"{request['endpoint_ipv6']}/128",
+    }
+
+
+def peer_value(request: dict[str, Any], target_key: str, pid: int, member: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": PEER_SCHEMA,
+        "allocation_id": request["allocation_id"],
+        "runtime_generation": request["runtime_generation"],
+        "runtime_fence": request["runtime_fence"],
+        "run_id": request["run_id"],
+        "container_id": request["container_id"],
+        "tenant_database_id": request["tenant_database_id"],
+        "database_generation": request["database_generation"],
+        "restore_target": request["restore_target"],
+        "target_key": target_key,
+        "pid": pid,
+        "member": member,
+    }
+
+
+def base_target(request: dict[str, Any], key: str, db_inode: str) -> dict[str, Any]:
+    return {
+        "schema": TARGET_SCHEMA,
+        "state": "preparing",
+        "target_key": key,
+        "run_id": request["run_id"],
+        "container_id": request["container_id"],
+        "tenant_database_id": request["tenant_database_id"],
+        "database_generation": request["database_generation"],
+        "restore_target": request["restore_target"],
+        "endpoint_ipv4": request["endpoint_ipv4"],
+        "endpoint_ipv6": request["endpoint_ipv6"],
+        "gateway_ipv4": request["gateway_ipv4"],
+        "gateway_ipv6": request["gateway_ipv6"],
+        "database_namespace_inode": int(db_inode),
+        "loopback_aliases_present": False,
+        "members": [],
+        "detached_members": [],
+    }
+
+
+def make_attachment(
+    request: dict[str, Any],
+    target_key: str,
+    target_before: dict[str, Any] | None,
+    target_created: bool,
+    pid: int,
+    db_inode: str,
+    gateway_inode: str,
+    app4: str,
+    app6: str,
+    transport: tuple[str, str, str, str],
+    iface: str,
+    gateway_iface: str,
+) -> dict[str, Any]:
+    transport4, transport_gateway4, transport6, transport_gateway6 = transport
+    return {
+        "schema": ATTACHMENT_SCHEMA,
+        "state": "preparing",
+        "target_key": target_key,
+        "allocation_id": request["allocation_id"],
+        "runtime_generation": request["runtime_generation"],
+        "runtime_fence": request["runtime_fence"],
+        "run_id": request["run_id"],
+        "container_id": request["container_id"],
+        "tenant_database_id": request["tenant_database_id"],
+        "database_generation": request["database_generation"],
+        "restore_target": request["restore_target"],
+        "database_namespace_inode": int(db_inode),
+        "gateway_namespace_inode": int(gateway_inode),
+        "pid": int(pid),
+        "endpoint_ipv4": request["endpoint_ipv4"],
+        "endpoint_ipv6": request["endpoint_ipv6"],
+        "gateway_ipv4": request["gateway_ipv4"],
+        "gateway_ipv6": request["gateway_ipv6"],
+        "application_ipv4": app4,
+        "application_ipv6": app6,
+        "interface": iface,
+        "gateway_interface": gateway_iface,
+        "interface_mac": planned_mac(target_key, "database"),
+        "gateway_interface_mac": planned_mac(target_key, "gateway"),
+        "transport_ipv4": transport4,
+        "transport_gateway_ipv4": transport_gateway4,
+        "transport_ipv6": transport6,
+        "transport_gateway_ipv6": transport_gateway6,
+        "target_created": target_created,
+        "target_before": copy.deepcopy(target_before),
+        "alias4": "absent",
+        "alias6": "absent",
+        "veth": "absent",
+        "host_interface_identity": None,
+        "host_gateway_identity": None,
+        "route_states": {name: "absent" for name in ATTACHMENT_ROUTE_NAMES},
+        "member": None,
+        "peer_written": False,
+    }
+
+
+def validate_member_binding(pid: int, gateway_ns: str, member: dict[str, Any], request: dict[str, Any], gateway_inode: str) -> None:
+    require(member["container_id"] == request["container_id"], "peer_registry_member_mismatch")
+    try:
+        database_inode = str(os.stat(f"/proc/{pid}/ns/net").st_ino)
+        current_gateway_inode = str(os.stat(Path("/run/netns") / gateway_ns).st_ino)
+    except OSError:
+        fail("peer_namespace_mismatch")
+    require(str(member["database_namespace_inode"]) == database_inode and str(member["gateway_namespace_inode"]) == current_gateway_inode == str(gateway_inode), "peer_namespace_mismatch")
+
+
+def validate_member_current(pid: int, gateway_ns: str, member: dict[str, Any], request: dict[str, Any], gateway_inode: str) -> None:
+    validate_member_binding(pid, gateway_ns, member, request, gateway_inode)
+    db_links = link_list_pid(pid)
+    gateway_links = link_list_gateway(gateway_ns)
+    db_link = link_details(db_links, member["interface"])
+    gateway_link = link_details(gateway_links, member["gateway_interface"])
+    db_index, db_peer_index, db_mac = link_identity(db_link, member["interface"], db_links)
+    gateway_index, gateway_peer_index, gateway_mac = link_identity(gateway_link, member["gateway_interface"], gateway_links)
+    require(db_index == member["interface_ifindex"] and db_peer_index == member["interface_peer_ifindex"] and db_mac == member["interface_mac"], "peer_interface_mismatch")
+    require(gateway_index == member["gateway_interface_ifindex"] and gateway_peer_index == member["gateway_interface_peer_ifindex"] and gateway_mac == member["gateway_interface_mac"], "peer_interface_mismatch")
+    require(db_peer_index == gateway_index and gateway_peer_index == db_index, "peer_interface_mismatch")
+    db_addresses = local_addresses(addresses_pid(pid))
+    gateway_addresses = local_addresses(addresses_gateway(gateway_ns))
+    require(db_addresses.get(member["transport_ipv4"]) == (member["interface"], 30) and db_addresses.get(member["transport_ipv6"]) == (member["interface"], 126), "peer_transport_mismatch")
+    require(gateway_addresses.get(member["transport_gateway_ipv4"]) == (member["gateway_interface"], 30) and gateway_addresses.get(member["transport_gateway_ipv6"]) == (member["gateway_interface"], 126), "peer_transport_mismatch")
+    require(route_matches(route_entries_gateway(gateway_ns, request["endpoint_ipv4"], 4), request["endpoint_ipv4"], member["transport_ipv4"], member["gateway_interface"], 4), "peer_route_mismatch")
+    require(route_matches(route_entries_gateway(gateway_ns, request["endpoint_ipv6"], 6), request["endpoint_ipv6"], member["transport_ipv6"], member["gateway_interface"], 6), "peer_route_mismatch")
+    require(route_matches(route_entries_pid(pid, member["application_ipv4"], 4), member["application_ipv4"], member["transport_gateway_ipv4"], member["interface"], 4), "peer_route_mismatch")
+    require(route_matches(route_entries_pid(pid, member["application_ipv6"], 6), member["application_ipv6"], member["transport_gateway_ipv6"], member["interface"], 6), "peer_route_mismatch")
+    present4, present6 = aliases_state(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])
+    require(present4 and present6, "peer_alias_missing")
+
+
+def aliases_state(pid: int, endpoint4: str, endpoint6: str) -> tuple[bool, bool]:
+    values = local_addresses(addresses_pid(pid))
+    for address in (endpoint4, endpoint6):
+        if address in values and values[address][0] != "lo":
+            fail("peer_endpoint_collision")
+    return values.get(endpoint4) == ("lo", 32), values.get(endpoint6) == ("lo", 128)
+
+
+def add_aliases(pid: int, endpoint4: str, endpoint6: str) -> tuple[bool, bool]:
+    present4, present6 = aliases_state(pid, endpoint4, endpoint6)
+    if not present4:
+        try:
+            run_command(ns_command(pid, [IP, "addr", "add", f"{endpoint4}/32", "dev", "lo"]))
+        except CommandError:
+            fail("peer_alias_add_failed")
+    if not present6:
+        try:
+            run_command(ns_command(pid, [IP, "-6", "addr", "add", f"{endpoint6}/128", "dev", "lo", "nodad"]))
+        except CommandError:
+            fail("peer_alias_add_failed")
+    after4, after6 = aliases_state(pid, endpoint4, endpoint6)
+    require(after4 and after6, "peer_alias_missing")
+    return not present4, not present6
+
+
+def remove_aliases(pid: int, endpoint4: str, endpoint6: str) -> None:
+    present4, present6 = aliases_state(pid, endpoint4, endpoint6)
+    if present4:
+        try:
+            run_command(ns_command(pid, [IP, "addr", "del", f"{endpoint4}/32", "dev", "lo"]))
+        except CommandError:
+            fail("peer_alias_remove_failed")
+    if present6:
+        try:
+            run_command(ns_command(pid, [IP, "-6", "addr", "del", f"{endpoint6}/128", "dev", "lo"]))
+        except CommandError:
+            fail("peer_alias_remove_failed")
+    after4, after6 = aliases_state(pid, endpoint4, endpoint6)
+    require(not after4 and not after6, "peer_alias_retained")
+
+
+def route_target_present(entries: list[dict[str, Any]], target: str, gateway: str, interface: str, family: int) -> bool:
+    return route_matches(entries, target, gateway, interface, family)
+
+
+class AttachTransaction:
+    def __init__(self, pid: int, gateway_ns: str, iface: str, gateway_iface: str, target: dict[str, Any], original_target: dict[str, Any] | None, target_created: bool, registry: Registry, generation_root: Path, peer_record: Path, request: dict[str, Any], attachment: dict[str, Any]) -> None:
+        self.pid = pid
+        self.gateway_ns = gateway_ns
+        self.iface = iface
+        self.gateway_iface = gateway_iface
+        self.target = target
+        self.original_target = copy.deepcopy(original_target)
+        self.target_created = target_created
+        self.registry = registry
+        self.generation_root = generation_root
+        self.peer_record = peer_record
+        self.request = request
+        self.attachment = attachment
+        self.added_app4 = attachment["route_states"]["application_ipv4"] != "absent"
+        self.added_app6 = attachment["route_states"]["application_ipv6"] != "absent"
+        self.added_gateway4 = attachment["route_states"]["gateway_ipv4"] != "absent"
+        self.added_gateway6 = attachment["route_states"]["gateway_ipv6"] != "absent"
+        self.alias4 = attachment["alias4"] != "absent"
+        self.alias6 = attachment["alias6"] != "absent"
+        self.veth_created = attachment["veth"] != "absent"
+        self.host_interface_identity: tuple[int, int, str] | None = tuple(attachment["host_interface_identity"]) if attachment["host_interface_identity"] is not None else None
+        self.host_gateway_identity: tuple[int, int, str] | None = tuple(attachment["host_gateway_identity"]) if attachment["host_gateway_identity"] is not None else None
+        self.peer_written = bool(attachment["peer_written"])
+        self.member: dict[str, Any] | None = copy.deepcopy(attachment["member"])
+
+    def journal(self, **changes: Any) -> None:
+        self.attachment.update(changes)
+        self.registry.write_attachment(self.attachment)
+
+    def route_state(self, name: str, state: str) -> None:
+        route_states = dict(self.attachment["route_states"])
+        route_states[name] = state
+        self.attachment["route_states"] = route_states
+        self.registry.write_attachment(self.attachment)
+
+    def _remove_route(self, name: str, target: str, gateway: str, interface: str, family: int, command: list[str]) -> bool:
+        state = self.attachment["route_states"][name]
+        if state == "absent":
+            return True
+        entries = route_entries_pid(self.pid, target, family) if command[0] == NSENTER else route_entries_gateway(self.gateway_ns, target, family)
+        if entries and not route_target_present(entries, target, gateway, interface, family):
+            return False
+        if route_target_present(entries, target, gateway, interface, family):
+            try:
+                run_command(command)
+            except CommandError:
+                return False
+            refreshed = route_entries_pid(self.pid, target, family) if command[0] == NSENTER else route_entries_gateway(self.gateway_ns, target, family)
+            if route_target_present(refreshed, target, gateway, interface, family):
+                return False
+        self.route_state(name, "absent")
+        return True
+
+    def _link_matches(self, item: dict[str, Any] | None, name: str, links: list[dict[str, Any]], expected: tuple[int, int, str] | None, expected_mac: str) -> tuple[int, int, str] | None:
+        if item is None:
+            return None
+        identity = link_identity(item, name, links)
+        if expected is not None:
+            require(identity == expected, "peer_partial_interface_mismatch")
+        else:
+            require(identity[2] == expected_mac, "peer_partial_interface_mismatch")
+        return identity
+
+    def rollback(self) -> bool:
+        clean = True
+        try:
+            self.attachment["state"] = "rollback"
+            self.registry.write_attachment(self.attachment)
+        except PeerError:
+            return False
+        if self.peer_written or self.attachment.get("peer_written") or self.peer_record.exists():
+            try:
+                if self.peer_record.exists():
+                    require(is_regular(self.peer_record) and exact_realpath(self.peer_record), "peer_record_invalid")
+                    peer = read_json(self.peer_record)
+                    validate_peer_shape(peer, self.request, self.attachment["target_key"], self.pid, str(self.attachment["gateway_namespace_inode"]))
+                    self.peer_record.unlink()
+                self.peer_written = False
+                self.journal(peer_written=False)
+            except (OSError, PeerError):
+                clean = False
+        route_specs = (
+            ("application_ipv6", self.attachment["application_ipv6"], self.attachment["transport_gateway_ipv6"], self.iface, 6,
+             ns_command(self.pid, [IP, "-6", "route", "del", f"{self.attachment['application_ipv6']}/128", "via", self.attachment["transport_gateway_ipv6"], "dev", self.iface])),
+            ("application_ipv4", self.attachment["application_ipv4"], self.attachment["transport_gateway_ipv4"], self.iface, 4,
+             ns_command(self.pid, [IP, "route", "del", f"{self.attachment['application_ipv4']}/32", "via", self.attachment["transport_gateway_ipv4"], "dev", self.iface])),
+            ("gateway_ipv6", self.attachment["endpoint_ipv6"], self.attachment["transport_ipv6"], self.gateway_iface, 6,
+             gateway_command(self.gateway_ns, ["-6", "route", "del", f"{self.attachment['endpoint_ipv6']}/128", "via", self.attachment["transport_ipv6"], "dev", self.gateway_iface])),
+            ("gateway_ipv4", self.attachment["endpoint_ipv4"], self.attachment["transport_ipv4"], self.gateway_iface, 4,
+             gateway_command(self.gateway_ns, ["route", "del", f"{self.attachment['endpoint_ipv4']}/32", "via", self.attachment["transport_ipv4"], "dev", self.gateway_iface])),
+        )
+        for name, target, gateway, interface, family, command in route_specs:
+            try:
+                if not self._remove_route(name, target, gateway, interface, family, command):
+                    clean = False
+            except (CommandError, PeerError):
+                clean = False
+        if self.veth_created or self.attachment["veth"] != "absent":
+            try:
+                host_links = run_json([IP, "-j", "link", "show"])
+                gateway_links = link_list_gateway(self.gateway_ns)
+                database_links = link_list_pid(self.pid)
+                host_gateway = link_details(host_links, self.gateway_iface)
+                host_interface = link_details(host_links, self.iface)
+                gateway_link = link_details(gateway_links, self.gateway_iface)
+                database_link = link_details(database_links, self.iface)
+                self._link_matches(host_gateway, self.gateway_iface, host_links, self.host_gateway_identity, self.attachment["gateway_interface_mac"])
+                self._link_matches(host_interface, self.iface, host_links, self.host_interface_identity, self.attachment["interface_mac"])
+                self._link_matches(gateway_link, self.gateway_iface, gateway_links, self.host_gateway_identity, self.attachment["gateway_interface_mac"])
+                self._link_matches(database_link, self.iface, database_links, self.host_interface_identity, self.attachment["interface_mac"])
+                if gateway_link is not None:
+                    run_command(gateway_command(self.gateway_ns, ["link", "del", self.gateway_iface]))
+                elif database_link is not None:
+                    run_command(ns_command(self.pid, [IP, "link", "del", self.iface]))
+                elif host_gateway is not None:
+                    run_command([IP, "link", "del", self.gateway_iface])
+                elif host_interface is not None:
+                    run_command([IP, "link", "del", self.iface])
+                host_links = run_json([IP, "-j", "link", "show"])
+                if link_details(host_links, self.gateway_iface) is not None or link_details(host_links, self.iface) is not None or link_details(link_list_gateway(self.gateway_ns), self.gateway_iface) is not None or link_details(link_list_pid(self.pid), self.iface) is not None:
+                    clean = False
+                elif self.attachment["veth"] != "absent":
+                    self.attachment["veth"] = "absent"
+                    self.registry.write_attachment(self.attachment)
+            except (CommandError, PeerError):
+                clean = False
+        for family, state_name, address, prefix in ((4, "alias4", self.request["endpoint_ipv4"], 32), (6, "alias6", self.request["endpoint_ipv6"], 128)):
+            if self.attachment[state_name] == "absent":
+                continue
+            try:
+                present4, present6 = aliases_state(self.pid, self.request["endpoint_ipv4"], self.request["endpoint_ipv6"])
+                present = present4 if family == 4 else present6
+                if present:
+                    args = [IP] if family == 4 else [IP, "-6"]
+                    run_command(ns_command(self.pid, args + ["addr", "del", f"{address}/{prefix}", "dev", "lo"]))
+                present4, present6 = aliases_state(self.pid, self.request["endpoint_ipv4"], self.request["endpoint_ipv6"])
+                require(not (present4 if family == 4 else present6), "peer_alias_retained")
+                self.attachment[state_name] = "absent"
+                self.registry.write_attachment(self.attachment)
+            except (CommandError, PeerError):
+                clean = False
+        if clean:
+            try:
+                current = self.registry.load_target(self.attachment["target_key"])
+                if self.target_created:
+                    if current is not None:
+                        self.registry.remove_target(self.attachment["target_key"])
+                elif self.original_target is not None:
+                    require(current is not None, "peer_registry_target_invalid")
+                    original_keys = {(item["allocation_id"], item["runtime_generation"], item["runtime_fence"]) for item in self.original_target["members"]}
+                    current_keys = {(item["allocation_id"], item["runtime_generation"], item["runtime_fence"]) for item in current["members"] if (item["allocation_id"], item["runtime_generation"], item["runtime_fence"]) != (self.attachment["allocation_id"], self.attachment["runtime_generation"], self.attachment["runtime_fence"])}
+                    require(current_keys == original_keys, "peer_registry_target_changed")
+                    self.registry.write_target(self.original_target)
+            except PeerError:
+                clean = False
+        if clean:
+            try:
+                self.registry.remove_attachment(self.attachment)
+            except PeerError:
+                clean = False
+        return clean
+
+
+def validate_attachment_request(attachment: dict[str, Any], request: dict[str, Any], target_key: str, db_inode: str, gateway_inode: str, app4: str, app6: str) -> None:
+    expected = {
+        "target_key": target_key,
+        "allocation_id": request["allocation_id"],
+        "runtime_generation": request["runtime_generation"],
+        "runtime_fence": request["runtime_fence"],
+        "run_id": request["run_id"],
+        "container_id": request["container_id"],
+        "tenant_database_id": request["tenant_database_id"],
+        "database_generation": request["database_generation"],
+        "restore_target": request["restore_target"],
+        "endpoint_ipv4": request["endpoint_ipv4"],
+        "endpoint_ipv6": request["endpoint_ipv6"],
+        "gateway_ipv4": request["gateway_ipv4"],
+        "gateway_ipv6": request["gateway_ipv6"],
+    }
+    require(all(attachment.get(name) == value for name, value in expected.items()), "peer_attachment_mismatch")
+    require(attachment["application_ipv4"] == app4 and attachment["application_ipv6"] == app6, "peer_attachment_mismatch")
+    require(str(attachment["database_namespace_inode"]) == str(db_inode) and str(attachment["gateway_namespace_inode"]) == str(gateway_inode), "peer_attachment_namespace_mismatch")
+
+
+def commit_attachment(registry: Registry, attachment: dict[str, Any], target: dict[str, Any], request: dict[str, Any], target_key: str, peer_path: Path, pid: int, gateway_inode: str, member: dict[str, Any]) -> None:
+    validate_member_shape(member)
+    require(member["allocation_id"] == request["allocation_id"] and member["runtime_generation"] == request["runtime_generation"] and member["runtime_fence"] == request["runtime_fence"], "peer_attachment_mismatch")
+    attachment["member"] = copy.deepcopy(member)
+    attachment["state"] = "committing"
+    registry.write_attachment(attachment)
+    member_key = (member["allocation_id"], member["runtime_generation"], member["runtime_fence"])
+    matches = [item for item in target["members"] if (item["allocation_id"], item["runtime_generation"], item["runtime_fence"]) == member_key]
+    require(not matches or matches == [member], "peer_registry_member_mismatch")
+    if not matches:
+        target["members"].append(copy.deepcopy(member))
+    target["detached_members"] = [item for item in target["detached_members"] if (item["allocation_id"], item["runtime_generation"], item["runtime_fence"]) != member_key]
+    target["state"] = "active"
+    registry.write_target(target)
+    if peer_path.exists() or peer_path.is_symlink():
+        require(is_regular(peer_path) and exact_realpath(peer_path), "peer_record_invalid")
+        peer = read_json(peer_path)
+        validate_peer_shape(peer, request, target_key, pid, gateway_inode)
+        require(member_from_peer(peer) == member, "peer_registry_member_mismatch")
+    else:
+        atomic_write_json(peer_path, peer_value(request, target_key, pid, member))
+    attachment["peer_written"] = True
+    registry.write_attachment(attachment)
+    registry.remove_attachment(attachment)
+
+
+def recover_attachment(registry: Registry, attachment: dict[str, Any], request: dict[str, Any], generation_root: Path, ownership: dict[str, Any], pid: int, gateway_ns: str, gateway_inode: str, app4: str, app6: str) -> bool:
+    target_key = attachment["target_key"]
+    db_inode = str(os.stat(f"/proc/{pid}/ns/net").st_ino)
+    validate_attachment_request(attachment, request, target_key, db_inode, gateway_inode, app4, app6)
+    target = registry.load_target(target_key)
+    if target is None and attachment["target_created"] and attachment["state"] == "rollback":
+        registry.remove_attachment(attachment)
+        return False
+    require(target is not None, "peer_attachment_target_missing")
+    validate_target_identity(target, request, target_key, db_inode)
+    peer_path = generation_root / "postgres-peer.json"
+    transaction = AttachTransaction(pid, gateway_ns, attachment["interface"], attachment["gateway_interface"], target, attachment["target_before"], attachment["target_created"], registry, generation_root, peer_path, request, attachment)
+    if attachment["state"] in {"ready", "committing"}:
+        try:
+            member = attachment.get("member")
+            if member is None:
+                db_links = link_list_pid(pid)
+                gateway_links = link_list_gateway(gateway_ns)
+                member = make_member(request, db_inode, gateway_inode, attachment["interface"], attachment["gateway_interface"], link_details(db_links, attachment["interface"]), link_details(gateway_links, attachment["gateway_interface"]), (attachment["transport_ipv4"], attachment["transport_gateway_ipv4"], attachment["transport_ipv6"], attachment["transport_gateway_ipv6"]), app4, app6, db_links, gateway_links)
+            require(member["interface_mac"] == attachment["interface_mac"] and member["gateway_interface_mac"] == attachment["gateway_interface_mac"], "peer_attachment_interface_mismatch")
+            validate_member_current(pid, gateway_ns, member, request, gateway_inode)
+            commit_attachment(registry, attachment, target, request, target_key, peer_path, pid, gateway_inode, member)
+            return True
+        except (PeerError, CommandError):
+            pass
+    if not transaction.rollback():
+        fail("peer_partial_cleanup_pending")
+    return False
+
+
+def attach(registry: Registry, request: dict[str, Any], generation_root: Path, ownership: dict[str, Any], pid: int, gateway_ns: str, gateway_inode: str) -> None:
+    allocation = request["allocation_id"]
+    generation = request["runtime_generation"]
+    iface = "p" + hash_text(f"{allocation}:{generation}")[:10]
+    gateway_iface = "d" + hash_text(f"{allocation}:{generation}")[:10]
+    peer_path = generation_root / "postgres-peer.json"
+    app4, app6 = validate_outbound_and_app(ownership, request)
+    db_inode = str(os.stat(f"/proc/{pid}/ns/net").st_ino)
+    key = target_identity(request)
+    original_target = registry.load_target(key)
+    pending_key = attachment_key(key, request)
+    pending = registry.load_attachment(pending_key)
+    if pending is not None:
+        if recover_attachment(registry, pending, request, generation_root, ownership, pid, gateway_ns, gateway_inode, app4, app6):
+            print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "attach_postgres", "allocation_id": allocation, "container_id": request["container_id"]}, separators=(",", ":")))
+            return
+        original_target = registry.load_target(key)
+    for other in registry.all_attachments():
+        if other["target_key"] == key and attachment_key(key, other) != pending_key:
+            fail("peer_target_attachment_pending")
+    if peer_path.exists() or peer_path.is_symlink():
+        require(original_target is not None, "peer_registry_target_missing")
+        target = copy.deepcopy(original_target)
+        validate_target_identity(target, request, key, db_inode)
+        peer = read_json(peer_path)
+        validate_peer_shape(peer, request, key, pid, gateway_inode)
+        member = member_from_peer(peer)
+        matches = [item for item in target["members"] if item["allocation_id"] == allocation and item["runtime_generation"] == generation and item["runtime_fence"] == request["runtime_fence"]]
+        require(len(matches) == 1 and matches[0] == member, "peer_registry_member_mismatch")
+        validate_member_current(pid, gateway_ns, member, request, gateway_inode)
+        print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "attach_postgres", "allocation_id": allocation, "container_id": request["container_id"]}, separators=(",", ":")))
+        return
+    target_created = original_target is None
+    if original_target is None:
+        target = base_target(request, key, db_inode)
+        registry.write_target(target)
+    else:
+        target = copy.deepcopy(original_target)
+        validate_target_identity(target, request, key, db_inode)
+        require(target["state"] in {"preparing", "active", "empty"}, "peer_registry_target_invalid")
+        existing_member = next((member for member in target["members"] if member["allocation_id"] == allocation and member["runtime_generation"] == generation and member["runtime_fence"] == request["runtime_fence"]), None)
+        if existing_member is not None:
+            validate_member_current(pid, gateway_ns, existing_member, request, gateway_inode)
+            atomic_write_json(peer_path, peer_value(request, key, pid, existing_member))
+            print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "attach_postgres", "allocation_id": allocation, "container_id": request["container_id"]}, separators=(",", ":")))
+            return
+    host_links = run_json([IP, "-j", "link", "show"])
+    require(isinstance(host_links, list), "peer_host_link_invalid")
+    database_links = link_list_pid(pid)
+    gateway_links = link_list_gateway(gateway_ns)
+    require(link_details(host_links, iface) is None and link_details(host_links, gateway_iface) is None and link_details(database_links, iface) is None and link_details(gateway_links, gateway_iface) is None, "peer_interface_collision")
+    transport = transport_candidate(registry, allocation, generation, request["runtime_fence"], pid)
+    db_routes4 = route_entries_pid(pid, app4, 4)
+    db_routes6 = route_entries_pid(pid, app6, 6)
+    require(not db_routes4 and not db_routes6, "peer_application_route_collision")
+    attachment = make_attachment(request, key, original_target, target_created, pid, db_inode, gateway_inode, app4, app6, transport, iface, gateway_iface)
+    registry.write_attachment(attachment)
+    if target["state"] == "empty":
+        target["state"] = "preparing"
+        registry.write_target(target)
+    transaction = AttachTransaction(pid, gateway_ns, iface, gateway_iface, target, original_target, target_created, registry, generation_root, peer_path, request, attachment)
+    try:
+        present4, present6 = aliases_state(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])
+        if target["loopback_aliases_present"]:
+            require(present4 and present6, "peer_alias_missing")
+        else:
+            require(not present4 and not present6, "peer_endpoint_collision")
+            transaction.journal(alias4="adding")
+            try:
+                run_command(ns_command(pid, [IP, "addr", "add", f"{request['endpoint_ipv4']}/32", "dev", "lo"]))
+            except CommandError:
+                fail("peer_alias_add_failed")
+            require(aliases_state(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])[0], "peer_alias_missing")
+            transaction.alias4 = True
+            transaction.journal(alias4="owned")
+            transaction.journal(alias6="adding")
+            try:
+                run_command(ns_command(pid, [IP, "-6", "addr", "add", f"{request['endpoint_ipv6']}/128", "dev", "lo", "nodad"]))
+            except CommandError:
+                fail("peer_alias_add_failed")
+            require(aliases_state(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])[1], "peer_alias_missing")
+            transaction.alias6 = True
+            transaction.journal(alias6="owned")
+            target["loopback_aliases_present"] = True
+            if target["state"] == "preparing":
+                registry.write_target(target)
+        transaction.journal(veth="creating")
+        try:
+            run_command([IP, "link", "add", gateway_iface, "address", attachment["gateway_interface_mac"], "type", "veth", "peer", "name", iface, "address", attachment["interface_mac"]])
+        except CommandError:
+            fail("peer_veth_create_failed")
+        transaction.veth_created = True
+        host_links_after_add = run_json([IP, "-j", "link", "show"])
+        transaction.host_gateway_identity = link_identity(link_details(host_links_after_add, gateway_iface), gateway_iface, host_links_after_add)
+        transaction.host_interface_identity = link_identity(link_details(host_links_after_add, iface), iface, host_links_after_add)
+        require(transaction.host_gateway_identity[1] == transaction.host_interface_identity[0] and transaction.host_interface_identity[1] == transaction.host_gateway_identity[0], "peer_interface_mismatch")
+        require(transaction.host_gateway_identity[2] == attachment["gateway_interface_mac"] and transaction.host_interface_identity[2] == attachment["interface_mac"], "peer_interface_mismatch")
+        transaction.journal(host_gateway_identity=list(transaction.host_gateway_identity), host_interface_identity=list(transaction.host_interface_identity), veth="host")
+        try:
+            run_command([IP, "link", "set", gateway_iface, "netns", gateway_ns])
+            transaction.journal(veth="gateway_moved")
+            run_command([IP, "link", "set", iface, "netns", str(pid)])
+            transaction.journal(veth="database_moved")
+        except CommandError:
+            fail("peer_veth_move_failed")
+        database_links = link_list_pid(pid)
+        gateway_links = link_list_gateway(gateway_ns)
+        db_link = link_details(database_links, iface)
+        gateway_link = link_details(gateway_links, gateway_iface)
+        transaction.member = make_member(request, db_inode, gateway_inode, iface, gateway_iface, db_link, gateway_link, transport, app4, app6, database_links, gateway_links)
+        require(transaction.member["interface_mac"] == attachment["interface_mac"] and transaction.member["gateway_interface_mac"] == attachment["gateway_interface_mac"], "peer_interface_mismatch")
+        transaction.journal(member=transaction.member, veth="ready")
+        transport4, transport_gateway4, transport6, transport_gateway6 = transport
+        for args in ([IP, "addr", "add", f"{transport4}/30", "dev", iface], [IP, "-6", "addr", "add", f"{transport6}/126", "dev", iface, "nodad"], [IP, "link", "set", iface, "up"]):
+            try:
+                run_command(ns_command(pid, args))
+            except CommandError:
+                fail("peer_veth_configure_failed")
+        for args in (["addr", "add", f"{transport_gateway4}/30", "dev", gateway_iface], ["-6", "addr", "add", f"{transport_gateway6}/126", "dev", gateway_iface, "nodad"], ["link", "set", gateway_iface, "up"]):
+            try:
+                run_command(gateway_command(gateway_ns, args))
+            except CommandError:
+                fail("peer_veth_configure_failed")
+        try:
+            transaction.route_state("gateway_ipv4", "adding")
+            run_command(gateway_command(gateway_ns, ["route", "add", f"{request['endpoint_ipv4']}/32", "via", transport4, "dev", gateway_iface]))
+            transaction.route_state("gateway_ipv4", "owned")
+            transaction.added_gateway4 = True
+            transaction.route_state("gateway_ipv6", "adding")
+            run_command(gateway_command(gateway_ns, ["-6", "route", "add", f"{request['endpoint_ipv6']}/128", "via", transport6, "dev", gateway_iface]))
+            transaction.route_state("gateway_ipv6", "owned")
+            transaction.added_gateway6 = True
+            transaction.route_state("application_ipv4", "adding")
+            run_command(ns_command(pid, [IP, "route", "add", f"{app4}/32", "via", transport_gateway4, "dev", iface]))
+            transaction.route_state("application_ipv4", "owned")
+            transaction.added_app4 = True
+            transaction.route_state("application_ipv6", "adding")
+            run_command(ns_command(pid, [IP, "-6", "route", "add", f"{app6}/128", "via", transport_gateway6, "dev", iface]))
+            transaction.route_state("application_ipv6", "owned")
+            transaction.added_app6 = True
+        except CommandError:
+            fail("peer_route_add_failed")
+        require(route_matches(route_entries_gateway(gateway_ns, request["endpoint_ipv4"], 4), request["endpoint_ipv4"], transport4, gateway_iface, 4), "peer_route_missing")
+        require(route_matches(route_entries_gateway(gateway_ns, request["endpoint_ipv6"], 6), request["endpoint_ipv6"], transport6, gateway_iface, 6), "peer_route_missing")
+        require(route_matches(route_entries_pid(pid, app4, 4), app4, transport_gateway4, iface, 4), "peer_route_missing")
+        require(route_matches(route_entries_pid(pid, app6, 6), app6, transport_gateway6, iface, 6), "peer_route_missing")
+        transaction.journal(state="ready")
+        commit_attachment(registry, attachment, target, request, key, peer_path, pid, gateway_inode, transaction.member)
+        transaction.peer_written = True
+    except (PeerError, CommandError):
+        clean = transaction.rollback()
+        if not clean:
+            print("peer_partial_cleanup_pending", file=sys.stderr)
+        raise
+    print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "attach_postgres", "allocation_id": allocation, "container_id": request["container_id"]}, separators=(",", ":")))
+
+
+def member_network_absent(pid: int, gateway_ns: str, member: dict[str, Any], request: dict[str, Any]) -> bool:
+    db_links = link_list_pid(pid)
+    gateway_links = link_list_gateway(gateway_ns)
+    db_link = link_details(db_links, member["interface"])
+    gateway_link = link_details(gateway_links, member["gateway_interface"])
+    if db_link is not None or gateway_link is not None:
+        require(db_link is not None and gateway_link is not None, "peer_interface_mismatch")
+        db_index, db_peer_index, db_mac = link_identity(db_link, member["interface"], db_links)
+        gateway_index, gateway_peer_index, gateway_mac = link_identity(gateway_link, member["gateway_interface"], gateway_links)
+        require(db_index == member["interface_ifindex"] and db_peer_index == member["interface_peer_ifindex"] and db_mac == member["interface_mac"] and gateway_index == member["gateway_interface_ifindex"] and gateway_peer_index == member["gateway_interface_peer_ifindex"] and gateway_mac == member["gateway_interface_mac"], "peer_interface_mismatch")
+        return False
+    require(not route_entries_pid(pid, member["application_ipv4"], 4) and not route_entries_pid(pid, member["application_ipv6"], 6), "peer_route_retained")
+    require(not route_entries_gateway(gateway_ns, request["endpoint_ipv4"], 4) and not route_entries_gateway(gateway_ns, request["endpoint_ipv6"], 6), "peer_route_retained")
+    return True
+
+
+def reconcile_detached_absence(target: dict[str, Any], request: dict[str, Any], ownership: dict[str, Any], pid: int, gateway_ns: str, gateway_inode: str, member: dict[str, Any]) -> None:
+    detached = target.get("detached_members")
+    require(isinstance(detached, list) and any(item == member for item in detached), "peer_record_missing")
+    app4, app6 = validate_outbound_and_app(ownership, request)
+    require(member["application_ipv4"] == app4 and member["application_ipv6"] == app6 and member["container_id"] == request["container_id"] and str(member["gateway_namespace_inode"]) == gateway_inode and str(member["database_namespace_inode"]) == str(os.stat(f"/proc/{pid}/ns/net").st_ino), "peer_record_mismatch")
+    iface = "p" + hash_text(f"{request['allocation_id']}:{request['runtime_generation']}")[:10]
+    gateway_iface = "d" + hash_text(f"{request['allocation_id']}:{request['runtime_generation']}")[:10]
+    require(member["interface"] == iface and member["gateway_interface"] == gateway_iface, "peer_record_mismatch")
+    require(link_details(link_list_pid(pid), iface) is None and link_details(link_list_gateway(gateway_ns), gateway_iface) is None, "peer_interface_retained")
+    require(not route_entries_pid(pid, app4, 4) and not route_entries_pid(pid, app6, 6), "peer_route_retained")
+    require(not route_entries_gateway(gateway_ns, request["endpoint_ipv4"], 4) and not route_entries_gateway(gateway_ns, request["endpoint_ipv6"], 6), "peer_route_retained")
+    present4, present6 = aliases_state(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])
+    if target["members"]:
+        require(present4 and present6, "peer_alias_missing")
+    else:
+        require(not present4 and not present6, "peer_alias_retained")
+
+
+def detach(registry: Registry, request: dict[str, Any], generation_root: Path, ownership: dict[str, Any], pid: int, gateway_ns: str, gateway_inode: str) -> None:
+    peer_path = generation_root / "postgres-peer.json"
+    key = target_identity(request)
+    for pending in registry.all_attachments():
+        if pending["target_key"] == key:
+            fail("peer_target_attachment_pending")
+    target = registry.load_target(key)
+    require(target is not None, "peer_registry_target_missing")
+    db_inode = str(os.stat(f"/proc/{pid}/ns/net").st_ino)
+    validate_target_identity(target, request, key, db_inode)
+    peer_present = peer_path.exists() or peer_path.is_symlink()
+    peer = None
+    if peer_present:
+        require(is_regular(peer_path) and exact_realpath(peer_path), "peer_record_missing")
+        peer = read_json(peer_path)
+        validate_peer_shape(peer, request, key, pid, gateway_inode)
+    member_from_request = member_from_peer(peer) if peer is not None else None
+    matches = [item for item in target["members"] if item["allocation_id"] == request["allocation_id"] and item["runtime_generation"] == request["runtime_generation"] and item["runtime_fence"] == request["runtime_fence"]]
+    if not matches:
+        if member_from_request is None:
+            detached = target.get("detached_members", [])
+            member_from_request = next((item for item in detached if isinstance(item, dict) and item["allocation_id"] == request["allocation_id"] and item["runtime_generation"] == request["runtime_generation"] and item["runtime_fence"] == request["runtime_fence"]), None)
+        require(member_from_request is not None, "peer_record_missing")
+        require(member_from_request["allocation_id"] == request["allocation_id"] and member_from_request["runtime_generation"] == request["runtime_generation"] and member_from_request["runtime_fence"] == request["runtime_fence"], "peer_record_missing")
+        reconcile_detached_absence(target, request, ownership, pid, gateway_ns, gateway_inode, member_from_request)
+        if peer_present:
+            try:
+                peer_path.unlink()
+            except OSError:
+                fail("peer_record_remove_failed")
+        print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "detach_postgres", "allocation_id": request["allocation_id"], "container_id": request["container_id"]}, separators=(",", ":")))
+        return
+    require(len(matches) == 1, "peer_registry_member_mismatch")
+    member = matches[0]
+    if member_from_request is not None:
+        require(member == member_from_request, "peer_registry_member_mismatch")
+    validate_member_binding(pid, gateway_ns, member, request, gateway_inode)
+    require(len(target["detached_members"]) < 256, "peer_registry_completion_limit")
+    if not member_network_absent(pid, gateway_ns, member, request):
+        for family, address, database_gateway, gateway_target, iface in ((4, member["application_ipv4"], member["transport_gateway_ipv4"], member["transport_ipv4"], member["interface"]), (6, member["application_ipv6"], member["transport_gateway_ipv6"], member["transport_ipv6"], member["interface"])):
+            entries = route_entries_pid(pid, address, family)
+            if entries:
+                require(route_matches(entries, address, database_gateway, iface, family), "peer_route_mismatch")
+                args = [IP]
+                if family == 6:
+                    args.append("-6")
+                args += ["route", "del", f"{address}/{32 if family == 4 else 128}", "via", database_gateway, "dev", iface]
+                try:
+                    run_command(ns_command(pid, args))
+                except CommandError:
+                    fail("peer_route_remove_failed")
+            target_address = request["endpoint_ipv4" if family == 4 else "endpoint_ipv6"]
+            entries = route_entries_gateway(gateway_ns, target_address, family)
+            if entries:
+                require(route_matches(entries, target_address, gateway_target, member["gateway_interface"], family), "peer_route_mismatch")
+                args = []
+                if family == 6:
+                    args.append("-6")
+                args += ["route", "del", f"{target_address}/{32 if family == 4 else 128}", "via", gateway_target, "dev", member["gateway_interface"]]
+                try:
+                    run_command(gateway_command(gateway_ns, args))
+                except CommandError:
+                    fail("peer_route_remove_failed")
+        try:
+            run_command(gateway_command(gateway_ns, ["link", "del", member["gateway_interface"]]))
+        except CommandError:
+            db_link = link_details(link_list_pid(pid), member["interface"])
+            require(db_link is not None, "peer_veth_remove_failed")
+            try:
+                run_command(ns_command(pid, [IP, "link", "del", member["interface"]]))
+            except CommandError:
+                fail("peer_veth_remove_failed")
+        require(member_network_absent(pid, gateway_ns, member, request), "peer_veth_retained")
+    remaining = [item for item in target["members"] if not (item["allocation_id"] == member["allocation_id"] and item["runtime_generation"] == member["runtime_generation"] and item["runtime_fence"] == member["runtime_fence"])]
+    if remaining:
+        target["members"] = remaining
+        target["state"] = "active"
+        target["detached_members"].append(member)
+        registry.write_target(target)
+        if peer_present:
+            try:
+                peer_path.unlink()
+            except OSError:
+                fail("peer_record_remove_failed")
+    else:
+        remove_aliases(pid, request["endpoint_ipv4"], request["endpoint_ipv6"])
+        target["members"] = []
+        target["state"] = "empty"
+        target["loopback_aliases_present"] = False
+        target["detached_members"].append(member)
+        registry.write_target(target)
+        if peer_present:
+            try:
+                peer_path.unlink()
+            except OSError:
+                fail("peer_record_remove_failed")
+    print(json.dumps({"schema": RECEIPT_SCHEMA, "result": "passed", "operation": "detach_postgres", "allocation_id": request["allocation_id"], "container_id": request["container_id"]}, separators=(",", ":")))
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 6 or argv[0] != "--request-file" or argv[2] != "--request-sha256" or argv[4] != "--state-root":
+        print("peer_usage", file=sys.stderr)
+        return 2
+    request_source = Path(argv[1])
+    digest = argv[3]
+    state_root = Path(argv[5])
+    request_copy: Path | None = None
+    try:
+        request, request_copy = parse_request(request_source, digest, state_root)
+        validate_request(request)
+        pid, _ = inspect_container(request["container_id"], request)
+        gateway_ns = f"hostlet-gateway-{request['allocation_id']}-{request['runtime_generation']}"
+        generation_root, ownership, gateway_inode = validate_ownership(state_root, request, gateway_ns)
+        with locked_registry(state_root) as registry:
+            if request["operation"] == "attach_postgres":
+                attach(registry, request, generation_root, ownership, pid, gateway_ns, gateway_inode)
+            else:
+                detach(registry, request, generation_root, ownership, pid, gateway_ns, gateway_inode)
+        return 0
+    except PeerError as error:
+        print(error.message, file=sys.stderr)
+        return error.status
+    except (CommandError, OSError, ValueError, TypeError):
+        print("peer_internal_failure", file=sys.stderr)
+        return 1
+    finally:
+        if request_copy is not None:
+            try:
+                request_copy.unlink()
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

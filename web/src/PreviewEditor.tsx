@@ -17,6 +17,7 @@ import type {
 } from "./api";
 import "./preview.css";
 import { PreviewCanvas } from "./PreviewCanvas";
+import { PublicationPanel } from "./PublicationPanel";
 
 type ProjectBundle = {
   summary: ProjectSummary;
@@ -27,6 +28,8 @@ type ProjectBundle = {
 
 type ConflictState = { latest: PreviewRevision; etag: string | null };
 type JsonRecord = Record<string, unknown>;
+type SavedEditorState = { id: string; revision: number; draft: PortfolioDraft; preview: PreviewRevision["preview"] };
+type DisplayedStatusField = "deployment_timestamp" | "availability" | "release_identifier" | "source_commit" | "demo_readiness";
 
 const answerVersion = "hostlet.configuration-answer/v1" as const;
 
@@ -158,6 +161,7 @@ export function PreviewEditor({
   });
   const [baseRevision, setBaseRevision] = useState(0);
   const [baseEtag, setBaseEtag] = useState<string | null>(null);
+  const [savedEditorState, setSavedEditorState] = useState<SavedEditorState | null>(null);
   const [projects, setProjects] = useState<ProjectBundle[]>([]);
   const [pickerProjectId, setPickerProjectId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -220,12 +224,14 @@ export function PreviewEditor({
         setPreview(clone(latest.preview));
         setBaseRevision(latest.revision);
         setBaseEtag(etag);
+        setSavedEditorState({ id: latest.id, revision: latest.revision, draft: clone(latest.draft), preview: clone(latest.preview) });
       } else {
         setDraft(emptyDraft(displayName));
         setSkillsText("");
         setPreview({ layout: "layout_1", typography: "system_sans", accent: "coral", project_contexts: [] });
         setBaseRevision(0);
         setBaseEtag('"0"');
+        setSavedEditorState(null);
       }
       setConflict(null);
       initialLoadComplete.current = true;
@@ -283,6 +289,15 @@ export function PreviewEditor({
   );
   const selectedIds = new Set(hostedProjects.map((project) => projectIdOf(project)));
   const availableProjects = projects.filter((bundle) => !selectedIds.has(bundle.summary.id));
+  const draftWithCurrentSkills = useMemo(() => ({
+    ...draft,
+    skills: skillsText.split(",").map((skill) => skill.trim()).filter(Boolean),
+  }), [draft, skillsText]);
+  const hasUnsavedChanges = savedEditorState === null
+    ? JSON.stringify(draftWithCurrentSkills) !== JSON.stringify(emptyDraft(displayName))
+      || JSON.stringify(preview) !== JSON.stringify({ layout: "layout_1", typography: "system_sans", accent: "coral", project_contexts: [] })
+    : JSON.stringify(draftWithCurrentSkills) !== JSON.stringify(savedEditorState.draft)
+      || JSON.stringify(preview) !== JSON.stringify(savedEditorState.preview);
 
   function updateProfile(field: keyof PortfolioDraft["profile"], value: string) {
     setDraft((current) => ({ ...current, profile: { ...current.profile, [field]: value } }));
@@ -321,6 +336,16 @@ export function PreviewEditor({
     }));
   }
 
+  function updateDisplayedStatus(referenceId: string, field: DisplayedStatusField, shown: boolean) {
+    setDraft((current) => ({
+      ...current,
+      projects: current.projects.map((project) => project.project_reference_id !== referenceId ? project : {
+        ...project,
+        displayed_status: { ...(asRecord(project.displayed_status) ?? {}), [field]: shown },
+      }),
+    }));
+  }
+
   function updateDecision(referenceId: string, decisionId: string, field: "summary" | "rationale", value: string) {
     setDraft((current) => ({ ...current, projects: current.projects.map((project) =>
       project.project_reference_id !== referenceId ? project : {
@@ -351,6 +376,17 @@ export function PreviewEditor({
         technical_decisions: project.technical_decisions.filter((decision) => decision.id !== decisionId),
       }),
     }));
+  }
+
+  function removeEvidence(referenceId: string, evidenceId: string) {
+    setDraft((current) => ({ ...current, projects: current.projects.map((project) =>
+      project.project_reference_id !== referenceId ? project : {
+        ...project,
+        evidence: Array.isArray(project.evidence)
+          ? project.evidence.filter((item) => asRecord(item)?.id !== evidenceId)
+          : [],
+      },
+    ) }));
   }
 
   function moveProject(referenceId: string, direction: -1 | 1) {
@@ -560,6 +596,12 @@ export function PreviewEditor({
       setPreview(clone(response.payload.preview));
       setBaseRevision(response.payload.revision);
       setBaseEtag(response.etag);
+      setSavedEditorState({
+        id: response.payload.id,
+        revision: response.payload.revision,
+        draft: clone(response.payload.draft),
+        preview: clone(response.payload.preview),
+      });
       setMessage("Private preview saved.");
     } catch (error) {
       if (error instanceof ApiError && error.status === 412) {
@@ -586,6 +628,7 @@ export function PreviewEditor({
     setPreview(clone(conflict.latest.preview));
     setBaseRevision(conflict.latest.revision);
     setBaseEtag(conflict.etag);
+    setSavedEditorState({ id: conflict.latest.id, revision: conflict.latest.revision, draft: clone(conflict.latest.draft), preview: clone(conflict.latest.preview) });
     setConflict(null);
   }
 
@@ -593,6 +636,7 @@ export function PreviewEditor({
     if (!conflict) return;
     setBaseRevision(conflict.latest.revision);
     setBaseEtag(conflict.etag);
+    setSavedEditorState({ id: conflict.latest.id, revision: conflict.latest.revision, draft: clone(conflict.latest.draft), preview: clone(conflict.latest.preview) });
     setConflict(null);
     setMessage("Your unsaved values are still in the editor. Review them, then save to apply them over the latest revision.");
   }
@@ -639,7 +683,7 @@ export function PreviewEditor({
 
       <details className="section-controls">
         <summary>Section visibility</summary>
-        <div>{(["headline", "introduction", "target_role", "resume", "contacts", "projects"] as const).map((section) => <label key={section}>{section.replace("_", " ")}<select value={draft.section_visibility[section] ?? "shown"} onChange={(event) => setDraft((current) => ({ ...current, section_visibility: { ...current.section_visibility, [section]: event.target.value as "shown" | "hidden" } }))}><option value="shown">Shown</option><option value="hidden">Hidden</option></select></label>)}</div>
+        <div>{(["headline", "introduction", "target_role", "resume", "contacts", "projects"] as const).map((section) => <label key={section}>{section.replace("_", " ")}<select data-testid={`preview-section-${section}`} value={draft.section_visibility[section] ?? "shown"} onChange={(event) => setDraft((current) => ({ ...current, section_visibility: { ...current.section_visibility, [section]: event.target.value as "shown" | "hidden" } }))}><option value="shown">Shown</option><option value="hidden">Hidden</option></select></label>)}</div>
       </details>
 
       <div className="project-picker">
@@ -666,6 +710,7 @@ export function PreviewEditor({
           const repositoryConfiguration = Array.isArray(configuration?.repositories)
             ? asRecord(configuration!.repositories[0])
             : null;
+          const displayedStatus = asRecord(project.displayed_status) ?? {};
           return (
             <article className="preview-project" data-testid="preview-project-editor" data-project-id={projectId} key={project.project_reference_id}>
               <div className={`placeholder-art placeholder-art--${context?.placeholder ?? "gradient_1"}`} aria-label="Decorative placeholder artwork"><span>Placeholder artwork</span></div>
@@ -687,6 +732,28 @@ export function PreviewEditor({
                     <button type="button" onClick={() => addDecision(project.project_reference_id)}>Add technical decision</button>
                   </div>
                   {context && <label>Artwork placeholder<select data-testid="preview-placeholder" value={context.placeholder} onChange={(event) => updatePlaceholder(project.project_reference_id, event.target.value as PreviewContext["placeholder"])}><option value="gradient_1">Soft gradient</option><option value="grid_1">Structured grid</option><option value="terminal_1">Terminal motif</option></select></label>}
+                  <fieldset className="project-fields__wide public-status-fields" data-testid="preview-public-status">
+                    <legend>Public deployment status</legend>
+                    <p>Each selected value is resolved from the current trusted release and still requires owner review. Source commit is private unless you explicitly select it.</p>
+                    {([[
+                      "deployment_timestamp", "Deployment time"],
+                      ["availability", "Availability"],
+                      ["release_identifier", "Release identifier"],
+                      ["source_commit", "Source commit"],
+                      ["demo_readiness", "Demo readiness"],
+                    ] as Array<[DisplayedStatusField, string]>).map(([field, label]) => (
+                      <label key={field}><input type="checkbox" data-testid={`preview-status-${field}`} checked={displayedStatus[field] === true} onChange={(event) => updateDisplayedStatus(project.project_reference_id, field, event.target.checked)} />{label}</label>
+                    ))}
+                  </fieldset>
+                  {Array.isArray(project.evidence) && project.evidence.length > 0 && <fieldset className="project-fields__wide public-evidence-fields" data-testid="preview-public-evidence">
+                    <legend>Public evidence</legend>
+                    <p>Only evidence retained here can be reviewed for publication.</p>
+                    {project.evidence.map((item) => {
+                      const evidence = asRecord(item);
+                      const id = typeof evidence?.id === "string" ? evidence.id : "";
+                      return id ? <div key={id}><span>{typeof evidence?.title === "string" ? evidence.title : id}</span><button type="button" data-testid="preview-remove-evidence" data-evidence-id={id} onClick={() => removeEvidence(project.project_reference_id, id)}>Remove</button></div> : null;
+                    })}
+                  </fieldset>}
                 </div>
                 {report?.facts.reasons.length ? <ul className="compatibility-reasons">{report.facts.reasons.map((reason) => <li key={reason.code}>{reason.message}</li>)}</ul> : null}
                 {context && report?.facts.configuration_questions.map((question) => {
@@ -736,6 +803,15 @@ export function PreviewEditor({
       </fieldset>
 
       <PreviewCanvas draft={draft} preview={preview} />
+
+      <PublicationPanel
+        token={token}
+        savedRevisionId={savedEditorState?.id ?? null}
+        savedRevision={savedEditorState?.revision ?? 0}
+        hasUnsavedChanges={hasUnsavedChanges}
+        editorBusy={saving || configuringProject !== null}
+        onSessionExpired={onSessionExpired}
+      />
 
       {draft.projects.some((project) => project.kind.type !== "hosted_project") && <p className="retained-content">Existing external case studies remain in this draft and will be preserved when you save.</p>}
       <small className="revision-note">Editing revision {baseRevision} {baseEtag ? `(${baseEtag})` : ""}</small>

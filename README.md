@@ -6,17 +6,26 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: M2 complete — onboarding and private preview.** The dashboard supports
-accounts, selected GitHub repositories and branches, bounded compatibility checks,
-and an editable private portfolio preview before paid hosting. The control API
-persists immutable source, configuration, report and draft history, and provides
-synthetic entitlement, capacity, project-slot and build-meter reconciliation.
-Customer admission and workload execution remain disabled. Customer builds,
-live hosting, payment collection and public portfolio publication belong to later
-milestones.
+**Status: M2 accepted; M3 implementation and acceptance are in progress.** M2
+supports accounts, selected GitHub repositories and branches, bounded
+compatibility checks, and an editable private portfolio preview before paid
+hosting. The control API persists immutable source, configuration, report and
+draft history, and provides synthetic entitlement, capacity, project-slot and
+build-meter reconciliation. The [M2 handoff](docs/M2-HANDOFF.md) records the
+verified acceptance evidence: two clean 48-assertion runs, exact repeat
+commands, private receipts, and observed limits. M2 acceptance is complete
+through HOST-243.
 
-The [M2 handoff](docs/M2-HANDOFF.md) records two clean 48-assertion acceptance
-runs, exact repeat commands, private receipts and limits.
+The current M3 work is limited to owned local fixtures and run-scoped resources.
+It covers the working-demo path, deployment and release boundaries, owner
+approval and fact refresh, tenant data lifecycle, and independent static
+portfolio publishing. M3 acceptance is still in progress; no clean HOST-233
+gate has been recorded. Customer admission, production workload execution,
+payment collection, provider purchases, and production or public publication
+remain disabled. M4 and later milestones remain unclaimed.
+The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
+throughput target shortfall and the explicit limit to owned local fixtures.
+
 The [M1 handoff](docs/M1-HANDOFF.md) records the verified foundation, backup and
 recovery baseline. The [M2 API contract](docs/M2-API.md) describes onboarding
 routes, preview validation, provider boundaries and internal admission controls.
@@ -97,19 +106,74 @@ a production cutover.
 The builder and runtime offer `--version` and `--check-config`; their default
 execution continues to refuse customer work.
 
+## M3 implementation and validation
+
+The current M3 code is split across explicit trust boundaries. `crates/control`
+contains the durable build-job, release, runtime-policy, tenant-database,
+portfolio-approval, and portfolio-publication flows. `crates/builder` owns the
+disposable VM build boundary; `crates/runtime` owns the isolated runtime and
+release worker boundary; `crates/database` owns tenant PostgreSQL lifecycle and
+backup/export/restore operations. `crates/publisher` renders approved public
+documents, leases publication work, validates immutable artifacts, and serves
+the independent static site. `crates/protocol` contains shared versioned
+contracts, while `migrations/0006_m3_execution.sql` contains the M3 additive
+schema work.
+
+The scenario and support modules are under `e2e/scenarios/m3-*.mjs` and
+`e2e/support/m3-*.mjs`. The acceptance inventory is
+[M3-SCENARIOS.md](docs/M3-SCENARIOS.md); the approval and publishing boundaries
+are described in the [approval contract](docs/M3-APPROVAL-CONTRACT.md) and
+[publisher contract](docs/M3-PUBLISHER-CONTRACT.md). The full prerequisite,
+asset-preparation, run, and receipt procedure is in the
+[M3 E2E guide](docs/M3-E2E.md).
+The build, database, release, and runtime boundaries are documented in the
+[build contract](docs/M3-BUILD-CONTRACT.md),
+[database contract](docs/M3-DATABASE-CONTRACT.md),
+[release contract](docs/M3-RELEASE-CONTRACT.md), and
+[runtime control contract](docs/M3-RUNTIME-CONTROL.md).
+
+For a routine workspace check, run:
+
+```sh
+make check
+```
+
+After the prerequisites and owned assets in the [M3 E2E guide](docs/M3-E2E.md)
+are available, the diagnostic journey commands are:
+
+```sh
+make e2e-m3
+make e2e-m3 E2E_ARGS='--rebuild-retained'
+```
+
+These commands may run from a dirty development tree and do not establish M3
+acceptance. The clean-tree command is reserved for the later gate review:
+
+```sh
+make e2e-m3-gate
+```
+
+M3 requires two clean runs on the same implementation commit, including one
+retained predecessor rebuild, with verified receipts and a handoff. Follow
+[TESTING.md](TESTING.md) for the artifact contract and stop before claiming M3
+or starting M4.
+
 ## Workspace
 
 ```text
 crates/
   protocol/       Shared versioned wire types
-  control/        Control API entrypoint
-  builder/        Builder supervisor entrypoint
-  runtime/        Runtime reconciler entrypoint
+  control/        Control API, durable M1–M3 workflows
+  builder/        Disposable VM build supervisor and worker
+  database/       Tenant PostgreSQL lifecycle and recovery worker
+  publisher/      Independent static portfolio worker, renderer and server
+  runtime/        Isolated runtime and release workers
 web/             React application and Vite development proxy
+e2e/             Real-process M2 and owned-fixture M3 scenarios
 contracts/       Shared protocol fixtures
 migrations/      PostgreSQL ownership and migration policy
-infra/           Future provisioning boundaries
-portfolio/       Content and independent static-publishing boundary
+docs/            Milestone contracts, scenarios, E2E guides and handoffs
+scripts/         Owned build, runtime, database and release preparation tools
 .github/         Non-deploying validation workflow
 ```
 

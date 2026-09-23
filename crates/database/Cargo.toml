@@ -1,0 +1,18 @@
+[package]
+name = "hostlet-database"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hostlet-contracts = { path = "../protocol" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+chacha20poly1305.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+base64.workspace = true

@@ -208,7 +208,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 function abortRun(error, kind) {
   if (runAbortController.signal.aborted) return;
   fatalError = error;
-  state.errors.push({ phase, message: redact(error.message), kind });
+  // Retain only repository E2E source locations, never arbitrary stack text,
+  // response bodies, arguments, or local values.
+  const sourceFrames = typeof error?.stack === "string"
+    ? error.stack.split(/\r?\n/).slice(1).flatMap((line) => {
+      const match = line.match(/(?:file:\/\/)?(\/[^\s()]+\/e2e\/[A-Za-z0-9_./-]+\.(?:mjs|js)):(\d+):(\d+)/);
+      return match?.[1].startsWith(`${REPO}/e2e/`)
+        ? [`${relative(REPO, match[1])}:${match[2]}:${match[3]}`] : [];
+    }).slice(0, 8)
+    : [];
+  state.errors.push({ phase, message: redact(error.message), kind, source_frames: sourceFrames });
   runAbortController.abort(error);
   rejectRunAbort(error);
 }
@@ -260,8 +269,8 @@ function registerSensitiveValues(values) {
 }
 
 function git(...gitArgs) {
-  const result = spawnSync("git", gitArgs, { cwd: REPO, encoding: "utf8" });
-  if (result.status !== 0) throw new Error(`git ${gitArgs[0]} failed: ${redact(result.stderr).trim()}`);
+  const result = spawnSync("git", gitArgs, { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 30_000 });
+  if (result.error || result.status !== 0) throw new Error(`git ${gitArgs[0]} failed: ${redact(result.error?.message || result.stderr || `exit ${result.status}`).trim()}`);
   return result.stdout.trimEnd();
 }
 
@@ -963,7 +972,10 @@ async function execute() {
   const build = await runCommand(
     "Cargo build",
     "cargo",
-    ["build", "--locked", "-p", "hostlet-control", "-p", "hostlet-builder"],
+    ["build", "--locked", "-p", "hostlet-control", "-p", "hostlet-builder",
+      ...(args.milestone.startsWith("M3")
+        ? ["-p", "hostlet-runtime", "-p", "hostlet-database", "-p", "hostlet-publisher"]
+        : [])],
     { env: { ...process.env, CARGO_TARGET_DIR: join(REPO, "target") }, timeoutMs: 120_000, logName: "cargo-build.log" },
   );
   if (build.code !== 0) throw new Error(`cargo build failed with exit ${build.code}`);
@@ -973,6 +985,13 @@ async function execute() {
   const builderBinary = join(REPO, "target", "debug", "hostlet-builder");
   if (!existsSync(builderBinary)) throw new Error("cargo build succeeded without target/debug/hostlet-builder");
   state.productOutputs.builderBinarySha256 = fileSha256(builderBinary);
+  if (args.milestone.startsWith("M3")) {
+    for (const name of ["runtime", "database", "publisher"]) {
+      const binary = join(REPO, "target", "debug", `hostlet-${name}`);
+      if (!existsSync(binary)) throw new Error(`cargo build omitted hostlet-${name}`);
+      state.productOutputs[`${name}BinarySha256`] = fileSha256(binary);
+    }
+  }
 
   const apiPort = await allocatePort();
   const webPort = await allocatePort();
@@ -1323,12 +1342,15 @@ async function finalize() {
     );
 
     if (existsSync(tempDir)) {
-      rmSync(tempDir, { recursive: true, force: true });
-      state.cleanup.push({
-        resource: "run temporary directory",
-        action: "delete run-owned temporary files",
-        result: "removed",
-      });
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+        state.cleanup.push({ resource: "run temporary directory", action: "delete run-owned temporary files", result: "removed" });
+      } catch (error) {
+        // A privileged fixture may leave owned state after a failed cleanup.
+        // Retain an honest failed receipt instead of losing the entire bundle.
+        state.cleanup.push({ resource: "run temporary directory", action: "delete run-owned temporary files", result: `retained: ${redact(error.message)}` });
+        state.errors.push({ phase: "cleanup", kind: "failure", message: `owned temporary state remains: ${redact(error.message)}` });
+      }
     }
 
     rmSync(join(artifactDir, "SHA256SUMS"), { force: true });

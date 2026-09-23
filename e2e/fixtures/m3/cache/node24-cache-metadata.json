@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "profile_ids": ["m3-owned-node24-v1", "m3-owned-node24-cache-miss-v1"],
+  "architecture": "amd64",
+  "node_version": "24.21.0",
+  "npm_version": "11.19.0",
+  "node_image": "node:24-bookworm-slim@sha256:5cbc7caba8c2c0f0bca675d1b61b9f2857e1cf1853c6164ee9dd409501a936e7",
+  "integrity_digest_algorithm": "sha256(sorted unique non-empty packages[*].integrity joined by newline, with a final newline)",
+  "cache_image_digest_location": "generated build profile receipt; excluded here to avoid self-reference",
+  "lockfiles": [
+    {"path":"build-failure/package-lock.json","sha256":"f46765d29f2769f9be9b00ba86ceae768574d420f01e5d3160c56e58927aa760","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"build-timeout/package-lock.json","sha256":"6ce5ea92ea76c6328a69c945e8ed85f571f549798251a7dcf396a6f6ce072c64","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"crash-runtime/package-lock.json","sha256":"339a0f3ae2132aa8041d6a682c04dbf6cde8f94e8df0fbae5d53581b37fd7e59","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"dependency-failure/package-lock.json","sha256":"d6d2a48cdcc68950e5607a8315e10e02d3e0e87fd1a5826547c14958ed5cc0d8","package_integrity_count":1,"package_integrities_sha256":"362cd211bb6f74c0bfa6f00f63a8ac9a1f87a9742a2325dacd3c6ce763f0dbe4","cache_included":false},
+    {"path":"fullstack-v1/apps/api/package-lock.json","sha256":"55a94241d8714e8aedc8ab706c28236a28fd040eb55c9a35095a9188a8300611","package_integrity_count":14,"package_integrities_sha256":"30d878dda0faf7fcef39fdee2c37cb01338c02e238505804f681eae984714af5","cache_included":true},
+    {"path":"fullstack-v1/apps/web/package-lock.json","sha256":"3f1ecba7ebc1bf87cc50659bebbbdbc16f45a62f768f0c55080b8a7c4f696947","package_integrity_count":40,"package_integrities_sha256":"0387ba3595ef54019d7934695e7fb9f072d4ddd8b0a29d54d54dd100bef22563","cache_included":true},
+    {"path":"fullstack-v1/package-lock.json","sha256":"f133dd2049ef1e62e03d31fe497c736face33bb8d97ff889676b9c8e9b795959","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"fullstack-v2/apps/api/package-lock.json","sha256":"7bec7eff83975f0291f04eef76cfe69a3c1a6ad4b8a821d5aef1688c557b08eb","package_integrity_count":14,"package_integrities_sha256":"30d878dda0faf7fcef39fdee2c37cb01338c02e238505804f681eae984714af5","cache_included":true},
+    {"path":"fullstack-v2/apps/web/package-lock.json","sha256":"0ce6478d7f569248bed1c70731a2a10beaa3a19c5d5fb6a97000f42f28e8295e","package_integrity_count":40,"package_integrities_sha256":"0387ba3595ef54019d7934695e7fb9f072d4ddd8b0a29d54d54dd100bef22563","cache_included":true},
+    {"path":"fullstack-v2/package-lock.json","sha256":"1a9b843012d77e17e335e598d63a30b28898aea4fe0f2e84e8c41de1e9a18a0d","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"incompatible-api/package-lock.json","sha256":"d8daf5fdf717ee6b2399fd52367b14a2fde6b9b8ff79c1162d27c9d025a18324","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"incompatible-migration/package-lock.json","sha256":"1656b1d9b58529198ec6728f8dce041efcd7922b859f27ed37ed4a224f01c4e7","package_integrity_count":14,"package_integrities_sha256":"30d878dda0faf7fcef39fdee2c37cb01338c02e238505804f681eae984714af5","cache_included":true},
+    {"path":"next16/package-lock.json","sha256":"cbd36de14b97bdeec06ef46a4a70e5a61525735b6279010f4c404780cd8822a0","package_integrity_count":54,"package_integrities_sha256":"dc31a2a1c28eabbfad7ba6b67bac566aefb7c10d0825f6b90190830f27fb1af6","cache_included":true},
+    {"path":"oversized-output/package-lock.json","sha256":"4f79a01b963810b1ef4a07df483dbc4186ebc55cb4b006598a8a518c145152f7","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true},
+    {"path":"policy-probes/package-lock.json","sha256":"80204c4c5824f7451b249c6723ab07a99afdf700f7c0ae27b950fcf4a79ca09d","package_integrity_count":14,"package_integrities_sha256":"30d878dda0faf7fcef39fdee2c37cb01338c02e238505804f681eae984714af5","cache_included":true},
+    {"path":"unhealthy-runtime/package-lock.json","sha256":"ed808f5f2f06483fabd0d94cac3e796dd86f804cb7190103d185ada415b07b34","package_integrity_count":0,"package_integrities_sha256":"01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b","cache_included":true}
+  ]
+}

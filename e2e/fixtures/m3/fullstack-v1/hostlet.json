@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "profile": "m3-owned-node24-v1",
+  "installCommand": "npm ci --ignore-scripts --offline",
+  "services": {
+    "frontend": { "root": "apps/web", "lockfilePath": "package-lock.json", "buildCommand": "npm run build", "outputDirectory": "dist" },
+    "application": { "root": "apps/api", "lockfilePath": "package-lock.json", "buildCommand": "npm run build", "outputDirectory": "dist", "startCommand": "npm run start", "healthPath": "/healthz", "nodeMajor": 24 },
+    "database": { "engine": "postgresql", "major": 18, "migrationFiles": ["migrations/*.sql"] }
+  }
+}

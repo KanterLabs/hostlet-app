@@ -759,6 +759,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "zeroize",
 ]
 
@@ -797,10 +798,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostlet-database"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chacha20poly1305",
+ "chrono",
+ "hostlet-contracts",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "hostlet-publisher"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "hostlet-runtime"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "hostlet-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

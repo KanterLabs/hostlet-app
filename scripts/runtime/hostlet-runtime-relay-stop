@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+"""Stop one owned relay process group through the privileged runtime boundary.
+
+The helper accepts only the relay identity already recorded by the exact
+allocation map.  It enumerates one validated process group, opens pidfds for
+those members, and signals only those pidfds.  It never uses a host-wide kill
+or a name-based process search.
+"""
+
+import argparse
+import json
+import os
+import select
+import signal
+import stat
+import sys
+import time
+import uuid
+from pathlib import Path
+
+
+MAP_SCHEMA = "hostlet.runtime.relay-map/v1"
+RECEIPT_SCHEMA = "hostlet.runtime.relay-stop/v1"
+DEFAULT_TERM_GRACE_MS = 5_000
+DEFAULT_KILL_GRACE_MS = 2_000
+MAX_MAP_BYTES = 64 * 1024
+UNOWNED_REINSPECTION_SECONDS = 0.5
+UNOWNED_REINSPECTION_INTERVAL_SECONDS = 0.02
+
+
+class UnownedMember(Exception):
+    def __init__(self, identity, reason):
+        super().__init__(reason)
+        self.identity = identity
+        self.reason = reason
+
+
+def fail(code):
+    print(code, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def canonical_uuid(value):
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, TypeError, ValueError):
+        fail("relay_identity_invalid")
+    if str(parsed) != value:
+        fail("relay_identity_invalid")
+    return value
+
+
+def positive_integer(value, label):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        fail(f"{label}_invalid")
+    if parsed <= 0 or parsed > 2**63 - 1:
+        fail(f"{label}_invalid")
+    return parsed
+
+
+def validate_state_root(value):
+    path = Path(value)
+    if not path.is_absolute():
+        fail("relay_root_not_owned")
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+        marker = resolved / ".hostlet-runtime-owned"
+        marker_metadata = marker.lstat()
+        marker_value = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        fail("relay_root_not_owned")
+    if (resolved != path or not stat.S_ISDIR(metadata.st_mode) or
+            stat.S_IMODE(metadata.st_mode) != 0o700 or
+            not stat.S_ISREG(marker_metadata.st_mode) or
+            stat.S_IMODE(marker_metadata.st_mode) & 0o077 or
+            marker_value != "hostlet-runtime-state-v1"):
+        fail("relay_root_not_owned")
+    return resolved
+
+
+def expected_map_path(root, allocation, generation, fence, supplied):
+    expected = root / "runtime-relays" / allocation / str(generation) / f"{fence}.json"
+    provided = Path(supplied)
+    if not provided.is_absolute() or provided != expected or provided.resolve(strict=False) != expected:
+        fail("relay_map_path_invalid")
+    return expected
+
+
+def read_map(path, allow_missing, owner_uid, owner_gid):
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError:
+        if allow_missing:
+            return None
+        fail("relay_map_missing")
+    except OSError:
+        fail("relay_map_invalid")
+    if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600 or
+            metadata.st_uid != owner_uid or metadata.st_gid != owner_gid or
+            metadata.st_size > MAX_MAP_BYTES or resolved != path):
+        fail("relay_map_invalid")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        fail("relay_map_invalid")
+    if not isinstance(value, dict):
+        fail("relay_map_invalid")
+    return value
+
+
+def validate_map(value, root, allocation, generation, fence, pid, pgid, starttime):
+    if value is None:
+        return
+    expected = {
+        "schema": MAP_SCHEMA,
+        "allocation_id": allocation,
+        "generation": generation,
+        "fence": fence,
+        "address": "127.0.0.1",
+        "relay_pid": pid,
+        "relay_pgid": pgid,
+        "relay_starttime_ticks": starttime,
+    }
+    if any(value.get(key) != expected_value for key, expected_value in expected.items()):
+        fail("relay_map_identity_mismatch")
+    if not isinstance(value.get("port"), int) or not 1 <= value["port"] <= 65535:
+        fail("relay_map_invalid")
+    if not isinstance(value.get("gateway_namespace_inode"), int) or value["gateway_namespace_inode"] <= 0:
+        fail("relay_map_invalid")
+    if "state_root" in value and value["state_root"] != str(root):
+        # v1 maps do not publish state_root; this branch rejects a future map
+        # that explicitly names a different root.
+        fail("relay_map_identity_mismatch")
+
+
+def parse_proc_stat(pid):
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        fields = raw.rsplit(") ", 1)[1].split()
+        state = fields[0]
+        ppid = int(fields[1])
+        pgid = int(fields[2])
+        starttime = int(fields[19])
+        uid = None
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="ascii").splitlines():
+            if line.startswith("Uid:"):
+                uid = int(line.split()[1])
+                break
+        command_line = [part.decode("utf-8", "replace") for part in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if part]
+    except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError, IndexError, ValueError):
+        return None
+    if uid is None:
+        return None
+    return {
+        "pid": pid,
+        "ppid": ppid,
+        "pgid": pgid,
+        "state": state,
+        "uid": uid,
+        "starttime_ticks": starttime,
+        "command_line": command_line,
+    }
+
+
+def exact_command(identity, root, allocation, generation, fence):
+    command_line = identity["command_line"]
+    relay_script = str(Path(__file__).resolve().with_name("hostlet-runtime-relay.py"))
+    required = {
+        "--state-root": str(root),
+        "--allocation-id": allocation,
+        "--generation": str(generation),
+        "--fence": str(fence),
+    }
+    if (not command_line or identity["uid"] != 0 or identity["state"] == "Z" or relay_script not in command_line or
+            command_line[0] not in {"python3", "/usr/bin/python3", "/usr/local/bin/python3"}):
+        return False
+    for flag, expected in required.items():
+        try:
+            if command_line[command_line.index(flag) + 1] != expected:
+                return False
+        except (ValueError, IndexError):
+            return False
+    return True
+
+
+def process_matches(identity, root, allocation, generation, fence, pgid=None,
+                    leader_pid=None, leader_starttime=None):
+    if identity is None or (pgid is not None and identity["pgid"] != pgid):
+        return False
+    if identity["state"] == "Z":
+        return (leader_pid is not None and identity["pid"] == leader_pid and
+                identity["starttime_ticks"] == leader_starttime and identity["uid"] == 0)
+    return exact_command(identity, root, allocation, generation, fence)
+
+
+def group_members_once(pgid, root, allocation, generation, fence, leader_pid, leader_starttime,
+                       known_members):
+    members = []
+    for candidate in Path("/proc").iterdir():
+        if not candidate.name.isdigit():
+            continue
+        identity = parse_proc_stat(int(candidate.name))
+        if identity is None or identity["pgid"] != pgid:
+            continue
+        if identity["state"] == "Z":
+            if (identity["pid"] not in known_members or
+                    known_members[identity["pid"]] != identity["starttime_ticks"] or
+                    identity["uid"] != 0):
+                raise UnownedMember(identity, "unrecognized_zombie")
+        elif not process_matches(identity, root, allocation, generation, fence, pgid,
+                                 leader_pid, leader_starttime):
+            raise UnownedMember(identity, "command_mismatch")
+        known_members.setdefault(identity["pid"], identity["starttime_ticks"])
+        members.append(identity)
+    return sorted(members, key=lambda item: item["pid"])
+
+
+def safe_unowned_diagnostic(error, root, allocation, generation, fence, leader_pid,
+                            leader_starttime, pgid):
+    identity = error.identity
+    command_matches = False
+    if identity["state"] != "Z":
+        try:
+            command_matches = process_matches(identity, root, allocation, generation, fence,
+                                               pgid, leader_pid, leader_starttime)
+        except (KeyError, IndexError, TypeError):
+            command_matches = False
+    return {
+        "schema": "hostlet.runtime.relay-stop-diagnostic/v1",
+        "error": "relay_group_contains_unowned_process",
+        "reason": error.reason,
+        "pid": identity["pid"],
+        "uid": identity["uid"],
+        "pgid": identity["pgid"],
+        "state": identity["state"],
+        "ppid": identity["ppid"],
+        "starttime_ticks": identity["starttime_ticks"],
+        "command_matches": command_matches,
+        "allocation_id": allocation,
+        "generation": generation,
+        "fence": fence,
+    }
+
+
+def group_members(pgid, root, allocation, generation, fence, leader_pid, leader_starttime,
+                  known_members):
+    deadline = time.monotonic() + UNOWNED_REINSPECTION_SECONDS
+    while True:
+        try:
+            return group_members_once(pgid, root, allocation, generation, fence,
+                                      leader_pid, leader_starttime, known_members)
+        except UnownedMember as error:
+            if time.monotonic() >= deadline:
+                print(json.dumps(safe_unowned_diagnostic(
+                    error, root, allocation, generation, fence, leader_pid,
+                    leader_starttime, pgid), sort_keys=True, separators=(",", ":")),
+                      file=sys.stderr, flush=True)
+                fail("relay_group_contains_unowned_process")
+            time.sleep(UNOWNED_REINSPECTION_INTERVAL_SECONDS)
+
+
+def pidfd_exited(fd):
+    poller = select.poll()
+    poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(0))
+
+
+def close_pidfd(fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def pidfd_for(identity, root, allocation, generation, fence, leader_pid, leader_starttime):
+    if identity["state"] == "Z":
+        return None
+    try:
+        fd = os.pidfd_open(identity["pid"])
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except PermissionError:
+        fail("relay_pidfd_open_failed")
+    except OSError:
+        fail("relay_pidfd_open_failed")
+    # The pidfd binds the identity we are allowed to signal.  If that exact
+    # process has already exited, a disappearing or recycled /proc entry is a
+    # normal teardown race; never report it as PID reuse or touch the new PID.
+    if pidfd_exited(fd):
+        close_pidfd(fd)
+        return None
+    observed = parse_proc_stat(identity["pid"])
+    if observed is None:
+        if pidfd_exited(fd):
+            close_pidfd(fd)
+            return None
+        close_pidfd(fd)
+        fail("relay_pid_reused")
+    if (observed["starttime_ticks"] != identity["starttime_ticks"] or
+            observed["pgid"] != identity["pgid"] or observed["uid"] != identity["uid"]):
+        if pidfd_exited(fd):
+            close_pidfd(fd)
+            return None
+        close_pidfd(fd)
+        fail("relay_pid_reused")
+    if observed["state"] == "Z":
+        close_pidfd(fd)
+        return None
+    if not process_matches(observed, root, allocation, generation, fence,
+                           identity["pgid"], leader_pid, leader_starttime):
+        if pidfd_exited(fd):
+            close_pidfd(fd)
+            return None
+        close_pidfd(fd)
+        fail("relay_pid_reused")
+    return fd
+
+
+def send_pidfd(fd, signum):
+    if fd is None:
+        return False
+    try:
+        signal.pidfd_send_signal(fd, signum)
+        return True
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def close_fds(fds):
+    for fd in fds.values():
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def signal_members(members, signum, sent, root, allocation, generation, fence,
+                   leader_pid, leader_starttime):
+    fds = {}
+    try:
+        for identity in members:
+            fd = pidfd_for(identity, root, allocation, generation, fence,
+                           leader_pid, leader_starttime)
+            if fd is not None:
+                fds[identity["pid"]] = fd
+        for pid, fd in fds.items():
+            if send_pidfd(fd, signum):
+                sent.append(pid)
+    finally:
+        close_fds(fds)
+
+
+def wait_for_group(pgid, root, allocation, generation, fence, leader_pid, leader_starttime,
+                   known_members, deadline):
+    last = []
+    while time.monotonic() < deadline:
+        last = group_members(pgid, root, allocation, generation, fence, leader_pid,
+                             leader_starttime, known_members)
+        if not [item for item in last if item["state"] != "Z"]:
+            return last
+        time.sleep(0.05)
+    return group_members(pgid, root, allocation, generation, fence, leader_pid,
+                         leader_starttime, known_members)
+
+
+def unlink_exact_map(path, root, allocation, generation, fence, pid, pgid, starttime):
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        fail("relay_map_invalid")
+    root_metadata = root.stat()
+    value = read_map(path, False, root_metadata.st_uid, root_metadata.st_gid)
+    validate_map(value, root, allocation, generation, fence, pid, pgid, starttime)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        fail("relay_map_remove_failed")
+    return True
+
+
+def parse_known_members(values):
+    members = {}
+    for value in values:
+        try:
+            pid_text, starttime_text = value.split(":", 1)
+            pid = positive_integer(pid_text, "relay_known_pid")
+            starttime = positive_integer(starttime_text, "relay_known_starttime")
+        except ValueError:
+            fail("relay_known_member_invalid")
+        members[pid] = starttime
+    return members
+
+
+def identity_args(args):
+    allocation = canonical_uuid(args.allocation_id)
+    generation = positive_integer(args.generation, "relay_generation")
+    fence = positive_integer(args.fence, "relay_fence")
+    pid = positive_integer(args.relay_pid, "relay_pid")
+    pgid = positive_integer(args.relay_pgid, "relay_pgid")
+    starttime = positive_integer(args.relay_starttime_ticks, "relay_starttime")
+    root = validate_state_root(args.state_root)
+    path = expected_map_path(root, allocation, generation, fence, args.map_file)
+    root_metadata = root.stat()
+    value = read_map(path, args.allow_missing_map, root_metadata.st_uid, root_metadata.st_gid)
+    validate_map(value, root, allocation, generation, fence, pid, pgid, starttime)
+    return (root, allocation, generation, fence, path, value, pid, pgid, starttime,
+            parse_known_members(args.known_member))
+
+
+def stop(args):
+    root, allocation, generation, fence, map_path, value, pid, pgid, starttime, known_members = identity_args(args)
+    term_sent = []
+    kill_sent = []
+    members = group_members(pgid, root, allocation, generation, fence, pid, starttime, known_members)
+    leader_identity = parse_proc_stat(pid)
+    if leader_identity is not None and (leader_identity["starttime_ticks"] != starttime or
+                                        leader_identity["pgid"] != pgid or
+                                        leader_identity["uid"] != 0 or
+                                        leader_identity["state"] != "Z" and not exact_command(leader_identity, root, allocation, generation, fence)):
+        fail("relay_pid_reused")
+    leader = next((item for item in members if item["pid"] == pid), None)
+    if leader is not None:
+        signal_members([leader], signal.SIGTERM, term_sent, root, allocation,
+                       generation, fence, pid, starttime)
+    members = wait_for_group(pgid, root, allocation, generation, fence, pid, starttime,
+                             known_members, time.monotonic() + 0.1)
+    deadline = time.monotonic() + args.term_grace_ms / 1000
+    while time.monotonic() < deadline:
+        live = [item for item in members if item["state"] != "Z"]
+        if not live:
+            break
+        signal_members(live, signal.SIGTERM, term_sent, root, allocation,
+                       generation, fence, pid, starttime)
+        members = wait_for_group(pgid, root, allocation, generation, fence, pid, starttime,
+                             known_members, time.monotonic() + 0.1)
+    live = [item for item in members if item["state"] != "Z"]
+    if live:
+        signal_members(live, signal.SIGKILL, kill_sent, root, allocation,
+                       generation, fence, pid, starttime)
+        members = wait_for_group(pgid, root, allocation, generation, fence, pid, starttime,
+                                 known_members, time.monotonic() + args.kill_grace_ms / 1000)
+    live = [item for item in members if item["state"] != "Z"]
+    if live:
+        fail("relay_process_not_stopped")
+    process_absent = not members
+    if process_absent:
+        unlink_exact_map(map_path, root, allocation, generation, fence, pid, pgid, starttime)
+    receipt = {
+        "schema": RECEIPT_SCHEMA,
+        "operation": "stop",
+        "allocation_id": allocation,
+        "generation": generation,
+        "fence": fence,
+        "relay_pid": pid,
+        "relay_pgid": pgid,
+        "relay_starttime_ticks": starttime,
+        "term_sent_pids": sorted(set(term_sent)),
+        "kill_sent_pids": sorted(set(kill_sent)),
+        "leader_exit_observed": leader is None or not [item for item in members if item["pid"] == pid and item["state"] != "Z"],
+        "process_absent": process_absent,
+        "remaining_zombie_pids": [item["pid"] for item in members if item["state"] == "Z"],
+        "tracked_members": [{"pid": pid, "starttime_ticks": known_members[pid]} for pid in sorted(known_members)],
+        "map_absent": not map_path.exists(),
+        "bounded_term_grace_ms": args.term_grace_ms,
+        "bounded_kill_grace_ms": args.kill_grace_ms,
+    }
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def verify(args):
+    root, allocation, generation, fence, map_path, value, pid, pgid, starttime, known_members = identity_args(args)
+    members = group_members(pgid, root, allocation, generation, fence, pid, starttime, known_members)
+    leader_identity = parse_proc_stat(pid)
+    if leader_identity is not None and (leader_identity["starttime_ticks"] != starttime or
+                                        leader_identity["pgid"] != pgid or
+                                        leader_identity["uid"] != 0 or
+                                        leader_identity["state"] != "Z" and not exact_command(leader_identity, root, allocation, generation, fence)):
+        fail("relay_pid_reused")
+    process_absent = not members
+    if process_absent:
+        unlink_exact_map(map_path, root, allocation, generation, fence, pid, pgid, starttime)
+    receipt = {
+        "schema": RECEIPT_SCHEMA,
+        "operation": "verify",
+        "allocation_id": allocation,
+        "generation": generation,
+        "fence": fence,
+        "relay_pid": pid,
+        "relay_pgid": pgid,
+        "relay_starttime_ticks": starttime,
+        "process_absent": process_absent,
+        "map_absent": not map_path.exists(),
+        "observed_member_pids": [item["pid"] for item in members],
+    }
+    if not process_absent or not receipt["map_absent"]:
+        print(json.dumps(receipt, sort_keys=True, separators=(",", ":")), flush=True)
+        fail("relay_process_absence_unproven")
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")), flush=True)
+
+
+def main():
+    if os.geteuid() != 0:
+        fail("root_required")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("operation", choices=("stop", "verify"))
+    parser.add_argument("--state-root", required=True)
+    parser.add_argument("--allocation-id", required=True)
+    parser.add_argument("--generation", required=True)
+    parser.add_argument("--fence", required=True)
+    parser.add_argument("--map-file", required=True)
+    parser.add_argument("--relay-pid", required=True)
+    parser.add_argument("--relay-pgid", required=True)
+    parser.add_argument("--relay-starttime-ticks", required=True)
+    parser.add_argument("--allow-missing-map", action="store_true")
+    parser.add_argument("--known-member", action="append", default=[])
+    parser.add_argument("--term-grace-ms", type=int, default=DEFAULT_TERM_GRACE_MS)
+    parser.add_argument("--kill-grace-ms", type=int, default=DEFAULT_KILL_GRACE_MS)
+    args = parser.parse_args()
+    if not 100 <= args.term_grace_ms <= 30_000 or not 100 <= args.kill_grace_ms <= 10_000:
+        fail("relay_timeout_invalid")
+    if args.operation == "stop":
+        stop(args)
+    else:
+        verify(args)
+
+
+if __name__ == "__main__":
+    main()

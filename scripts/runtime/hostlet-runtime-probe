@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# Use an explicit integer conversion; date implementations differ on %3N.
+now_ms() { python3 -c 'import time; print(time.time_ns() // 1_000_000)'; }
+[[ $# == 8 && "$1" == --request-file && "$3" == --request-sha256 && "$5" == --state-root && "$7" == --evidence-root ]] || { echo probe_usage >&2; exit 2; }
+request_source=$2; request_sha256=$4; state_root=$6; evidence_root=$8
+[[ "$request_source" == /* && "$state_root" == /* && "$evidence_root" == /* && "$request_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo probe_usage >&2; exit 2; }
+root=$(realpath -e "$state_root")
+[[ ! -L "$state_root" && "$(cat "$root/.hostlet-runtime-owned")" == hostlet-runtime-state-v1 ]] || { echo probe_root_not_owned >&2; exit 2; }
+evidence_root=$(realpath -e "$evidence_root")
+[[ ! -L "$evidence_root" && "$(stat -c %a "$evidence_root")" =~ ^(700|750)$ && "$(cat "$evidence_root/.hostlet-release-owned")" == hostlet-release-state-v1 ]] || { echo probe_evidence_root_not_owned >&2; exit 2; }
+request=$(mktemp "$root/.probe-request.XXXXXX"); body=$(mktemp "$root/.probe-body.XXXXXX"); write_body=$(mktemp "$root/.probe-write.XXXXXX")
+trap 'rm -f -- "$request" "$body" "$write_body"' EXIT
+cp --reflink=never -- "$request_source" "$request"; chmod 0400 "$request"
+[[ "$(sha256sum "$request" | awk '{print $1}')" == "$request_sha256" ]] || { echo probe_request_digest_mismatch >&2; exit 2; }
+jq -e '.schema=="hostlet.runtime.probe-request/v1" and (has("target_address")|not) and (has("target_port")|not) and (.check_kind=="health" or .check_kind=="current_data" or .check_kind=="cached_old_frontend_candidate_api" or .check_kind=="candidate_frontend_retained_api")' "$request" >/dev/null || { echo probe_request_invalid >&2; exit 2; }
+allocation=$(jq -r .allocation_id "$request"); generation=$(jq -r .generation "$request"); fence=$(jq -r .fence "$request"); path=$(jq -r .path "$request"); kind=$(jq -r .check_kind "$request")
+[[ "$allocation" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && "$generation" =~ ^[1-9][0-9]*$ && "$fence" =~ ^[1-9][0-9]*$ && "$path" == /* && "$path" != *'?'* && "$path" != *'#'* ]] || { echo probe_request_invalid >&2; exit 2; }
+ownership="$root/$allocation/$generation/OWNERSHIP.json"; gateway="hostlet-gateway-${allocation}-${generation}"
+[[ -f "$ownership" && ! -L "$ownership" && "$(stat -c %u "$ownership")" == 0 && "$(stat -c %a "$ownership")" =~ ^(400|600)$ && -e "/run/netns/$gateway" && "$(stat -Lc %i "/run/netns/$gateway")" == "$(jq -r .gateway_namespace_inode "$ownership")" ]] || { echo probe_namespace_mismatch >&2; exit 1; }
+jq -e --arg id "$allocation" --argjson generation "$generation" --argjson fence "$fence" '.allocation_id==$id and .generation==$generation and .fence==$fence and (.application_ipv4|test("^([0-9]{1,3}\\.){3}[0-9]{1,3}$")) and (.application_port|type=="number") and .application_port>=1 and .application_port<=65535' "$ownership" >/dev/null || { echo probe_identity_mismatch >&2; exit 1; }
+target=$(jq -r .application_ipv4 "$ownership"); port=$(jq -r .application_port "$ownership")
+executor_digest=$(jq -r .executor_receipt_digest "$request"); artifact_digest=$(jq -r .artifact_digest "$request")
+[[ "$executor_digest" =~ ^sha256:[0-9a-f]{64}$ && "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo probe_evidence_invalid >&2; exit 2; }
+executor_hex=${executor_digest#sha256:}; executor_receipt="$evidence_root/evidence/sha256/${executor_hex:0:2}/${executor_hex:2}.json"
+[[ -f "$executor_receipt" && ! -L "$executor_receipt" && "$(stat -c %a "$executor_receipt")" =~ ^(400|440|600|640)$ && "sha256:$(sha256sum "$executor_receipt" | awk '{print $1}')" == "$executor_digest" ]] || { echo probe_evidence_invalid >&2; exit 1; }
+jq -e --arg id "$allocation" --argjson generation "$generation" --argjson fence "$fence" --arg artifact "$artifact_digest" '.schema=="hostlet.runtime.executor-receipt/v1" and .allocation_id==$id and .generation==$generation and .fence==$fence and .artifact_digest==$artifact and .result=="passed" and .status=="running" and .runsc_status=="running" and (.observed_limits|type=="object")' "$executor_receipt" >/dev/null || { echo probe_executor_not_running >&2; exit 1; }
+started=$(now_ms); passed=false; response=null; status=000; method=GET; observed_path=$path; assertions='[]'; reason=runtime_health_failed
+if [[ "$kind" == health ]]; then
+  [[ "$(jq -r .method "$request")" == GET ]] || { echo probe_request_invalid >&2; exit 2; }
+  status=$(ip netns exec "$gateway" curl --silent --show-error --max-time 5 --output "$body" --write-out '%{http_code}' "http://${target}:${port}${path}" || true)
+  [[ "$status" == 200 ]] && { passed=true; reason=runtime_health_passed; }
+  assertions=$(jq -cn --argjson passed "$passed" '[{name:"expected_http_response",passed:$passed,observed_sha256:null}]')
+else
+  jq -e '.method=="POST" and (.write_body|type=="object") and (.write_body.name|test("^[A-Za-z0-9._-]{1,128}$")) and (.write_body.client_release|test("^[A-Za-z0-9._-]{1,128}$")) and (.verify_path|type=="string" and startswith("/") and (contains("?")|not) and (contains("#")|not))' "$request" >/dev/null || { echo probe_request_invalid >&2; exit 2; }
+  jq -c .write_body "$request" > "$write_body"; verify_path=$(jq -r .verify_path "$request"); name=$(jq -r .write_body.name "$request"); client_release=$(jq -r .write_body.client_release "$request")
+  write_status=$(ip netns exec "$gateway" curl --silent --show-error --max-time 5 --request POST --header 'content-type: application/json' --data-binary "@$write_body" --output /dev/null --write-out '%{http_code}' "http://${target}:${port}${path}" || true)
+  status=$(ip netns exec "$gateway" curl --silent --show-error --max-time 5 --output "$body" --write-out '%{http_code}' "http://${target}:${port}${verify_path}" || true)
+  visible=false; [[ "$status" == 200 ]] && jq -e --arg name "$name" --arg client "$client_release" '..|objects|select(.name==$name and .client_release==$client)' "$body" >/dev/null 2>&1 && visible=true
+  write_ok=false; [[ "$write_status" =~ ^2[0-9][0-9]$ ]] && write_ok=true
+  [[ "$write_ok" == true && "$visible" == true ]] && passed=true
+  method=POST; observed_path=$verify_path; reason=runtime_current_data_failed
+  [[ "$kind" != current_data ]] && reason=runtime_cross_version_failed
+  if [[ "$passed" == true ]]; then reason=runtime_current_data_passed; [[ "$kind" != current_data ]] && reason=runtime_cross_version_passed; fi
+  assertions=$(jq -cn --argjson write "$write_ok" --argjson visible "$visible" '[{name:"write_accepted",passed:$write,observed_sha256:null},{name:"written_data_visible",passed:$visible,observed_sha256:null}]')
+fi
+ended=$(now_ms); elapsed=$((ended-started)); (( elapsed > 0 )) || elapsed=1
+[[ -s "$body" ]] && response="sha256:$(sha256sum "$body" | awk '{print $1}')"
+jq -cn --slurpfile r "$request" --argjson passed "$passed" --arg reason "$reason" --arg status "$status" --arg response "$response" --arg method "$method" --arg path "$observed_path" --argjson observed "$(now_ms)" --argjson elapsed "$elapsed" --argjson assertions "$assertions" '{schema:"hostlet.runtime.probe-receipt/v1",check_kind:$r[0].check_kind,release_id:$r[0].release_id,peer_release_id:($r[0].peer_release_id//null),allocation_id:$r[0].allocation_id,generation:$r[0].generation,fence:$r[0].fence,artifact_digest:$r[0].artifact_digest,database_generation:($r[0].database_generation//null),migration_id:($r[0].migration_id//null),executor_receipt_digest:$r[0].executor_receipt_digest,result:(if $passed then "passed" else "failed" end),reason_code:$reason,observed_at_unix_ms:$observed,http:{method:$method,path:$path,safe_status_code:(if ($status|test("^[0-9]{3}$")) then ($status|tonumber) else null end),response_sha256:(if $response=="null" then null else $response end),elapsed_ms:$elapsed},assertions:$assertions}'

@@ -1,0 +1,8 @@
+{
+  "healthPath": "/healthz",
+  "publicBuildVariables": [
+    "PUBLIC_HOSTLET_PROBE_ALLOWED_URLS",
+    "PUBLIC_HOSTLET_PROBE_FORBIDDEN_URLS",
+    "PUBLIC_HOSTLET_PROBE_HOST_PATHS"
+  ]
+}

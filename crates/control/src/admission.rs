@@ -533,6 +533,7 @@ async fn admit(
                     "rollout admission requires an active project slot",
                 )
             })?;
+        rollout_admitted(&mut tx, account_id, project_id, deployment_id).await?;
         (reservation, StatusCode::OK)
     };
     let response = AdmissionResponse {
@@ -1741,6 +1742,46 @@ async fn project_reserved(
          (id,account_id,project_id,deployment_id,state,source,reason) \
          VALUES ($1,$2,$3,$4,'reserved','trusted_observation', \
          'M2 synthetic entitlement and capacity admission; no execution enqueued')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(project_id)
+    .bind(deployment_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn rollout_admitted(
+    tx: &mut Transaction<'_, Postgres>,
+    account_id: Uuid,
+    project_id: Uuid,
+    deployment_id: Uuid,
+) -> Result<(), ApiError> {
+    let changed = sqlx::query(
+        "UPDATE deployments SET lifecycle='queued' WHERE account_id=$1 AND project_id=$2 AND id=$3 AND lifecycle='admission_required'",
+    )
+    .bind(account_id)
+    .bind(project_id)
+    .bind(deployment_id)
+    .execute(&mut **tx)
+    .await?;
+    if changed.rows_affected() != 1 {
+        return Err(ApiError::internal());
+    }
+    sqlx::query(
+        "UPDATE projects SET revision=revision+1,updated_at=transaction_timestamp() \
+         WHERE account_id=$1 AND id=$2",
+    )
+    .bind(account_id)
+    .bind(project_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO hosting_state_events \
+         (id,account_id,project_id,deployment_id,state,source,reason) \
+         VALUES ($1,$2,$3,$4,'reserved','trusted_observation', \
+         'rollout capacity admission consumed under the existing project slot; no execution enqueued')",
     )
     .bind(Uuid::new_v4())
     .bind(account_id)

@@ -1,0 +1,1 @@
+{"name":"hostlet-owned-node22-api","version":"1.0.0","private":true,"type":"module","engines":{"node":"22.x"},"scripts":{"build":"node build.mjs","start":"node dist/server.mjs"}}

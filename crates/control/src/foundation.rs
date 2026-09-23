@@ -28,6 +28,7 @@ pub struct FoundationState {
     pub recovery_key: Option<Arc<crate::recovery::RecoveryKey>>,
     pub worker_lease_seconds: i64,
     pub(crate) github: Option<Arc<crate::github_provider::GitHubProvider>>,
+    pub(crate) m3: Option<Arc<crate::m3::M3Config>>,
 }
 
 pub struct FoundationServeError {
@@ -83,6 +84,12 @@ pub fn router(state: FoundationState) -> Router {
         .route("/v1/audit", get(auth::audit))
         .merge(graph::routes())
         .merge(crate::portfolio_drafts::routes())
+        .merge(crate::portfolio_approval::routes())
+        .merge(crate::releases::routes())
+        .merge(crate::portfolio_publish::routes())
+        .merge(crate::runtime_policy::routes())
+        .merge(crate::tenant_databases::routes())
+        .merge(crate::build_jobs::routes())
         .merge(crate::portfolio_preview::routes())
         .merge(crate::secrets::routes())
         .merge(crate::jobs::routes())
@@ -107,6 +114,14 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
     state.github = crate::github_provider::GitHubProvider::from_env()
         .map_err(|_| FoundationServeError::new("github_configuration_invalid"))?
         .map(Arc::new);
+    state.m3 = crate::m3::M3Config::from_env()
+        .map_err(FoundationServeError::new)?
+        .map(Arc::new);
+    if let (Some(m3), Some(foundation_token)) = (&state.m3, &state.worker_token_hash)
+        && m3.uses_foundation_token(foundation_token)
+    {
+        return Err(FoundationServeError::new("m3_worker_tokens_must_differ"));
+    }
     let api_listener = TcpListener::bind(api_bind)
         .await
         .map_err(|_| FoundationServeError::new("api_bind_failed"))?;
@@ -115,6 +130,13 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
         .map_err(|_| FoundationServeError::new("worker_bind_failed"))?;
     let worker_router = crate::jobs::internal_routes()
         .merge(crate::admission::internal_routes())
+        .merge(crate::m3::internal_routes())
+        .merge(crate::releases::internal_routes())
+        .merge(crate::portfolio_publish::internal_routes())
+        .merge(crate::runtime_policy::internal_routes())
+        .merge(crate::tenant_databases::internal_routes())
+        .merge(crate::build_jobs::internal_routes())
+        .merge(crate::portfolio_approval::internal_routes())
         .route_layer(middleware::from_fn_with_state(state.clone(), require_ready))
         .with_state(state.clone());
     let api_server = axum::serve(api_listener, router(state.clone()))
@@ -130,6 +152,10 @@ pub async fn serve(config: FoundationConfig) -> Result<(), FoundationServeError>
                 // SQL error chains or job credentials enter process logs.
                 let _ = crate::jobs::reap_expired(&state.pool).await;
                 let _ = crate::admission::reconcile(&state.pool).await;
+                if state.m3.is_some() {
+                    let _ = crate::build_jobs::reap_expired(&state.pool).await;
+                    let _ = crate::portfolio_publish::reconcile_pending(&state).await;
+                }
             }
         }
     });
@@ -149,6 +175,7 @@ impl FoundationState {
             recovery_key: prerequisites.recovery_key,
             worker_lease_seconds: prerequisites.worker_lease_seconds,
             github: None,
+            m3: None,
         }
     }
 
@@ -177,6 +204,15 @@ impl FoundationState {
             .ok_or_else(ApiError::foundation_unavailable)?;
         crate::secrets::check_keyring(&self.pool, secret_key).await?;
         crate::github::check_keyring(&self.pool, secret_key).await?;
+        let tenant_keys_match: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS (SELECT 1 FROM tenant_database_credentials WHERE key_version <> $1)",
+        )
+        .bind(secret_key.key_version())
+        .fetch_one(&self.pool)
+        .await?;
+        if !tenant_keys_match {
+            return Err(ApiError::foundation_unavailable());
+        }
         crate::recovery::check_keyring(&self.pool, recovery_key)
             .await
             .map_err(|error| {
@@ -226,9 +262,13 @@ async fn readiness(
         },
         Json(ReadinessResponse {
             status: if ready { "ready" } else { "not_ready" },
-            scope: "control_foundation",
+            scope: if state.m3.is_some() {
+                "owned_fixture_m3"
+            } else {
+                "control_foundation"
+            },
             customer_admission: false,
-            workload_execution: false,
+            workload_execution: ready && state.m3.is_some(),
             dependencies: ReadinessDependencies {
                 postgres: if database_unavailable {
                     "unavailable"

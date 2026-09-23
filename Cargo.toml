@@ -4,6 +4,8 @@ members = [
     "crates/control",
     "crates/builder",
     "crates/runtime",
+    "crates/database",
+    "crates/publisher",
 ]
 resolver = "3"
 
@@ -32,3 +34,8 @@ subtle = "2.6"
 zeroize = "1.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+
+# Local E2E verifies multi-gigabyte pinned VM images on every worker start.
+# Keep those full SHA-256 checks practical without skipping digest validation.
+[profile.dev.package.sha2]
+opt-level = 3

@@ -2,6 +2,7 @@
 
 mod admission;
 mod auth;
+mod build_jobs;
 mod compatibility;
 pub mod config;
 mod crypto;
@@ -14,10 +15,16 @@ mod github_webhooks;
 mod graph;
 mod intent;
 mod jobs;
+mod m3;
+mod portfolio_approval;
 mod portfolio_drafts;
 mod portfolio_preview;
+mod portfolio_publish;
 pub mod recovery;
+mod releases;
+mod runtime_policy;
 mod secrets;
+mod tenant_databases;
 
 use std::{fmt, net::SocketAddr, str::FromStr};
 

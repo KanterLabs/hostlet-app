@@ -1,0 +1,543 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# This helper is intentionally narrower than a general privileged cleanup
+# command. It is called only after every allocation callback has run and may
+# remove the exact state that the M3 runtime launcher created for this run.
+readonly RUNSC_SHA256="c0f4ec0ac1198975d5cf919a78f2302426de096f69eebd33e50125c3ca42d699"
+readonly STATE_MARKER="hostlet-runtime-state-v1"
+readonly PEER_MEMBER_KEYS="allocation_id,application_ipv4,application_ipv6,application_route_ipv4,application_route_ipv6,container_id,database_namespace_inode,gateway_interface,gateway_interface_ifindex,gateway_interface_mac,gateway_interface_peer_ifindex,gateway_namespace_inode,gateway_route_ipv4,gateway_route_ipv6,interface,interface_ifindex,interface_mac,interface_peer_ifindex,runtime_fence,runtime_generation,transport_gateway_ipv4,transport_gateway_ipv6,transport_ipv4,transport_ipv6"
+readonly PEER_MEMBER_JQ='
+  def uuid: type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+  def pos: type == "number" and floor == . and . > 0;
+  def ipv4: type == "string" and test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$");
+  def ipv6: type == "string" and test("^[0-9a-fA-F:]+$");
+  def mac: type == "string" and test("^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$");
+  def iface: type == "string" and test("^[pd][0-9a-f]{10}$");
+  def member($endpoint4; $endpoint6):
+    type == "object" and
+    ([keys[]] | sort | join(",")) == $member_keys and
+    (.allocation_id | uuid) and
+    (.runtime_generation | pos) and (.runtime_fence | pos) and
+    (.container_id | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.database_namespace_inode | pos) and (.gateway_namespace_inode | pos) and
+    (.interface | iface) and (.gateway_interface | iface) and
+    (.interface_ifindex | pos) and (.gateway_interface_ifindex | pos) and
+    (.interface_peer_ifindex | pos) and (.gateway_interface_peer_ifindex | pos) and
+    (.interface_mac | mac) and (.gateway_interface_mac | mac) and
+    (.transport_ipv4 | ipv4) and (.transport_gateway_ipv4 | ipv4) and
+    (.transport_ipv6 | ipv6) and (.transport_gateway_ipv6 | ipv6) and
+    (.application_ipv4 | ipv4) and (.application_ipv6 | ipv6) and
+    (.application_route_ipv4 | type == "string" and test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$")) and
+    (.application_route_ipv6 | type == "string" and test("^[0-9a-fA-F:]+/128$")) and
+    (.gateway_route_ipv4 | type == "string" and test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$")) and
+    (.gateway_route_ipv6 | type == "string" and test("^[0-9a-fA-F:]+/128$")) and
+    (.application_route_ipv4 == (.application_ipv4 + "/32")) and
+    (.application_route_ipv6 == (.application_ipv6 + "/128")) and
+    (.gateway_route_ipv4 == ($endpoint4 + "/32")) and
+    (.gateway_route_ipv6 == ($endpoint6 + "/128"));
+'
+readonly PEER_TARGET_JQ='
+  . as $target |
+  type == "object" and
+  ([keys[]] | sort | join(",")) == "container_id,database_generation,database_namespace_inode,detached_members,endpoint_ipv4,endpoint_ipv6,gateway_ipv4,gateway_ipv6,loopback_aliases_present,members,restore_target,run_id,schema,state,target_key,tenant_database_id" and
+  $target.schema == "hostlet.runtime.peer-target/v1" and
+  $target.target_key == $key and
+  $target.state == "empty" and
+  $target.loopback_aliases_present == false and
+  ($target.members | type == "array" and length == 0) and
+  ($target.detached_members | type == "array" and length >= 1 and length <= 256 and all(.[]; member($target.endpoint_ipv4; $target.endpoint_ipv6)) and
+    (map([.allocation_id, (.runtime_generation | tostring), (.runtime_fence | tostring)] | join(":")) as $keys | ($keys | unique | length) == ($keys | length))) and
+  ($target.run_id | uuid) and
+  ($target.tenant_database_id | uuid) and
+  ($target.database_generation | uuid) and
+  ($target.container_id | type == "string" and test("^[0-9a-f]{64}$")) and
+  ($target.database_namespace_inode | pos) and
+  ($target.restore_target | type == "boolean") and
+  ($target.endpoint_ipv4 | ipv4) and ($target.gateway_ipv4 | ipv4) and
+  ($target.endpoint_ipv6 | ipv6) and ($target.gateway_ipv6 | ipv6)
+'
+
+state_root=
+runsc=
+runsc_sha256=
+
+fail() {
+  printf 'runtime_cleanup_%s\n' "$1" >&2
+  exit 1
+}
+
+usage() {
+  printf '%s\n' 'usage: hostlet-runtime-cleanup --state-root ABS --runsc ABS --runsc-sha256 HEX' >&2
+  exit 2
+}
+
+while (($#)); do
+  case "$1" in
+    --state-root)
+      (($# >= 2)) || usage
+      state_root=$2
+      shift 2
+      ;;
+    --runsc)
+      (($# >= 2)) || usage
+      runsc=$2
+      shift 2
+      ;;
+    --runsc-sha256)
+      (($# >= 2)) || usage
+      runsc_sha256=$2
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
+
+[[ "$state_root" == /* && "$runsc" == /* ]] || fail path_not_absolute
+[[ "$runsc_sha256" =~ ^[0-9a-f]{64}$ && "$runsc_sha256" == "$RUNSC_SHA256" ]] || fail runsc_pin_invalid
+[[ -d "$state_root" && ! -L "$state_root" ]] || fail state_root_not_owned
+[[ "$(realpath -e -- "$state_root")" == "$state_root" ]] || fail state_root_path_changed
+[[ -f "$state_root/.hostlet-runtime-owned" && ! -L "$state_root/.hostlet-runtime-owned" ]] || fail state_marker_missing
+[[ "$(cat -- "$state_root/.hostlet-runtime-owned")" == "$STATE_MARKER" ]] || fail state_marker_invalid
+[[ "$(stat -c '%F' -- "$state_root")" == directory ]] || fail state_root_not_directory
+[[ "$(stat -c '%a' -- "$state_root")" == 700 ]] || fail state_root_permissions_invalid
+
+[[ -f "$runsc" && ! -L "$runsc" && -x "$runsc" ]] || fail runsc_not_owned
+[[ "$(stat -c '%F' -- "$runsc")" == regular\ file ]] || fail runsc_not_regular
+[[ "$(sha256sum -- "$runsc" | awk '{print $1}')" == "$RUNSC_SHA256" ]] || fail runsc_digest_mismatch
+
+runsc_root="$state_root/runsc"
+cleanup_log="$state_root/.hostlet-runtime-cleanup-runsc.log"
+runsc_root_absent=false
+if [[ ! -e "$runsc_root" && ! -L "$runsc_root" ]]; then
+  runsc_root_absent=true
+else
+  [[ -d "$runsc_root" && ! -L "$runsc_root" ]] || fail runsc_root_not_directory
+  [[ "$(stat -c '%u' -- "$runsc_root")" == 0 ]] || fail runsc_root_not_root_owned
+  [[ "$(stat -c '%a' -- "$runsc_root")" == 700 ]] || fail runsc_root_permissions_invalid
+  [[ "$(realpath -e -- "$runsc_root")" == "$runsc_root" ]] || fail runsc_root_path_changed
+fi
+
+shopt -s nullglob dotglob
+
+# jq's type checks are useful for the shell control flow, but its regular
+# expressions do not parse IP addresses. Keep one bounded, canonical Python
+# predicate for both the preflight and removal passes so a malformed retained
+# peer record can never become an accepted cleanup target.
+validate_peer_target_json() {
+  /usr/bin/python3 - "$1" <<'PY'
+import ipaddress
+import json
+import os
+import re
+import stat
+import sys
+
+path = sys.argv[1]
+target_keys = {
+    "container_id", "database_generation", "database_namespace_inode",
+    "detached_members", "endpoint_ipv4", "endpoint_ipv6", "gateway_ipv4",
+    "gateway_ipv6", "loopback_aliases_present", "members", "restore_target",
+    "run_id", "schema", "state", "target_key", "tenant_database_id",
+}
+member_keys = {
+    "allocation_id", "application_ipv4", "application_ipv6",
+    "application_route_ipv4", "application_route_ipv6", "container_id",
+    "database_namespace_inode", "gateway_interface",
+    "gateway_interface_ifindex", "gateway_interface_mac",
+    "gateway_interface_peer_ifindex", "gateway_namespace_inode",
+    "gateway_route_ipv4", "gateway_route_ipv6", "interface", "interface_ifindex",
+    "interface_mac", "interface_peer_ifindex", "runtime_fence",
+    "runtime_generation", "transport_gateway_ipv4", "transport_gateway_ipv6",
+    "transport_ipv4", "transport_ipv6",
+}
+uuid_re = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+container_re = re.compile(r"^[0-9a-f]{64}$")
+iface_re = re.compile(r"^[pd][0-9a-f]{10}$")
+mac_re = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
+key_re = re.compile(r"^[0-9a-f]{64}$")
+
+
+def positive(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def canonical_ip(value, version):
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return parsed.version == version and str(parsed) == value
+
+
+def exact_route(value, address, version, prefix):
+    if not isinstance(value, str) or not canonical_ip(address, version):
+        return False
+    expected = f"{address}/{prefix}"
+    if value != expected:
+        return False
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return False
+    return network.version == version and network.prefixlen == prefix and str(network.network_address) == address
+
+
+def valid_member(member, target):
+    if not isinstance(member, dict) or set(member) != member_keys:
+        return False
+    if not uuid_re.fullmatch(member["allocation_id"]):
+        return False
+    if not positive(member["runtime_generation"]) or not positive(member["runtime_fence"]):
+        return False
+    if member["container_id"] != target["container_id"] or not container_re.fullmatch(member["container_id"]):
+        return False
+    if member["database_namespace_inode"] != target["database_namespace_inode"]:
+        return False
+    for field in ("database_namespace_inode", "gateway_namespace_inode", "interface_ifindex", "gateway_interface_ifindex", "interface_peer_ifindex", "gateway_interface_peer_ifindex"):
+        if not positive(member[field]):
+            return False
+    if not iface_re.fullmatch(member["interface"]) or not iface_re.fullmatch(member["gateway_interface"]):
+        return False
+    if not mac_re.fullmatch(member["interface_mac"]) or not mac_re.fullmatch(member["gateway_interface_mac"]):
+        return False
+    for field in ("transport_ipv4", "transport_gateway_ipv4", "application_ipv4"):
+        if not canonical_ip(member[field], 4):
+            return False
+    for field in ("transport_ipv6", "transport_gateway_ipv6", "application_ipv6"):
+        if not canonical_ip(member[field], 6):
+            return False
+    return (
+        exact_route(member["application_route_ipv4"], member["application_ipv4"], 4, 32)
+        and exact_route(member["application_route_ipv6"], member["application_ipv6"], 6, 128)
+        and exact_route(member["gateway_route_ipv4"], target["endpoint_ipv4"], 4, 32)
+        and exact_route(member["gateway_route_ipv6"], target["endpoint_ipv6"], 6, 128)
+    )
+
+
+try:
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError
+    if os.path.realpath(path) != path or metadata.st_size > 1024 * 1024:
+        raise ValueError
+    with open(path, "rb", buffering=0) as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != 0 or stat.S_IMODE(opened.st_mode) != 0o600 or opened.st_ino != metadata.st_ino or opened.st_dev != metadata.st_dev:
+            raise ValueError
+        value = json.loads(handle.read(1024 * 1024 + 1).decode("utf-8"))
+    if not isinstance(value, dict) or set(value) != target_keys or value["schema"] != "hostlet.runtime.peer-target/v1":
+        raise ValueError
+    if not key_re.fullmatch(value["target_key"]) or path.rsplit("/", 1)[-1] != value["target_key"] + ".json":
+        raise ValueError
+    if value["state"] != "empty" or value["loopback_aliases_present"] is not False or value["members"] != []:
+        raise ValueError
+    for field in ("run_id", "tenant_database_id", "database_generation"):
+        if not uuid_re.fullmatch(value[field]):
+            raise ValueError
+    if not container_re.fullmatch(value["container_id"]):
+        raise ValueError
+    if not positive(value["database_namespace_inode"]) or not isinstance(value["restore_target"], bool):
+        raise ValueError
+    if not canonical_ip(value["endpoint_ipv4"], 4) or not canonical_ip(value["gateway_ipv4"], 4):
+        raise ValueError
+    if not canonical_ip(value["endpoint_ipv6"], 6) or not canonical_ip(value["gateway_ipv6"], 6):
+        raise ValueError
+    detached = value["detached_members"]
+    if not isinstance(detached, list) or not 1 <= len(detached) <= 256:
+        raise ValueError
+    seen = set()
+    for member in detached:
+        if not valid_member(member, value):
+            raise ValueError
+        identity = (member["allocation_id"], member["runtime_generation"], member["runtime_fence"])
+        if identity in seen:
+            raise ValueError
+        seen.add(identity)
+except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+    raise SystemExit(1)
+PY
+}
+
+secret_input_empty_dirs=()
+secret_input_uid=
+cgroup_tombstone_entries=()
+peer_registry_target_entries=()
+peer_registry_present=false
+peer_registry_lock_fd=
+for auxiliary in requests runtime-relays secret-input runtime-cgroup-tombstones runtime-peer-registry; do
+  auxiliary_path="$state_root/$auxiliary"
+  if [[ -e "$auxiliary_path" || -L "$auxiliary_path" ]]; then
+    [[ -d "$auxiliary_path" && ! -L "$auxiliary_path" ]] || fail auxiliary_root_not_directory
+    [[ "$(realpath -e -- "$auxiliary_path")" == "$auxiliary_path" ]] || fail auxiliary_root_path_changed
+    if [[ "$auxiliary" == secret-input ]]; then
+      secret_input_uid=$(stat -c '%u' -- "$auxiliary_path")
+      [[ "$secret_input_uid" == "$(stat -c '%u' -- "$state_root")" ]] || fail auxiliary_root_not_owned
+      [[ "$(stat -c '%a' -- "$auxiliary_path")" == 700 ]] || fail auxiliary_root_permissions_invalid
+      auxiliary_entries=("$auxiliary_path"/*)
+      for entry in "${auxiliary_entries[@]}"; do
+        entry_name=${entry##*/}
+        [[ "$entry_name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail secret_input_allocation_name_invalid
+        [[ -d "$entry" && ! -L "$entry" ]] || fail secret_input_allocation_not_directory
+        [[ "$(realpath -e -- "$entry")" == "$auxiliary_path/$entry_name" ]] || fail secret_input_allocation_path_changed
+        [[ "$(stat -c '%u' -- "$entry")" == "$secret_input_uid" ]] || fail secret_input_allocation_not_owned
+        [[ "$(stat -c '%a' -- "$entry")" == 700 ]] || fail secret_input_allocation_permissions_invalid
+        entry_contents=("$entry"/*)
+        [[ "${#entry_contents[@]}" == 0 ]] || fail auxiliary_state_retained
+        secret_input_empty_dirs+=("$entry")
+      done
+    elif [[ "$auxiliary" == runtime-cgroup-tombstones ]]; then
+      [[ "$(stat -c '%u:%a' -- "$auxiliary_path")" == 0:700 ]] || fail cgroup_tombstone_root_permissions_invalid
+      auxiliary_entries=("$auxiliary_path"/*)
+      for entry in "${auxiliary_entries[@]}"; do
+        entry_name=${entry##*/}
+        [[ "$entry_name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]*-[1-9][0-9]*\.json$ ]] || fail cgroup_tombstone_name_invalid
+        [[ -f "$entry" && ! -L "$entry" && "$(realpath -e -- "$entry")" == "$auxiliary_path/$entry_name" ]] || fail cgroup_tombstone_path_invalid
+        [[ "$(stat -c '%u:%a' -- "$entry")" == 0:600 ]] || fail cgroup_tombstone_permissions_invalid
+        jq -e '.schema=="hostlet.runtime.cgroup-tombstone/v1" and (.allocation_id|test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and (.generation|type=="number" and floor==. and . >= 1) and (.fence|type=="number" and floor==. and . >= 1) and (.identity_hash|test("^[0-9a-f]{16}$")) and (.cgroup_path|test("^/hostlet-owned-runtime-[0-9a-f]{16}-e[1-9][0-9]*$")) and (.cgroup_epoch|type=="number" and floor==. and . >= 1) and ((.cgroup_inode==null) or (.cgroup_inode|type=="number" and floor==. and . >= 1))' -- "$entry" >/dev/null || fail cgroup_tombstone_invalid
+        tombstone_id=$(jq -r '.allocation_id' -- "$entry")
+        tombstone_generation=$(jq -r '.generation' -- "$entry")
+        tombstone_fence=$(jq -r '.fence' -- "$entry")
+        tombstone_epoch=$(jq -r '.cgroup_epoch' -- "$entry")
+        tombstone_identity=$(jq -r '.identity_hash' -- "$entry")
+        expected_identity=$(printf '%s:%s:%s' "$tombstone_id" "$tombstone_generation" "$tombstone_fence" | sha256sum | awk '{print substr($1,1,16)}')
+        [[ "$entry_name" == "$tombstone_id-$tombstone_generation-$tombstone_fence.json" && "$tombstone_identity" == "$expected_identity" ]] || fail cgroup_tombstone_identity_invalid
+        cgroup_path=$(jq -r '.cgroup_path' -- "$entry")
+        [[ "$cgroup_path" == "/hostlet-owned-runtime-${expected_identity}-e${tombstone_epoch}" ]] || fail cgroup_tombstone_path_invalid
+        cgroup_root="/sys/fs/cgroup${cgroup_path}"
+        [[ -d /sys/fs/cgroup && ! -L /sys/fs/cgroup && "$(realpath -e -- /sys/fs/cgroup)" == /sys/fs/cgroup && "$(stat -fc %T -- /sys/fs/cgroup)" == cgroup2fs ]] || fail cgroup_parent_invalid
+        if [[ -e "$cgroup_root" || -L "$cgroup_root" ]]; then
+          [[ -d "$cgroup_root" && ! -L "$cgroup_root" && "$(realpath -e -- "$cgroup_root")" == "$cgroup_root" ]] || fail cgroup_tombstone_path_invalid
+          fail cgroup_tombstone_cgroup_present
+        fi
+        cgroup_tombstone_entries+=("$entry")
+      done
+    elif [[ "$auxiliary" == runtime-peer-registry ]]; then
+      peer_registry_present=true
+      [[ "$(stat -c '%u:%a' -- "$auxiliary_path")" == 0:700 ]] || fail peer_registry_root_permissions_invalid
+      peer_registry_lock="$auxiliary_path/.lock"
+      peer_registry_targets="$auxiliary_path/targets"
+      [[ -f "$peer_registry_lock" && ! -L "$peer_registry_lock" && "$(realpath -e -- "$peer_registry_lock")" == "$peer_registry_lock" ]] || fail peer_registry_lock_invalid
+      [[ "$(stat -c '%u:%a' -- "$peer_registry_lock")" == 0:600 ]] || fail peer_registry_lock_permissions_invalid
+      exec {peer_registry_lock_fd}<>"$peer_registry_lock" || fail peer_registry_lock_open_failed
+      flock -w 10 -x "$peer_registry_lock_fd" || fail peer_registry_lock_busy
+      [[ -d "$peer_registry_targets" && ! -L "$peer_registry_targets" && "$(realpath -e -- "$peer_registry_targets")" == "$peer_registry_targets" ]] || fail peer_registry_targets_invalid
+      [[ "$(stat -c '%u:%a' -- "$peer_registry_targets")" == 0:700 ]] || fail peer_registry_targets_permissions_invalid
+      peer_registry_attachments="$auxiliary_path/attachments"
+      [[ -d "$peer_registry_attachments" && ! -L "$peer_registry_attachments" && "$(realpath -e -- "$peer_registry_attachments")" == "$peer_registry_attachments" ]] || fail peer_registry_attachments_invalid
+      [[ "$(stat -c '%u:%a' -- "$peer_registry_attachments")" == 0:700 ]] || fail peer_registry_attachments_permissions_invalid
+      registry_root_entries=("$auxiliary_path"/*)
+      for registry_entry in "${registry_root_entries[@]}"; do
+        registry_name=${registry_entry##*/}
+        [[ "$registry_name" == .lock || "$registry_name" == targets || "$registry_name" == attachments ]] || fail peer_registry_unknown_entry
+      done
+      registry_attachment_entries=("$peer_registry_attachments"/*)
+      for entry in "${registry_attachment_entries[@]}"; do
+        entry_name=${entry##*/}
+        [[ "$entry_name" =~ ^[0-9a-f]{64}\.json$ ]] || fail peer_registry_attachment_name_invalid
+        [[ -f "$entry" && ! -L "$entry" && "$(realpath -e -- "$entry")" == "$peer_registry_attachments/$entry_name" ]] || fail peer_registry_attachment_path_invalid
+        [[ "$(stat -c '%u:%a' -- "$entry")" == 0:600 ]] || fail peer_registry_attachment_permissions_invalid
+        fail peer_registry_attachment_retained
+      done
+      registry_target_entries=("$peer_registry_targets"/*)
+      for entry in "${registry_target_entries[@]}"; do
+        entry_name=${entry##*/}
+        [[ "$entry_name" =~ ^[0-9a-f]{64}\.json$ ]] || fail peer_registry_target_name_invalid
+        [[ -f "$entry" && ! -L "$entry" && "$(realpath -e -- "$entry")" == "$peer_registry_targets/$entry_name" ]] || fail peer_registry_target_path_invalid
+        [[ "$(stat -c '%u:%a' -- "$entry")" == 0:600 ]] || fail peer_registry_target_permissions_invalid
+        validate_peer_target_json "$entry" || fail peer_registry_target_not_empty
+        target_key=${entry_name%.json}
+        jq -e --arg key "$target_key" --arg member_keys "$PEER_MEMBER_KEYS" "$PEER_MEMBER_JQ$PEER_TARGET_JQ" -- "$entry" >/dev/null || fail peer_registry_target_not_empty
+        peer_registry_target_entries+=("$entry")
+      done
+    elif [[ "$auxiliary" != requests ]]; then
+      auxiliary_entries=("$auxiliary_path"/*)
+      [[ "${#auxiliary_entries[@]}" == 0 ]] || fail auxiliary_state_retained
+    fi
+  fi
+done
+
+remove_secret_input_empty_dirs() {
+  local entry entry_name
+  for entry in "${secret_input_empty_dirs[@]}"; do
+    entry_name=${entry##*/}
+    [[ -d "$entry" && ! -L "$entry" ]] || fail secret_input_allocation_not_directory
+    [[ "$(realpath -e -- "$entry")" == "$state_root/secret-input/$entry_name" ]] || fail secret_input_allocation_path_changed
+    [[ "$(stat -c '%u' -- "$entry")" == "$secret_input_uid" ]] || fail secret_input_allocation_not_owned
+    [[ "$(stat -c '%a' -- "$entry")" == 700 ]] || fail secret_input_allocation_permissions_invalid
+    entry_contents=("$entry"/*)
+    [[ "${#entry_contents[@]}" == 0 ]] || fail auxiliary_state_retained
+    rmdir -- "$entry" || fail secret_input_allocation_remove_failed
+  done
+}
+
+remove_verified_cgroup_tombstones() {
+  local entry
+  for entry in "${cgroup_tombstone_entries[@]}"; do
+    [[ -f "$entry" && ! -L "$entry" ]] || fail cgroup_tombstone_path_invalid
+    rm -f -- "$entry" || fail cgroup_tombstone_remove_failed
+  done
+  if [[ -d "$state_root/runtime-cgroup-tombstones" && ! -L "$state_root/runtime-cgroup-tombstones" ]]; then
+    [[ -z "$(find "$state_root/runtime-cgroup-tombstones" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || fail cgroup_tombstone_root_not_empty
+    rmdir -- "$state_root/runtime-cgroup-tombstones" || fail cgroup_tombstone_root_remove_failed
+  fi
+}
+
+remove_verified_peer_registry() {
+  [[ "$peer_registry_present" == true ]] || return 0
+  local entry entry_name target_key
+  [[ -n "$peer_registry_lock_fd" ]] || fail peer_registry_lock_missing
+  [[ -d "$state_root/runtime-peer-registry" && ! -L "$state_root/runtime-peer-registry" ]] || fail peer_registry_root_not_directory
+  [[ "$(realpath -e -- "$state_root/runtime-peer-registry")" == "$state_root/runtime-peer-registry" ]] || fail peer_registry_root_path_changed
+  [[ "$(stat -c '%u:%a' -- "$state_root/runtime-peer-registry")" == 0:700 ]] || fail peer_registry_root_permissions_invalid
+  [[ -f "$state_root/runtime-peer-registry/.lock" && ! -L "$state_root/runtime-peer-registry/.lock" ]] || fail peer_registry_lock_invalid
+  [[ "$(stat -c '%u:%a' -- "$state_root/runtime-peer-registry/.lock")" == 0:600 ]] || fail peer_registry_lock_permissions_invalid
+  [[ -d "$state_root/runtime-peer-registry/targets" && ! -L "$state_root/runtime-peer-registry/targets" ]] || fail peer_registry_targets_invalid
+  [[ "$(realpath -e -- "$state_root/runtime-peer-registry/targets")" == "$state_root/runtime-peer-registry/targets" ]] || fail peer_registry_targets_path_changed
+  [[ "$(stat -c '%u:%a' -- "$state_root/runtime-peer-registry/targets")" == 0:700 ]] || fail peer_registry_targets_permissions_invalid
+  [[ -d "$state_root/runtime-peer-registry/attachments" && ! -L "$state_root/runtime-peer-registry/attachments" ]] || fail peer_registry_attachments_invalid
+  [[ "$(realpath -e -- "$state_root/runtime-peer-registry/attachments")" == "$state_root/runtime-peer-registry/attachments" ]] || fail peer_registry_attachments_path_changed
+  [[ "$(stat -c '%u:%a' -- "$state_root/runtime-peer-registry/attachments")" == 0:700 ]] || fail peer_registry_attachments_permissions_invalid
+  [[ -z "$(find "$state_root/runtime-peer-registry/attachments" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || fail peer_registry_attachment_retained
+  for entry in "${peer_registry_target_entries[@]}"; do
+    entry_name=${entry##*/}
+    target_key=${entry_name%.json}
+    [[ -f "$entry" && ! -L "$entry" && "$(realpath -e -- "$entry")" == "$state_root/runtime-peer-registry/targets/$entry_name" ]] || fail peer_registry_target_path_invalid
+    [[ "$(stat -c '%u:%a' -- "$entry")" == 0:600 ]] || fail peer_registry_target_permissions_invalid
+    validate_peer_target_json "$entry" || fail peer_registry_target_not_empty
+    jq -e --arg key "$target_key" --arg member_keys "$PEER_MEMBER_KEYS" "$PEER_MEMBER_JQ$PEER_TARGET_JQ" -- "$entry" >/dev/null || fail peer_registry_target_not_empty
+    rm -f -- "$entry" || fail peer_registry_target_remove_failed
+  done
+  [[ -z "$(find "$state_root/runtime-peer-registry/targets" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || fail peer_registry_targets_not_empty
+  rmdir -- "$state_root/runtime-peer-registry/targets" || fail peer_registry_targets_remove_failed
+  rmdir -- "$state_root/runtime-peer-registry/attachments" || fail peer_registry_attachments_remove_failed
+  rm -f -- "$state_root/runtime-peer-registry/.lock" || fail peer_registry_lock_remove_failed
+  rmdir -- "$state_root/runtime-peer-registry" || fail peer_registry_root_remove_failed
+  [[ ! -e "$state_root/runtime-peer-registry" && ! -L "$state_root/runtime-peer-registry" ]] || fail peer_registry_root_retained
+  flock -u "$peer_registry_lock_fd" || fail peer_registry_unlock_failed
+  exec {peer_registry_lock_fd}>&-
+  peer_registry_lock_fd=
+}
+
+# Validate every retained generation before mutating any of them. A generation
+# can be left behind only as its root-owned OWNERSHIP.json marker; all runtime
+# payload, namespaces, mounts and sandboxes must already be gone. Removing the
+# marker and its now-empty directories is safe and exact. Anything else is
+# retained for diagnosis rather than recursively deleted.
+generation_markers=()
+generation_dirs=()
+allocation_dirs=()
+for child in "$state_root"/*; do
+  [[ -e "$child" || -L "$child" ]] || continue
+  name=${child##*/}
+  case "$name" in
+    .hostlet-runtime-owned|.hostlet-runtime-cleanup-runsc.log|requests|runtime-relays|secret-input|runtime-cgroup-tombstones|runtime-peer-registry|runsc)
+      continue
+      ;;
+  esac
+  [[ "$name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail unexpected_state_entry
+  [[ -d "$child" && ! -L "$child" ]] || fail allocation_root_not_directory
+  [[ "$(stat -c '%u' -- "$child")" == 0 && "$(stat -c '%a' -- "$child")" == 700 ]] || fail allocation_root_not_owned
+  allocation_dirs+=("$child")
+  for generation in "$child"/*; do
+    [[ -e "$generation" || -L "$generation" ]] || continue
+    generation_name=${generation##*/}
+    [[ "$generation_name" =~ ^[1-9][0-9]*$ ]] || fail generation_name_invalid
+    [[ -d "$generation" && ! -L "$generation" ]] || fail generation_root_not_directory
+    [[ "$(stat -c '%u' -- "$generation")" == 0 && "$(stat -c '%a' -- "$generation")" == 700 ]] || fail generation_root_not_owned
+    ownership="$generation/OWNERSHIP.json"
+    [[ -f "$ownership" && ! -L "$ownership" ]] || fail generation_marker_missing
+    [[ "$(stat -c '%u' -- "$ownership")" == 0 ]] || fail generation_marker_not_owned
+    jq -e --arg allocation "$name" --argjson generation "$generation_name" \
+      '.allocation_id==$allocation and .generation==$generation and (.fence|type=="number" and floor == . and . >= 1)' \
+      -- "$ownership" >/dev/null || fail generation_marker_invalid
+    app_namespace="/run/netns/hostlet-app-${name}-${generation_name}"
+    gateway_namespace="/run/netns/hostlet-gateway-${name}-${generation_name}"
+    [[ ! -e "$app_namespace" && ! -L "$app_namespace" ]] || fail generation_namespace_retained
+    [[ ! -e "$gateway_namespace" && ! -L "$gateway_namespace" ]] || fail generation_namespace_retained
+    entries=("$generation"/*)
+    [[ "${#entries[@]}" == 1 && "${entries[0]}" == "$ownership" ]] || fail generation_not_empty
+    generation_markers+=("$ownership")
+    generation_dirs+=("$generation")
+  done
+done
+
+if [[ "$runsc_root_absent" == true ]]; then
+  for marker in "${generation_markers[@]}"; do rm -f -- "$marker" || fail generation_marker_remove_failed; done
+  for generation in "${generation_dirs[@]}"; do rmdir -- "$generation" || fail generation_root_remove_failed; done
+  for allocation in "${allocation_dirs[@]}"; do rmdir -- "$allocation" || fail allocation_root_remove_failed; done
+  remove_secret_input_empty_dirs
+  if [[ -e "$cleanup_log" || -L "$cleanup_log" ]]; then
+    [[ -f "$cleanup_log" && ! -L "$cleanup_log" && "$(stat -c '%u' -- "$cleanup_log")" == 0 ]] || fail cleanup_log_not_owned
+    rm -f -- "$cleanup_log" || fail cleanup_log_remove_failed
+  fi
+  remove_verified_cgroup_tombstones
+  remove_verified_peer_registry
+  exit 0
+fi
+
+# The launcher owns the only runsc objects in this per-run root. Depending on
+# the pinned runsc build, an empty root is rendered as JSON null or []; accept
+# only those empty representations and reject every other output before
+# touching null-netns.
+if [[ -L "$cleanup_log" ]]; then fail cleanup_log_symlink; fi
+if [[ -e "$cleanup_log" ]]; then
+  [[ -f "$cleanup_log" && "$(stat -c '%u' -- "$cleanup_log")" == 0 ]] || fail cleanup_log_not_owned
+fi
+list_json=$("$runsc" \
+  "--log=$cleanup_log" \
+  "--root=$runsc_root" \
+  --platform=systrap \
+  --network=sandbox \
+  --sidecar-usage-policy=STRICT \
+  --sidecar-release-enforcement-policy=ALWAYS \
+  list --format=json) || fail runsc_list_failed
+jq -e -s 'length == 1 and (.[0] == null or (.[0]|type == "array" and (.[0]|length) == 0))' <<<"$list_json" >/dev/null || fail runsc_objects_remaining
+
+runsc_entries=("$runsc_root"/*)
+for child in "${runsc_entries[@]}"; do
+  [[ -e "$child" || -L "$child" ]] || continue
+  [[ "${child##*/}" == null-netns ]] || fail unexpected_runsc_entry
+done
+
+null_netns="$runsc_root/null-netns"
+if [[ -e "$null_netns" || -L "$null_netns" ]]; then
+  [[ -f "$null_netns" && ! -L "$null_netns" ]] || fail null_netns_not_regular
+  [[ "$(stat -c '%u' -- "$null_netns")" == 0 ]] || fail null_netns_not_owned
+  null_inode=$(stat -Lc '%i' -- "$null_netns")
+  [[ "$null_inode" =~ ^[1-9][0-9]*$ ]] || fail null_netns_inode_invalid
+  null_mount=$(findmnt -n --mountpoint "$null_netns" --output TARGET,SOURCE,FSTYPE 2>/dev/null || true)
+  if mountpoint -q -- "$null_netns"; then
+    read -r null_target null_source null_fstype <<<"$null_mount"
+    [[ "$null_target" == "$null_netns" && "$null_fstype" == nsfs ]] || fail null_netns_mount_mismatch
+    [[ "$null_source" == nsfs || "$null_source" == "nsfs["* ]] || fail null_netns_source_mismatch
+    umount -- "$null_netns" || fail null_netns_unmount_failed
+    mountpoint -q -- "$null_netns" && fail null_netns_still_mounted
+  else
+    [[ -z "$null_mount" ]] || fail null_netns_mount_race
+  fi
+  [[ "$(stat -c '%u' -- "$null_netns")" == 0 ]] || fail null_netns_owner_changed
+  rm -f -- "$null_netns" || fail null_netns_remove_failed
+fi
+
+# Remove only validated marker files and empty directories. No recursive delete,
+# recursive ownership change, or path discovered outside the exact run root is
+# permitted here.
+for marker in "${generation_markers[@]}"; do rm -f -- "$marker" || fail generation_marker_remove_failed; done
+for generation in "${generation_dirs[@]}"; do rmdir -- "$generation" || fail generation_root_remove_failed; done
+for allocation in "${allocation_dirs[@]}"; do rmdir -- "$allocation" || fail allocation_root_remove_failed; done
+remove_secret_input_empty_dirs
+
+if [[ -e "$cleanup_log" || -L "$cleanup_log" ]]; then
+  [[ -f "$cleanup_log" && ! -L "$cleanup_log" && "$(stat -c '%u' -- "$cleanup_log")" == 0 ]] || fail cleanup_log_not_owned
+  rm -f -- "$cleanup_log" || fail cleanup_log_remove_failed
+fi
+rmdir -- "$runsc_root" || fail runsc_root_not_empty
+[[ ! -e "$runsc_root" && ! -L "$runsc_root" ]] || fail runsc_root_retained
+remove_verified_cgroup_tombstones
+remove_verified_peer_registry

@@ -16,16 +16,23 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function gitObjectSha(type, value) {
+  const bytes = Buffer.from(value, "utf8");
+  return createHash("sha1").update(`${type} ${bytes.length}\0`).update(bytes).digest("hex");
+}
+
 function base64urlJson(value) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
-function parseJsonFixture() {
-  const parsed = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
-  if (parsed.schema_version !== 1 || !Array.isArray(parsed.repositories)) {
-    throw new Error("unsupported M2 GitHub repository fixture schema");
+function parseJsonFixture({ fixtureData, fixturePath } = {}) {
+  if (fixtureData !== undefined && fixturePath !== undefined) throw new Error("GitHub fixture accepts fixtureData or fixturePath, not both");
+  const path = fixturePath ? resolve(fixturePath) : FIXTURE_PATH;
+  const parsed = fixtureData === undefined ? JSON.parse(readFileSync(path, "utf8")) : cloneSafe(fixtureData);
+  if (!new Set([1, 2]).has(parsed.schema_version) || !Array.isArray(parsed.repositories)) {
+    throw new Error("unsupported synthetic GitHub repository fixture schema");
   }
-  return parsed;
+  return { fixture: parsed, path: fixtureData === undefined ? path : null };
 }
 
 function cloneSafe(value) {
@@ -43,12 +50,15 @@ function linkHeader(baseUrl, pathname, page, lastPage) {
   return links.join(", ");
 }
 
-export async function startGitHubFixture(context, { callbackUrl } = {}) {
+export async function startGitHubFixture(context, { callbackUrl, fixtureData, fixturePath, gitBlobSha1 = false } = {}) {
   if (!context || typeof context.registerSensitiveValues !== "function") {
     throw new Error("GitHub fixture requires an E2E context with sensitive-value registration");
   }
 
-  const fixture = parseJsonFixture();
+  const parsedFixture = parseJsonFixture({ fixtureData, fixturePath });
+  const fixture = parsedFixture.fixture;
+  const primaryUser = Object.freeze(cloneSafe(fixture.oauth_users?.primary || DEFAULT_USER));
+  const secondaryUser = Object.freeze(cloneSafe(fixture.oauth_users?.secondary || SECOND_USER));
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },
@@ -60,7 +70,7 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
   const webhookSecret = opaque(40);
   const privateKeyPem = String(privateKey);
   context.registerSensitiveValues([clientSecret, webhookSecret, privateKeyPem]);
-  context.registerFixture?.("M2 synthetic GitHub repositories", FIXTURE_PATH);
+  if (parsedFixture.path) context.registerFixture?.(`${fixture.fixture_name || "synthetic GitHub"} repositories`, parsedFixture.path);
 
   const repositories = new Map(fixture.repositories.map((repository) => [repository.id, cloneSafe(repository)]));
   const originalRepositories = cloneSafe(fixture.repositories);
@@ -70,7 +80,7 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
   const installationTokens = new Map();
   const oauthQueue = [];
   const deniedRepositories = new Set();
-  const usersWithInstallation = new Set([DEFAULT_USER.id, SECOND_USER.id]);
+  const usersWithInstallation = new Set([primaryUser.id, secondaryUser.id]);
   let grantedRepositoryIds = new Set(repositories.keys());
   let installationRevoked = false;
   let installationSuspended = false;
@@ -85,11 +95,43 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
   let expectedCallbackUrl = callbackUrl || null;
   let closed = false;
   let unexpectedRequests = 0;
+  let installationTokenSequence = 0;
   const rateLimits = [];
   const delays = [];
   const forcedFaults = [];
   const oversize = new Map();
   const pagination = new Map();
+
+  function latestInstallationToken(repositoryId) {
+    const expectedRepositoryId = repositoryId === undefined ? null : Number(repositoryId);
+    return [...installationTokens.entries()]
+      .filter(([, token]) => expectedRepositoryId === null || token.repositoryId === expectedRepositoryId)
+      .sort((left, right) => right[1].issuedSequence - left[1].issuedSequence)[0] || null;
+  }
+
+  function verifyIssuedInstallationCredential({ repositoryId, minimumUses = 1 } = {}) {
+    if (repositoryId !== undefined && !Number.isSafeInteger(Number(repositoryId))) {
+      throw new Error("installation credential verifier requires a numeric repository id");
+    }
+    if (!Number.isSafeInteger(minimumUses) || minimumUses < 0) {
+      throw new Error("installation credential verifier requires a non-negative use count");
+    }
+    const issued = latestInstallationToken(repositoryId);
+    if (!issued) throw new Error("no actual synthetic installation credential was issued");
+    const [value, token] = issued;
+    if (token.useCount < minimumUses) {
+      throw new Error(`synthetic installation credential was issued but not used enough times (uses=${token.useCount})`);
+    }
+    return Object.freeze({
+      issued: true,
+      synthetic: true,
+      repositoryId: token.repositoryId,
+      installationId: token.installationId,
+      permissions: Object.freeze({ ...token.permissions }),
+      useCount: token.useCount,
+      tokenDigest: `sha256:${sha256(value)}`,
+    });
+  }
 
   const environment = {
     HOSTLET_GITHUB_PROVIDER: "synthetic_loopback",
@@ -171,11 +213,13 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
 
   function validInstallationToken(credential, repositoryId) {
     const token = installationTokens.get(credential);
-    return token && token.expiresAt > Date.now() && token.repositoryId === repositoryId &&
+    const valid = token && token.expiresAt > Date.now() && token.repositoryId === repositoryId &&
       token.installationId === fixture.installation.id && token.permissions.contents === "read" &&
       !installationRevoked && !installationSuspended && !deniedRepositories.has(repositoryId)
       ? token
       : null;
+    if (valid) valid.useCount += 1;
+    return valid;
   }
 
   function verifyAppJwt(jwt) {
@@ -225,7 +269,8 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     const result = new Map();
     for (const [path, content] of Object.entries(commit.files)) {
       const bytes = Buffer.from(content, "utf8");
-      const blobSha = sha256(Buffer.concat([Buffer.from(`blob ${bytes.length}\0`), bytes])).slice(0, 40);
+      const framed = Buffer.concat([Buffer.from(`blob ${bytes.length}\0`), bytes]);
+      const blobSha = gitBlobSha1 ? createHash("sha1").update(framed).digest("hex") : sha256(framed).slice(0, 40);
       result.set(blobSha, { path, content, size: bytes.length });
     }
     return result;
@@ -272,7 +317,7 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
         const redirectUri = url.searchParams.get("redirect_uri");
         if (state) context.registerSensitiveValues([state]);
         if (challenge) context.registerSensitiveValues([challenge]);
-        const next = oauthQueue.shift() || { mode: "success", user: DEFAULT_USER };
+        const next = oauthQueue.shift() || { mode: "success", user: primaryUser };
         const valid = url.searchParams.get("client_id") === clientId && redirectUri === expectedCallbackUrl &&
           typeof state === "string" && state.length >= 32 && typeof challenge === "string" && challenge.length >= 32 &&
           url.searchParams.get("code_challenge_method") === "S256";
@@ -436,6 +481,8 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
           repositoryId: wrongTokenMode ? -1 : repositoryId,
           permissions: { contents: "read" },
           expiresAt: Date.now() + 60 * 60_000,
+          issuedSequence: ++installationTokenSequence,
+          useCount: 0,
         });
         observe(method, pathname, "app_jwt", 201, {
           outcome: "installation_token_issued",
@@ -614,13 +661,34 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
   environment.HOSTLET_GITHUB_WEB_ORIGIN = baseUrl;
   environment.HOSTLET_GITHUB_API_ORIGIN = baseUrl;
 
-  async function close() {
-    if (closed) return;
-    closed = true;
+  let listenerPaused = false;
+  async function pause() {
+    if (closed) throw new Error("the GitHub fixture has been finalized");
+    if (listenerPaused) return;
     await new Promise((resolveClose, rejectClose) => {
       server.close((error) => error ? rejectClose(error) : resolveClose());
-      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
     });
+    listenerPaused = true;
+  }
+
+  async function resume() {
+    if (closed) throw new Error("the GitHub fixture has been finalized");
+    if (!listenerPaused) return;
+    await new Promise((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(address.port, "127.0.0.1", () => {
+        server.off("error", rejectListen);
+        resolveListen();
+      });
+    });
+    listenerPaused = false;
+  }
+
+  async function close() {
+    if (closed) return;
+    await pause();
+    closed = true;
   }
 
   context.registerCleanup?.("stop owned synthetic GitHub provider", close);
@@ -633,8 +701,8 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     oauthQueue.length = 0;
     deniedRepositories.clear();
     usersWithInstallation.clear();
-    usersWithInstallation.add(DEFAULT_USER.id);
-    usersWithInstallation.add(SECOND_USER.id);
+    usersWithInstallation.add(primaryUser.id);
+    usersWithInstallation.add(secondaryUser.id);
     grantedRepositoryIds = new Set(repositories.keys());
     repositories.clear();
     for (const repository of originalRepositories) repositories.set(repository.id, cloneSafe(repository));
@@ -648,6 +716,7 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     binaryBlob = false;
     blobShaMismatch = false;
     extraTreeEntries = [];
+    installationTokenSequence = 0;
     unexpectedRequests = 0;
     rateLimits.length = 0;
     delays.length = 0;
@@ -674,6 +743,32 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     installationRevoked = false;
   }
 
+  function setUnsafeTreeCase(kind) {
+    const blob = (path, mode, content) => Object.freeze({
+      path,
+      mode,
+      type: "blob",
+      sha: gitObjectSha("blob", content),
+      size: Buffer.byteLength(content),
+      content,
+    });
+    if (["traversal", "malformed_path", "unsafe_path"].includes(kind)) extraTreeEntries = [blob("../owned-tree-escape.txt", "100644", "owned traversal sentinel\n")];
+    else if (["symlink", "120000_symlink", "source_symlink"].includes(kind)) extraTreeEntries = [blob("owned-source-link", "120000", "../../outside-owned-source")];
+    else if (["submodule", "160000_submodule", "source_submodule"].includes(kind)) {
+      const commit = "tree 0000000000000000000000000000000000000000\n\nowned submodule sentinel\n";
+      extraTreeEntries = [Object.freeze({ path: "owned-submodule", mode: "160000", type: "commit", sha: gitObjectSha("commit", commit) })];
+    } else if (kind === "special_file") extraTreeEntries = [blob("owned-device", "020000", "owned special-file sentinel\n")];
+    else if (["duplicate", "duplicates"].includes(kind)) {
+      const entry = blob("owned-duplicate.txt", "100644", "owned duplicate sentinel\n");
+      extraTreeEntries = [entry, Object.freeze({ ...entry })];
+    } else if (["case_collision", "case_collisions"].includes(kind)) {
+      extraTreeEntries = [
+        blob("Owned-Case.txt", "100644", "owned upper-case sentinel\n"),
+        blob("owned-case.txt", "100644", "owned lower-case sentinel\n"),
+      ];
+    } else throw new Error(`unknown unsafe tree fixture case: ${kind}`);
+  }
+
   const controls = Object.freeze({
     reset,
     resetObservations() {
@@ -687,9 +782,9 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     },
     webhookSecret() { return webhookSecret; },
     setCallbackUrl: setCallback,
-    authorizeNext({ mode = "success", userId = DEFAULT_USER.id, login } = {}) {
+    authorizeNext({ mode = "success", userId = primaryUser.id, login } = {}) {
       if (!new Set(["success", "deny", "expired"]).has(mode)) throw new Error(`unsupported OAuth fixture mode: ${mode}`);
-      const user = { id: Number(userId), login: login || (Number(userId) === SECOND_USER.id ? SECOND_USER.login : DEFAULT_USER.login) };
+      const user = { id: Number(userId), login: login || (Number(userId) === secondaryUser.id ? secondaryUser.login : primaryUser.login) };
       oauthQueue.push({ mode, user });
     },
     revokeInstallation(installationId = fixture.installation.id) {
@@ -726,6 +821,15 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     expireUserToken() { for (const token of userTokens.values()) token.expiresAt = 0; },
     revokeUserTokens() { for (const token of userTokens.values()) token.revoked = true; },
     expireInstallationTokens() { for (const token of installationTokens.values()) token.expiresAt = 0; },
+    issuedInstallationToken(repositoryId) {
+      const issued = latestInstallationToken(repositoryId);
+      if (!issued) throw new Error("no actual installation token has been issued for the requested repository");
+      const [value, token] = issued;
+      return Object.freeze({ value, repositoryId: token.repositoryId, useCount: token.useCount });
+    },
+    verifyIssuedInstallationCredential,
+    verifyIssuedInstallationToken: verifyIssuedInstallationCredential,
+    assertIssuedInstallationCredential(options = {}) { return verifyIssuedInstallationCredential({ ...options, minimumUses: options.minimumUses ?? 1 }); },
     setWrongTokenMode(value = true) { wrongTokenMode = Boolean(value); },
     setUserIdentityOverride(user) { userIdentityOverride = user ? { id: Number(user.id), login: String(user.login) } : null; },
     setTreeTruncated(value = true) { treeTruncated = Boolean(value); },
@@ -763,6 +867,12 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
       });
     },
     clearExtraTreeEntries() { extraTreeEntries = []; },
+    setUnsafeTreeCase,
+    setMalformedSourcePath() { setUnsafeTreeCase("traversal"); },
+    setSourceSymlink() { setUnsafeTreeCase("symlink"); },
+    setSourceSubmodule() { setUnsafeTreeCase("submodule"); },
+    setDuplicateSourcePaths() { setUnsafeTreeCase("duplicate"); },
+    setCaseCollisionSourcePaths() { setUnsafeTreeCase("case_collision"); },
     setOversize({ repositoryId, path, bytes }) {
       if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new Error("oversize bytes must be a positive integer");
       oversize.set(`${Number(repositoryId)}:${path}`, bytes);
@@ -834,6 +944,8 @@ export async function startGitHubFixture(context, { callbackUrl } = {}) {
     safeObservations: () => Object.freeze(observations.map((item) => Object.freeze(cloneSafe(item)))),
     repositories: safeRepositories,
     sentinels,
+    pause,
+    resume,
     close,
   });
 }

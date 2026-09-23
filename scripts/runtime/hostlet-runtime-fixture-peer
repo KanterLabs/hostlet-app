@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+[[ $# == 6 && "$1" == --request-file && "$3" == --request-sha256 && "$5" == --state-root ]] || { echo fixture_peer_usage >&2; exit 2; }
+request_source=$2; request_sha256=$4; state_root=$6
+[[ "$request_source" == /* && "$state_root" == /* && "$request_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo fixture_peer_usage >&2; exit 2; }
+[[ -d "$state_root" && ! -L "$state_root" && "$(cat "$state_root/.hostlet-runtime-owned")" == hostlet-runtime-state-v1 ]] || { echo fixture_peer_root_not_owned >&2; exit 2; }
+request=$(mktemp "$state_root/.fixture-peer-request.XXXXXX"); trap 'rm -f -- "$request"' EXIT
+cp --reflink=never -- "$request_source" "$request"; chmod 0400 "$request"
+[[ "$(sha256sum "$request" | awk '{print $1}')" == "$request_sha256" ]] || { echo fixture_peer_request_digest_mismatch >&2; exit 2; }
+jq -e '.schema=="hostlet.runtime.fixture-peer-request/v1" and (.operation=="attach_fixture_service" or .operation=="detach_fixture_service") and (.fixture_kind=="http" or .fixture_kind=="dns")' "$request" >/dev/null || { echo fixture_peer_request_invalid >&2; exit 2; }
+op=$(jq -r .operation "$request"); allocation=$(jq -r .allocation_id "$request"); generation=$(jq -r .runtime_generation "$request"); fence=$(jq -r .runtime_fence "$request"); container=$(jq -r .container_id "$request"); run_id=$(jq -r .run_id "$request"); fixture=$(jq -r .fixture_id "$request"); kind=$(jq -r .fixture_kind "$request"); port=$(jq -r .service_port "$request")
+for value in "$allocation" "$run_id" "$fixture"; do [[ "$value" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo fixture_peer_identity_invalid >&2; exit 2; }; done
+[[ "$container" =~ ^[0-9a-f]{64}$ && "$generation" =~ ^[1-9][0-9]*$ && "$fence" =~ ^[1-9][0-9]*$ && "$port" =~ ^[1-9][0-9]*$ && "$port" -le 65535 ]] || { echo fixture_peer_identity_invalid >&2; exit 2; }
+[[ "$kind" == http || "$port" == 53 ]] || { echo fixture_peer_port_invalid >&2; exit 2; }
+key=$(printf '%s:%s:%s' "$allocation" "$generation" "$fixture" | sha256sum | cut -c1-10); iface="f${key}"; gateway_iface="x${key}"; gateway_ns="hostlet-gateway-${allocation}-${generation}"; generation_root="$state_root/$allocation/$generation"; ownership="$generation_root/OWNERSHIP.json"; peer_record="$generation_root/fixture-peer-${fixture}.json"
+[[ -f "$ownership" && ! -L "$ownership" && -e "/run/netns/$gateway_ns" ]] || { echo fixture_peer_runtime_not_owned >&2; exit 1; }
+jq -e --arg id "$allocation" --argjson generation "$generation" --argjson fence "$fence" '.allocation_id==$id and .generation==$generation and .fence==$fence' "$ownership" >/dev/null || { echo fixture_peer_runtime_identity_mismatch >&2; exit 1; }
+[[ "$(stat -Lc %i "/run/netns/$gateway_ns")" == "$(jq -r .gateway_namespace_inode "$ownership")" ]] || { echo fixture_peer_namespace_mismatch >&2; exit 1; }
+inspect=$(docker inspect "$container")
+[[ "$(jq -r '.[0].Id' <<<"$inspect")" == "$container" && "$(jq -r '.[0].State.Running' <<<"$inspect")" == true && "$(jq -r '.[0].HostConfig.NetworkMode' <<<"$inspect")" == none ]] || { echo fixture_peer_container_invalid >&2; exit 1; }
+jq -e --arg run "$run_id" --arg fixture "$fixture" --arg kind "$kind" --arg port "$port" '.[0].Config.Labels["io.hostlet.scope"]=="m3-e2e" and .[0].Config.Labels["io.hostlet.run-id"]==$run and .[0].Config.Labels["io.hostlet.resource"]=="runtime-fixture-service" and .[0].Config.Labels["io.hostlet.fixture-id"]==$fixture and .[0].Config.Labels["io.hostlet.fixture-kind"]==$kind and .[0].Config.Labels["io.hostlet.fixture-port"]==$port' <<<"$inspect" >/dev/null || { echo fixture_peer_container_labels_invalid >&2; exit 1; }
+pid=$(jq -r '.[0].State.Pid' <<<"$inspect")
+if [[ "$op" == attach_fixture_service ]]; then
+  [[ ! -e "$peer_record" ]] || { echo fixture_peer_already_attached >&2; exit 1; }
+  endpoint4=$(jq -r .endpoint_ipv4 "$request"); endpoint6=$(jq -r .endpoint_ipv6 "$request"); gateway4=$(jq -r .gateway_ipv4 "$request"); gateway6=$(jq -r .gateway_ipv6 "$request")
+  [[ "$endpoint4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$gateway4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$endpoint6" =~ ^[0-9a-f:]+$ && "$gateway6" =~ ^[0-9a-f:]+$ ]] || { echo fixture_peer_endpoint_invalid >&2; exit 2; }
+  python3 - "$endpoint4" "$gateway4" "$endpoint6" "$gateway6" <<'PY' || { echo fixture_peer_endpoint_invalid >&2; exit 2; }
+import ipaddress, sys
+a4,g4,a6,g6=map(ipaddress.ip_address,sys.argv[1:]); assert a4 != g4 and a6 != g6
+assert ipaddress.ip_network(f"{a4}/30",False) == ipaddress.ip_network(f"{g4}/30",False)
+assert ipaddress.ip_network(f"{a6}/126",False) == ipaddress.ip_network(f"{g6}/126",False)
+PY
+  if [[ "$kind" == http ]]; then
+    jq -e --arg v4 "$endpoint4" --arg v6 "$endpoint6" --argjson port "$port" '. as $owned | [$v4,$v6] | all(.[]; . as $address | any($owned.outbound_destinations[]; .address==$address and .port==$port and .protocol=="tcp"))' "$ownership" >/dev/null || { echo fixture_peer_endpoint_not_allowed >&2; exit 1; }
+  else
+    jq -e --arg v4 "$endpoint4" --arg v6 "$endpoint6" '. as $owned | [$v4,$v6] | all(.[]; . as $address | (["tcp","udp"] | all(.[]; . as $protocol | any($owned.outbound_destinations[]; .address==$address and .port==53 and .protocol==$protocol))))' "$ownership" >/dev/null || { echo fixture_peer_endpoint_not_allowed >&2; exit 1; }
+  fi
+  app4=$(jq -r .application_ipv4 "$ownership"); app6=$(jq -r .application_ipv6 "$ownership")
+  if nsenter -t "$pid" -n ip -o address show | grep -Fq " ${endpoint4}/" || nsenter -t "$pid" -n ip -o -6 address show | grep -Fq " ${endpoint6}/"; then echo fixture_peer_endpoint_collision >&2; exit 1; fi
+  ip link add "$gateway_iface" type veth peer name "$iface"; trap 'ip -n "$gateway_ns" link del "$gateway_iface" 2>/dev/null || ip link del "$gateway_iface" 2>/dev/null || true' ERR
+  ip link set "$gateway_iface" netns "$gateway_ns"; ip link set "$iface" netns "$pid"
+  nsenter -t "$pid" -n ip addr add "${endpoint4}/30" dev "$iface"; nsenter -t "$pid" -n ip -6 addr add "${endpoint6}/126" dev "$iface"; nsenter -t "$pid" -n ip link set "$iface" up
+  ip -n "$gateway_ns" addr add "${gateway4}/30" dev "$gateway_iface"; ip -n "$gateway_ns" -6 addr add "${gateway6}/126" dev "$gateway_iface"; ip -n "$gateway_ns" link set "$gateway_iface" up
+  nsenter -t "$pid" -n ip route add "${app4}/32" via "$gateway4" dev "$iface"; nsenter -t "$pid" -n ip -6 route add "${app6}/128" via "$gateway6" dev "$iface"
+  jq -cn --arg container "$container" --argjson pid "$pid" --arg fixture "$fixture" --arg kind "$kind" --arg iface "$iface" --arg gateway_iface "$gateway_iface" --arg endpoint4 "$endpoint4" --arg endpoint6 "$endpoint6" --arg app4 "$app4" --arg app6 "$app6" '{container_id:$container,pid:$pid,fixture_id:$fixture,fixture_kind:$kind,interface:$iface,gateway_interface:$gateway_iface,endpoint_ipv4:$endpoint4,endpoint_ipv6:$endpoint6,application_routes:[$app4+"/32",$app6+"/128"]}' > "$peer_record"
+  trap - ERR
+  jq -cn --arg allocation "$allocation" --arg fixture "$fixture" '{schema:"hostlet.runtime.fixture-peer-receipt/v1",operation:"attach_fixture_service",result:"passed",allocation_id:$allocation,fixture_id:$fixture}'
+else
+  [[ -f "$peer_record" && ! -L "$peer_record" ]] || { echo fixture_peer_record_missing >&2; exit 1; }
+  jq -e --arg container "$container" --arg fixture "$fixture" '.container_id==$container and .fixture_id==$fixture' "$peer_record" >/dev/null || { echo fixture_peer_record_mismatch >&2; exit 1; }
+  ip -n "$gateway_ns" link del "$gateway_iface"; rm -f -- "$peer_record"
+  jq -cn --arg allocation "$allocation" --arg fixture "$fixture" '{schema:"hostlet.runtime.fixture-peer-receipt/v1",operation:"detach_fixture_service",result:"passed",allocation_id:$allocation,fixture_id:$fixture}'
+fi

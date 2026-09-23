@@ -1,0 +1,1 @@
+{"name":"@hostlet-owned/api-v2","version":"2.0.0","private":true,"type":"module","scripts":{"build":"node build.mjs","start":"node dist/server.mjs"},"dependencies":{"pg":"8.23.0"}}

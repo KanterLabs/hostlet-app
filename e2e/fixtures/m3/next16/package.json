@@ -1,0 +1,9 @@
+{
+  "name": "hostlet-owned-next16-standalone",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "scripts": { "build": "next build && node assemble-standalone.mjs", "start": "node .next/standalone/server.js" },
+  "dependencies": { "next": "16.3.5", "react": "19.3.0", "react-dom": "19.3.0" }
+}

@@ -140,6 +140,103 @@ export type PreviewRevision = {
   created_at: string;
 };
 
+export type ApprovalTarget =
+  | { type: "narrative"; field: "display_name" | "headline" | "introduction" | "target_role" | "skills" | "project_title" | "project_purpose"; project_reference_id: string | null }
+  | { type: "contact"; contact_id: string }
+  | { type: "link"; link_id: string; project_reference_id: string | null }
+  | { type: "screenshot"; project_reference_id: string; evidence_id: string }
+  | { type: "contribution"; project_reference_id: string }
+  | { type: "technical_decision"; project_reference_id: string; decision_id: string }
+  | { type: "status"; project_reference_id: string; field: "deployment_timestamp" | "availability" | "release_identifier" | "source_commit" | "demo_readiness" };
+
+export type ApprovalRequirement = {
+  target: ApprovalTarget;
+  value: unknown;
+  value_digest: string;
+};
+
+export type ReviewDeploymentFact = {
+  project_reference_id: string;
+  hosted_project_id: string;
+  source_release_id: string;
+  source_deployment_id: string;
+  managed_demo_url: string;
+  deployed_at: string;
+  availability: "available" | "degraded" | "demo_offline";
+  status_label: string;
+  availability_observed_at: string;
+  demo_access_revision: number;
+  public_source_commit: string | null;
+};
+
+export type PublicationReview = {
+  draft_revision_id: string;
+  draft_revision: number;
+  review_digest: string;
+  snapshot: PortfolioDraft;
+  preview_context: PreviewAppearance;
+  requirements: ApprovalRequirement[];
+  deployment_facts: ReviewDeploymentFact[];
+};
+
+export type RefreshField = "managed_demo_destination" | "deployment_timestamp" | "availability_label";
+
+export type ReadinessEvent = {
+  id: string;
+  project_reference_id: string;
+  fact_revision_id: string;
+  state: "needs_recheck" | "ready_to_share" | string;
+  reason: string | null;
+  attestation: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type AuthorizedFactRevision = {
+  id: string;
+  project_reference_id: string;
+  revision: number;
+  revision_kind: string;
+  source_release_id: string;
+  source_deployment_id: string;
+  facts: Record<string, unknown>;
+  refresh_scope: RefreshField[];
+  created_at: string;
+};
+
+export type ApprovedRevision = {
+  id: string;
+  source_draft_revision_id: string;
+  source_draft_revision: number;
+  previous_approved_revision_id: string | null;
+  review_digest: string;
+  snapshot: PortfolioDraft;
+  preview_context: PreviewAppearance;
+  requirements: ApprovalRequirement[];
+  approvals: Array<{ target: ApprovalTarget; value_digest: string }>;
+  deployment_facts: AuthorizedFactRevision[];
+  readiness: ReadinessEvent[];
+  approved_at: string;
+};
+
+export type ApprovalEvidence =
+  | { type: "entire_revision"; review_digest: string }
+  | { type: "individual_fields"; fields: Array<{ target: ApprovalTarget; value_digest: string }> };
+
+export type PortfolioPublication = {
+  id: string;
+  approved_revision_id: string;
+  slug: string;
+  cause: "owner_request" | "fact_refresh" | string;
+  state: "queued" | "publishing" | "published" | "failed" | "superseded" | string;
+  document_digest: string;
+  artifact_digest: string | null;
+  pointer_generation: number | null;
+  failure_code: string | null;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+};
+
 export type DetailedResponse<T> = { payload: T; etag: string | null };
 
 export type GitHubSource = {
@@ -315,6 +412,34 @@ export const api = {
       headers: { "If-Match": ifMatch, "Idempotency-Key": key },
       body: JSON.stringify(body),
     }, token),
+  publicationReview: (token: string, draftRevisionId: string) =>
+    request<PublicationReview>(`/v1/portfolio/publication-review?draft_revision_id=${encodeURIComponent(draftRevisionId)}`, {}, token),
+  approveRevision: (
+    token: string,
+    body: {
+      draft_revision_id: string;
+      review_digest: string;
+      approval: ApprovalEvidence;
+      refresh_authorizations: Array<{ project_reference_id: string; fields: RefreshField[] }>;
+    },
+    key: string,
+  ) => request<ApprovedRevision>("/v1/portfolio/approved-revisions", {
+    method: "POST",
+    headers: { "Idempotency-Key": key },
+    body: JSON.stringify(body),
+  }, token),
+  latestApprovedRevision: (token: string) =>
+    request<ApprovedRevision>("/v1/portfolio/approved-revisions/latest", {}, token),
+  createPublication: (token: string, approvedRevisionId: string, slug: string, key: string) =>
+    request<PortfolioPublication>("/v1/portfolio/publications", {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body: JSON.stringify({ approved_revision_id: approvedRevisionId, slug }),
+    }, token),
+  latestPublication: (token: string) =>
+    request<PortfolioPublication>("/v1/portfolio/publications/latest", {}, token),
+  publication: (token: string, publicationId: string) =>
+    request<PortfolioPublication>(`/v1/portfolio/publications/${encodeURIComponent(publicationId)}`, {}, token),
 };
 
 export function idempotencyKey(prefix: string): string {

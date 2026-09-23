@@ -1,11 +1,18 @@
-//! Builder supervisor and M1 foundation bookkeeping worker.
+//! Builder supervisor, M1 bookkeeping worker, and M3 disposable-VM build worker.
 
 use std::io::Write;
 
 use hostlet_contracts::{PROTOCOL_VERSION, validate_protocol_version};
 
+mod artifact;
+mod build_protocol;
+mod digest;
+pub mod guest;
+mod project_build;
+mod vm;
 mod worker;
 
+pub use project_build::ProjectBuildOptions;
 pub use worker::WorkerOptions;
 
 pub const SERVICE_NAME: &str = "hostlet-builder";
@@ -16,6 +23,7 @@ pub enum Action {
     CheckConfig,
     Run,
     Worker(WorkerOptions),
+    ProjectBuildWorker(ProjectBuildOptions),
 }
 
 pub fn parse_action(args: &[String]) -> Result<Action, String> {
@@ -26,6 +34,11 @@ pub fn parse_action(args: &[String]) -> Result<Action, String> {
         [command, rest @ ..] if command == "worker" => worker::parse_options(rest)
             .map(Action::Worker)
             .map_err(|_| worker::USAGE.to_owned()),
+        [command, rest @ ..] if command == "project-build-worker" => {
+            project_build::parse_options(rest)
+                .map(Action::ProjectBuildWorker)
+                .map_err(|_| project_build::USAGE.to_owned())
+        }
         [flag] => Err(format!(
             "unknown argument {flag}; use --version or --check-config"
         )),
@@ -68,6 +81,13 @@ pub fn execute<W: Write, E: Write>(args: &[String], output: &mut W, error: &mut 
             1
         }
         Action::Worker(options) => match worker::run(options, output) {
+            Ok(()) => 0,
+            Err(failure) => {
+                let _ = writeln!(error, "{}", failure.safe_message());
+                failure.exit_code()
+            }
+        },
+        Action::ProjectBuildWorker(options) => match project_build::run(options, output) {
             Ok(()) => 0,
             Err(failure) => {
                 let _ = writeln!(error, "{}", failure.safe_message());

@@ -122,7 +122,10 @@ function tlsRequest({ hostname, port, ca, path = "/", method = "GET", headers = 
   return new Promise((resolve, reject) => {
     const request = https.request({
       hostname, port, path, method, headers, ca: readFileSync(ca), servername: hostname,
-      lookup: (_name, _options, callback) => callback(null, "127.0.0.1", 4),
+      lookup: (_name, options, callback) => {
+        if (options?.all === true) return callback(null, [{ address: "127.0.0.1", family: 4 }]);
+        return callback(null, "127.0.0.1", 4);
+      },
       timeout: 8_000,
     }, (response) => {
       const chunks = []; let size = 0;

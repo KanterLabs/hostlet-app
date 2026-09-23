@@ -31,7 +31,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CONTAINER_ID = /^[0-9a-f]{64}$/;
 const DATABASE_WORKER_ID = "m3-database-1";
 const MAX_DRAIN_OPERATIONS = 256;
+const DATABASE_WORKER_TIMEOUT_MS = 180_000;
+const LARGE_ARCHIVE_WORKER_TIMEOUT_MS = 900_000;
 const PROVISIONING_EXPECTATION = "two admitted projects provision separate PostgreSQL 18 databases through durable intent and a real worker; grants, limits, isolation, retries, ownership, and actual application read/write hold";
+
+function requireWorkerTimeout(timeoutMs) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > LARGE_ARCHIVE_WORKER_TIMEOUT_MS) {
+    throw new Error("database worker timeout must be a bounded positive integer");
+  }
+  return timeoutMs;
+}
 
 function safeObserved(error) {
   return error instanceof ScenarioExpectationError ? error.observed : { failed_checks: 1 };
@@ -525,7 +534,8 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     });
   }
 
-  async function runWorker(mode, label, { environment = {}, allowFailure = false, fixtureBootstrap = false, kinds = null } = {}) {
+  async function runWorker(mode, label, { environment = {}, allowFailure = false, fixtureBootstrap = false, kinds = null, timeoutMs = DATABASE_WORKER_TIMEOUT_MS } = {}) {
+    requireWorkerTimeout(timeoutMs);
     if (kinds !== null && kinds !== undefined &&
         (!Array.isArray(kinds) || kinds.length === 0 ||
           kinds.some((kind) => typeof kind !== "string" || kind.length === 0) ||
@@ -536,7 +546,7 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     const kindFlags = kinds?.flatMap((kind) => ["--kind", kind]) ?? [];
     const result = await context.runCommand(`M3 database worker ${label}`, workerBinary, [
       "worker", "--control-url", m3.workerUrl, "--worker-id", DATABASE_WORKER_ID, flag, ...kindFlags,
-    ], { env: { ...workerEnvironment({ fixtureBootstrap }), ...environment }, timeoutMs: 180_000, logName: `m3-data-worker-${String(++sequence).padStart(3, "0")}-${label}.log` });
+    ], { env: { ...workerEnvironment({ fixtureBootstrap }), ...environment }, timeoutMs, logName: `m3-data-worker-${String(++sequence).padStart(3, "0")}-${label}.log` });
     if (result.code !== 0 && !allowFailure) throw new Error(`database worker failed during ${label}`);
     return { code: result.code, events: parseWorkerEvents(result.stdout) };
   }
@@ -648,7 +658,8 @@ export function createM3DataStage(m3, { mainProject } = {}) {
       WHERE kind=${sqlString(expectedFailure.kind)} AND operation_key=${sqlString(expectedFailure.migrationId)};`);
   }
 
-  async function drain(label, { fixtureBootstrap = false, expectedFailure = null, kinds = null } = {}) {
+  async function drain(label, { fixtureBootstrap = false, expectedFailure = null, kinds = null, workerTimeoutMs = DATABASE_WORKER_TIMEOUT_MS } = {}) {
+    requireWorkerTimeout(workerTimeoutMs);
     if (kinds !== null && kinds !== undefined &&
         (!Array.isArray(kinds) || kinds.length === 0 ||
           kinds.some((kind) => typeof kind !== "string" || kind.length === 0) ||
@@ -677,7 +688,7 @@ export function createM3DataStage(m3, { mainProject } = {}) {
         throw new Error(`${label} expected failure did not identify one exact queued migration trial`);
       }
       const result = await runWorker("once", `${label}-operation-${attempt + 1}`, {
-        fixtureBootstrap, allowFailure: expectedFailure !== null, kinds,
+        fixtureBootstrap, allowFailure: expectedFailure !== null, kinds, timeoutMs: workerTimeoutMs,
       });
       const { events } = result;
       const claimed = events.find((event) => event.event === "tenant_database_operation_claimed");
@@ -1260,6 +1271,12 @@ export function createM3DataStage(m3, { mainProject } = {}) {
       async () => {
         const fixture = databases[1];
         if (!fixture) throw new Error("storage overage requires the isolated second tenant database");
+        writeFileSync(join(context.artifactDir, "m3-data-large-archive-timeout.json"), `${JSON.stringify({
+          schema: "hostlet.m3-data-large-archive-timeout/v1",
+          default_worker_timeout_ms: DATABASE_WORKER_TIMEOUT_MS,
+          large_archive_worker_timeout_ms: LARGE_ARCHIVE_WORKER_TIMEOUT_MS,
+          drains: ["storage-over-limit-observation", "over-limit-portable-export"],
+        }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
         const migration = await m3.postgres.psqlJson("m3-data-storage-migration-role", `SELECT json_build_object('role_ref',role_ref)
           FROM tenant_database_credentials WHERE tenant_database_id=${sqlString(fixture.record.id)} AND database_generation=${sqlString(fixture.record.generation)}
             AND purpose='migration' AND status='active';`);
@@ -1284,7 +1301,7 @@ export function createM3DataStage(m3, { mainProject } = {}) {
         expectScenario(measuredBefore.code === 0 && Number.isSafeInteger(physicalBytes) && physicalBytes > 1_073_741_824,
           "physical PostgreSQL size crosses the canonical limit", { physicalBytes });
         m3.policyClock.advance({ now: new Date(Date.parse(m3.policyClock.current().now) + 86_400_000).toISOString() });
-        await drain("storage-over-limit-observation");
+        await drain("storage-over-limit-observation", { workerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS });
         const current = await m3.ownerHTTP(`/v1/projects/${fixture.project.projectId}/services/${fixture.project.databaseService.id}/tenant-database`);
         assertStatus(current, 200, "read-only over-limit database state");
         expectScenario(current.payload.growth_mode === "read_only_over_limit" && current.payload.measured_storage_bytes > current.payload.storage_limit_bytes,
@@ -1298,12 +1315,13 @@ export function createM3DataStage(m3, { mainProject } = {}) {
           method: "POST", headers: mutationHeaders(key("over-limit-export"), current.payload.revision), body: {},
         });
         assertStatus(exported, 201, "over-limit portable export intent");
-        await drain("over-limit-portable-export");
+        await drain("over-limit-portable-export", { workerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS });
         const receipt = await m3.ownerHTTP(`/v1/projects/${fixture.project.projectId}/services/${fixture.project.databaseService.id}/tenant-database/exports/${exported.payload.id}`);
         assertStatus(receipt, 200, "over-limit portable export receipt");
         expectScenario(receipt.payload.state === "usable" && receipt.payload.plaintext_bytes > 0,
           "portable export remains usable after the write freeze", receipt.payload);
-        return { physicalBytes, growthMode: current.payload.growth_mode, readObserved: true, writeDenied: true, exportPreserved: true };
+        return { physicalBytes, growthMode: current.payload.growth_mode, readObserved: true, writeDenied: true, exportPreserved: true,
+          largeArchiveWorkerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS };
       });
   }
 

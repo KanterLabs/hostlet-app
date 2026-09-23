@@ -790,6 +790,7 @@ async function wrongIdentityManifestProbe(m3, setup, prepared, queued, label) {
 function createBuildUnitGuard(m3, setup) {
   const jobs = new Map();
   let probeSequence = 0;
+  const maxSocketMarkerBytes = 512;
   const command = (name, executable, args) => m3.context.runCommand(name, executable, args, {
     env: m3.componentEnvironment("build"), timeoutMs: 15_000,
     logName: `m3-build-unit-guard-${++probeSequence}.log`, cleanup: true,
@@ -809,7 +810,7 @@ function createBuildUnitGuard(m3, setup) {
     const markerMetadata = lstatSync(marker);
     const expectedMarker = `hostlet-build-sockets/v1\njob=${jobId}\nattempt=${attemptId}\n`;
     if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink() || markerMetadata.uid !== process.getuid() ||
-        (markerMetadata.mode & 0o777) !== 0o600 || readFileSync(marker, "utf8") !== expectedMarker) {
+        (markerMetadata.mode & 0o777) !== 0o600 || markerMetadata.size > maxSocketMarkerBytes || readFileSync(marker, "utf8") !== expectedMarker) {
       throw new Error(`refusing cleanup of build socket directory with invalid marker: ${directory}`);
     }
     const socketNames = new Set(["input.sock", "output.sock", "console.sock"]);
@@ -856,7 +857,7 @@ function createBuildUnitGuard(m3, setup) {
         if (error.code === "ENOENT") continue;
         throw error;
       }
-      if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink() || markerMetadata.uid !== process.getuid()) continue;
+      if (!markerMetadata.isFile() || markerMetadata.isSymbolicLink() || markerMetadata.uid !== process.getuid() || markerMetadata.size > maxSocketMarkerBytes) continue;
       const expectedMarker = `hostlet-build-sockets/v1\njob=${jobId}\nattempt=${attemptId}\n`;
       const markerValue = readFileSync(marker, "utf8");
       if (markerValue === expectedMarker) {
@@ -914,8 +915,15 @@ function createBuildUnitGuard(m3, setup) {
       }));
       if (shown.code !== 0) throw new Error(`failed to inspect exact run-owned systemd unit: ${unit}`);
       const bindPaths = properties.BindPaths?.trim().split(/\s+/).filter(Boolean) ?? [];
+      const expectedBindPaths = [attemptDir, socketDir];
+      const bindPathsMatch = bindPaths.length === expectedBindPaths.length && bindPaths.every((value, index) => {
+        if (value === expectedBindPaths[index]) return true;
+        const fields = value.split(":");
+        return fields.length === 3 && fields[0] === expectedBindPaths[index] &&
+          fields[1] === expectedBindPaths[index] && fields[2] === "rbind";
+      });
       if (properties.Description !== `Hostlet build job ${jobId} attempt ${attemptId}` ||
-          bindPaths.length !== 2 || bindPaths[0] !== attemptDir || bindPaths[1] !== socketDir ||
+          !bindPathsMatch ||
           properties.KillMode !== "control-group" ||
           !new Set(["615000000", "10min 15s"]).has(properties.RuntimeMaxUSec) ||
           !new Set(["5000000", "5s"]).has(properties.TimeoutStopUSec)) {

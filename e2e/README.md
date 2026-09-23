@@ -1,19 +1,43 @@
 # Hostlet E2E runner
 
-`make e2e` runs the API/web shell scenarios and the M2 onboarding module. The
+## Current M3 journey
+
+`make e2e` runs the current M3 journey through `make e2e-m3`.
+`make e2e-gate` aliases `make e2e-m3-gate` and requires a clean source tree.
+These use real disposable build VMs, isolated runtimes, tenant PostgreSQL,
+coordinated releases, owner approval, and independent static publishing.
+Follow [M3-E2E.md](../docs/M3-E2E.md) for the required owned assets and host
+prerequisites and [M3-SCENARIOS.md](../docs/M3-SCENARIOS.md) for acceptance.
+A dirty run is diagnostic evidence; M3 still requires two clean full runs on one
+implementation commit, including `E2E_ARGS='--rebuild-retained'` for one run.
+M3 remains pending until its gate receipts and handoff are complete.
+
+`make e2e-scaffold` is the smaller API/web shell check. `make e2e-failure`
+intentionally corrupts a shell oracle to verify failure evidence. Neither
+command completes a product milestone.
+
+## Historical M2 runner
+
+The M2-specific commands and modules below apply only in a full-history isolated
+checkout of its tested implementation, `82ecd6d473335d563325989a7ecfaf040a7e8b4e`.
+The current schema-6 binary cannot satisfy the historical schema-4-to-5 upgrade
+oracle. Do not point that suite at the current binary or weaken its schema checks.
+
+In that M2 checkout, `make e2e` runs the API/web shell scenarios and the
+M2 onboarding module. The
 shell scenarios start real Rust and Vite processes on run-owned loopback ports,
 call HTTP endpoints, load Chromium, then stop the API to prove the offline UI.
 The onboarding module uses disposable PostgreSQL 18, authenticated HTTP, an
 owned synthetic GitHub HTTP provider and actual dump/restore commands. It does
 not replace Hostlet internals with mocks or execute repository/customer code.
-The current acceptance inventory is
+The M2 acceptance inventory is
 [M2-SCENARIOS.md](../docs/M2-SCENARIOS.md). The [M2 handoff](../docs/M2-HANDOFF.md)
 records two clean acceptance runs with 48 assertions each, verified receipts,
 exact tested source and limits. A local dirty run is diagnostic evidence only.
 
 [The M1 handoff](../docs/M1-HANDOFF.md) is the historical acceptance record. Its
 clean runs tested exactly
-`5d72bd0b5af60576d6e4bd71d932847cfe1976eb`. The schema-5 HEAD cannot run the
+`5d72bd0b5af60576d6e4bd71d932847cfe1976eb`. The current schema-6 HEAD cannot run the
 old `foundation.mjs` relationship as though its current binary were schema 4;
 rerun M1 only from a full-history isolated checkout of that tested commit.
 
@@ -28,7 +52,7 @@ a nonempty, complete, path-safe receipt whose recorded file hashes verify. A
 completed run with a valid receipt is left unchanged, and recovery preserves
 the pre-recovery manifest and any provisional receipt for audit.
 
-## Commands
+## Historical M2 commands
 
 ```sh
 make e2e
@@ -118,9 +142,9 @@ a harness-tree digest. Dirty runs are diagnostic evidence; their hashes identify
 changes but do not preserve those changes. Reproducible gate evidence comes from
 a clean committed tree and an unchanged source check at the end of the run.
 
-## Current M2 onboarding modules
+## Historical M2 onboarding modules
 
-`onboarding.mjs` composes all current M2 modules into one persistence history.
+`onboarding.mjs` composes all M2 modules into one persistence history.
 Together with the scaffold and runner-integrity checks, the runner now requires
 47 baseline assertions, including the four private-preview assertions. A clean
 gate adds the unchanged-source assertion for 48 total. Both clean M2 repeats
@@ -163,7 +187,7 @@ full-history worktree.
 | `browser-offline` | Stop and reap the API while leaving Vite running, then load a fresh Chromium page. | Rendered DOM reports three Offline states and the three endpoint-specific unreachable messages. | Terminate Vite and delete browser profiles; retain only sanitized evidence. |
 
 `make e2e-scaffold` runs only this smaller API/web shell surface. The M1
-historical runner and current M2 onboarding runner add their own PostgreSQL and
+historical runner and M2 onboarding runner add their own PostgreSQL and
 external-boundary fixtures while retaining the same run-owned cleanup,
 durable-data checks and artifact contract. The scaffold alone proves neither
 milestone and does not create a parallel unit-test suite.

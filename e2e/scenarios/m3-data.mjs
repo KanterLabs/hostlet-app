@@ -31,6 +31,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CONTAINER_ID = /^[0-9a-f]{64}$/;
 const DATABASE_WORKER_ID = "m3-database-1";
 const MAX_DRAIN_OPERATIONS = 256;
+const PROVISIONING_EXPECTATION = "two admitted projects provision separate PostgreSQL 18 databases through durable intent and a real worker; grants, limits, isolation, retries, ownership, and actual application read/write hold";
 
 function safeObserved(error) {
   return error instanceof ScenarioExpectationError ? error.observed : { failed_checks: 1 };
@@ -85,10 +86,7 @@ function assertCode(response, status, code, check) {
 function assertStatusWithPublicError(response, status, check) {
   if (response.status !== status) {
     const code = typeof response.payload?.error?.code === "string" ? response.payload.error.code : "unknown_error";
-    const message = typeof response.payload?.error?.message === "string"
-      ? response.payload.error.message.replaceAll(/\s+/g, " ").slice(0, 240)
-      : "no public message";
-    throw new Error(`${check}: HTTP ${response.status} ${code}: ${message}`);
+    throw new ScenarioExpectationError(check, { status: response.status, error_code: code });
   }
 }
 
@@ -742,15 +740,36 @@ export function createM3DataStage(m3, { mainProject } = {}) {
       'hosted_slot_limit',hosted_slot_limit,'rollout_headroom_limit',rollout_headroom_limit,'profile',profile)
       FROM admission_capacity_pools WHERE pool_key=${sqlString(poolKey)};`);
     if (!existingCapacity) throw new Error("M3 data shared capacity pool is missing");
+    const reconciled = await m3.callInternal("/internal/v1/admission/reconcile", { method: "POST", body: {} });
+    assertStatus(reconciled, 200, "M3 data admission hold reconciliation");
+    if (!Number.isInteger(reconciled.payload?.expired_holds) || reconciled.payload.expired_holds < 0) {
+      throw new Error("M3 data admission hold reconciliation returned an invalid safe count");
+    }
+    const durableUse = await m3.postgres.psqlJson("m3-data-existing-capacity-use", `SELECT json_build_object(
+      'account_slots',(
+        (SELECT count(*) FROM slot_reservations WHERE account_id=${sqlString(m3.state.owner.record.id)} AND state<>'released') +
+        (SELECT count(*) FROM capacity_holds WHERE account_id=${sqlString(m3.state.owner.record.id)} AND kind='initial' AND state='active')
+      )::int,
+      'pool_slots',(
+        (SELECT count(*) FROM slot_reservations WHERE capacity_pool_key=${sqlString(poolKey)} AND state<>'released') +
+        (SELECT count(*) FROM capacity_holds WHERE capacity_pool_key=${sqlString(poolKey)} AND kind='initial' AND state='active')
+      )::int
+    );`);
+    if (!Number.isInteger(durableUse?.account_slots) || durableUse.account_slots < 0 ||
+        !Number.isInteger(durableUse?.pool_slots) || durableUse.pool_slots < 0) {
+      throw new Error("M3 data shared capacity fixture lacks valid durable hosted-slot use counts");
+    }
+    const hostedSlotLimit = Math.max(5, fixtureEntitlement.hosted_slot_limit, entitlement.hosted_slot_limit ?? 0, durableUse.account_slots + 1);
+    const poolHostedSlotLimit = Math.max(5, existingCapacity.hosted_slot_limit, durableUse.pool_slots + 1);
     const capacity = await m3.callInternal("/internal/v1/admission/capacity", { method: "POST", body: {
       event_id: randomUUID(), pool_key: poolKey, profile: existingCapacity.profile,
-      hosted_slot_limit: Math.max(5, existingCapacity.hosted_slot_limit),
+      hosted_slot_limit: poolHostedSlotLimit,
       rollout_headroom_limit: Math.max(2, existingCapacity.rollout_headroom_limit),
     }});
     assertStatus(capacity, 200, "M3 data shared capacity allowance");
     const updated = await m3.callInternal("/internal/v1/admission/entitlements", { method: "POST", body: {
       event_id: randomUUID(), account_id: m3.state.owner.record.id, capacity_pool_key: poolKey,
-      hosted_slot_limit: Math.max(5, fixtureEntitlement.hosted_slot_limit, entitlement.hosted_slot_limit ?? 0),
+      hosted_slot_limit: hostedSlotLimit,
       build_seconds_limit: Math.max(3600, fixtureEntitlement.build_seconds_limit, entitlement.build_seconds_limit ?? 0),
       period_starts_at: periodStart, period_ends_at: periodEnd, state: "active",
     }});
@@ -864,37 +883,45 @@ export function createM3DataStage(m3, { mainProject } = {}) {
   }
 
   async function provision() {
-    const primary = normalizeProject(mainProject);
-    const isolation = await createIsolationProject();
-    projects.push(primary, isolation);
-    const created = await Promise.all([
-      provisionProject(primary, "primary"),
-      provisionProject(isolation, "isolation"),
-    ]);
-    databases.push(...created);
-    const provisioningCrashRecovery = await verifyProvisioningCrashRecovery();
-    m3.state.m3DataProvisioningCrashRecovery = provisioningCrashRecovery;
-    await drain("provision", { fixtureBootstrap: true });
-    for (const database of databases) {
-      const read = await m3.ownerHTTP(`/v1/projects/${database.project.projectId}/services/${database.project.databaseService.id}/tenant-database`);
-      assertStatus(read, 200, "ready tenant database read");
-      expectScenario(read.payload.state === "ready" && read.payload.application_connection_limit === 10 && read.payload.storage_limit_bytes === 1_073_741_824,
-        "real worker publishes bounded ready tenant database", read.payload);
-      database.record = read.payload;
-      const bootstrap = await m3.postgres.psqlJson(`m3-data-bootstrap-proof-${database.record.id}`, `SELECT result->'proof' FROM tenant_database_operations
-        WHERE tenant_database_id=${sqlString(database.record.id)} AND database_generation=${sqlString(database.record.generation)}
-          AND kind='provision' AND state='succeeded';`);
-      expectScenario(bootstrap?.fixture_bootstrap_sha256 === bootstrapDigest && bootstrap?.fixture_populated_rows === 4 &&
-        bootstrap?.fixture_application_connection_verified === true,
-      "provision fixture bootstrap is digest-bound and verified through the exact migration credential", bootstrap);
-      database.bootstrap = Object.freeze({ digest: bootstrapDigest, populatedRows: bootstrap.fixture_populated_rows });
-      database.peer = await publishPeer(database.project, database.record, database.target);
-      database.rows = await owned.inspectRows(database.target, `m3-data-populated-${database.record.id}`);
+    try {
+      const primary = normalizeProject(mainProject);
+      const isolation = await createIsolationProject();
+      projects.push(primary, isolation);
+      const created = await Promise.all([
+        provisionProject(primary, "primary"),
+        provisionProject(isolation, "isolation"),
+      ]);
+      databases.push(...created);
+      const provisioningCrashRecovery = await verifyProvisioningCrashRecovery();
+      m3.state.m3DataProvisioningCrashRecovery = provisioningCrashRecovery;
+      await drain("provision", { fixtureBootstrap: true });
+      for (const database of databases) {
+        const read = await m3.ownerHTTP(`/v1/projects/${database.project.projectId}/services/${database.project.databaseService.id}/tenant-database`);
+        assertStatus(read, 200, "ready tenant database read");
+        expectScenario(read.payload.state === "ready" && read.payload.application_connection_limit === 10 && read.payload.storage_limit_bytes === 1_073_741_824,
+          "real worker publishes bounded ready tenant database", read.payload);
+        database.record = read.payload;
+        const bootstrap = await m3.postgres.psqlJson(`m3-data-bootstrap-proof-${database.record.id}`, `SELECT result->'proof' FROM tenant_database_operations
+          WHERE tenant_database_id=${sqlString(database.record.id)} AND database_generation=${sqlString(database.record.generation)}
+            AND kind='provision' AND state='succeeded';`);
+        expectScenario(bootstrap?.fixture_bootstrap_sha256 === bootstrapDigest && bootstrap?.fixture_populated_rows === 4 &&
+          bootstrap?.fixture_application_connection_verified === true,
+        "provision fixture bootstrap is digest-bound and verified through the exact migration credential", bootstrap);
+        database.bootstrap = Object.freeze({ digest: bootstrapDigest, populatedRows: bootstrap.fixture_populated_rows });
+        database.peer = await publishPeer(database.project, database.record, database.target);
+        database.rows = await owned.inspectRows(database.target, `m3-data-populated-${database.record.id}`);
+      }
+      const denied = await m3.call(`/v1/projects/${primary.projectId}/services/${primary.databaseService.id}/tenant-database`, { token: m3.state.other.token });
+      assertCode(denied, 404, "not_found", "cross-owner tenant database read");
+      m3.state.tenantDatabases = Object.freeze(databases);
+      return Object.freeze({ projects, databases, tenantPeers: m3.state.tenantPeers, provisioningCrashRecovery });
+    } catch (error) {
+      if (context.state.configuration.scenarios?.includes("m3-journey")) {
+        context.assertion("M3-DATA-01", "M3 tenant PostgreSQL lifecycle", PROVISIONING_EXPECTATION, safeObserved(error), false,
+          error instanceof ScenarioExpectationError ? error.check : "tenant PostgreSQL provisioning setup failed");
+      }
+      throw error;
     }
-    const denied = await m3.call(`/v1/projects/${primary.projectId}/services/${primary.databaseService.id}/tenant-database`, { token: m3.state.other.token });
-    assertCode(denied, 404, "not_found", "cross-owner tenant database read");
-    m3.state.tenantDatabases = Object.freeze(databases);
-    return Object.freeze({ projects, databases, tenantPeers: m3.state.tenantPeers, provisioningCrashRecovery });
   }
 
   async function provisioningLease(database, label) {
@@ -1108,7 +1135,7 @@ export function createM3DataStage(m3, { mainProject } = {}) {
 
   async function verifyProvisioning() {
     return dataStep(context, "M3-DATA-01",
-      "two admitted projects provision separate PostgreSQL 18 databases through durable intent and a real worker; grants, limits, isolation, retries, ownership, and actual application read/write hold",
+      PROVISIONING_EXPECTATION,
       async () => {
         const provisioningCrashRecovery = m3.state.m3DataProvisioningCrashRecovery;
         expectScenario(provisioningCrashRecovery?.killedSignal === "SIGKILL" && provisioningCrashRecovery?.blocked === true &&

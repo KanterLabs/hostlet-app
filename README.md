@@ -188,9 +188,10 @@ and a production web build. Dependency resolution is committed in `Cargo.lock`
 and `web/package-lock.json`; Rust validation uses `--locked` and web installs
 use `npm ci`.
 
-These routine checks are not product E2E evidence. `make e2e` exercises the real
-API/web processes through HTTP and Chromium plus an owned PostgreSQL instance;
-`make e2e-gate` requires clean source.
+These routine checks are not product E2E evidence. `make e2e` aliases the full
+owned M3 journey (`make e2e-m3`), including its VM/runtime prerequisites.
+`make e2e-gate` aliases `make e2e-m3-gate` and requires clean source.
+Historical M2 reruns use its tested commit in an isolated checkout.
 See [the E2E guide](e2e/README.md) for prerequisites, scenarios and the deliberate
 failure command. Complex features require E2E acceptance, and every run retains a
 verifiable report, manifest, checksums and rerun instructions. Never write unit

@@ -57,11 +57,14 @@ assertions, assertions that only inspect fixtures, or an assertion that can
 never fail. Keep setup, seed data and test-mode switches explicit so that a
 green run demonstrates the product path rather than a test harness shortcut.
 
-The current M2 onboarding harness runs with `make e2e`; `make e2e-gate` requires a clean
-source tree and `make e2e-failure` deliberately fails one assertion to verify
-failed-run evidence. See [e2e/README.md](e2e/README.md) for prerequisites and
+The current M3 journey runs with `make e2e` (an alias for `make e2e-m3`);
+`make e2e-gate` aliases `make e2e-m3-gate` and requires a clean source tree.
+`make e2e-failure` deliberately fails one assertion to verify failed-run evidence. See [e2e/README.md](e2e/README.md) for prerequisites and
 scenario coverage. `make e2e-scaffold` runs only the original API/web shell
-checks; a passing scaffold run alone does not complete M1.
+checks; a passing scaffold run alone does not complete a product milestone.
+Historical M1/M2 suites must run from their tested commits in isolated checkouts,
+as documented in [e2e/README.md](e2e/README.md); their schema-specific upgrade
+assertions do not apply to the current schema-6 binary.
 
 ## Run artifact contract
 

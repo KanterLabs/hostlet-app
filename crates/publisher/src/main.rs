@@ -8,7 +8,13 @@ use std::process::ExitCode;
 async fn main() -> ExitCode {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let result = match args.first().map(String::as_str) {
-        Some("worker") => worker::run(&args[1..]).map_err(|error| error.to_string()),
+        Some("worker") => {
+            let worker_args = args[1..].to_vec();
+            tokio::task::spawn_blocking(move || worker::run(&worker_args))
+                .await
+                .map_err(|_| "publisher_worker_join_failed".to_owned())
+                .and_then(|result| result.map_err(str::to_owned))
+        }
         Some("serve") => server::run(&args[1..]).await.map_err(|error| error.to_string()),
         Some("--version") if args.len() == 1 => {
             println!("hostlet-publisher {}", env!("CARGO_PKG_VERSION"));

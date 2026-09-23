@@ -1406,7 +1406,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     const terminal = await eventually(`rollback ${reconciliationId}`, async () => {
       const [value, reconciliationState] = await Promise.all([
         history(projectId),
-        m3.postgres.psqlJson("m3-release-rollback-activation", `SELECT state FROM release_reconciliations WHERE id='${reconciliationId}'::uuid;`),
+        m3.postgres.psqlJson("m3-release-rollback-activation", `SELECT to_json(state) FROM release_reconciliations WHERE id='${reconciliationId}'::uuid;`),
       ]);
       const release = value.releases.find(({ id }) => id === releaseId);
       if (reconciliationState === "failed") {

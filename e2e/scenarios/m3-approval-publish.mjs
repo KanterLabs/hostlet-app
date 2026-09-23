@@ -1245,6 +1245,20 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
             site_rows_unchanged: JSON.stringify(sitesAfterStalePublication) === JSON.stringify(sitesBeforeStalePublication),
           },
         );
+        const lastGoodPublication = await latestPublication(m3, "last-good publication before corrupt replacement");
+        const lastGoodPointer = sitesBeforeStalePublication.find((site) => site.slug === slug);
+        const lastGoodResponse = await fetch(`${staticBase}${slug}/`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+        const lastGoodBytes = Buffer.from(await lastGoodResponse.arrayBuffer());
+        const lastGoodDigest = createHash("sha256").update(lastGoodBytes).digest("hex");
+        expectScenario(
+          lastGoodResponse.status === 200 &&
+            lastGoodPublication.state === "published" &&
+            lastGoodPointer?.current_publication_id === lastGoodPublication.id &&
+            lastGoodPointer.current_artifact_digest === lastGoodPublication.artifact_digest &&
+            lastGoodPointer.pointer_generation === lastGoodPublication.pointer_generation,
+          "pre-corruption static response and authoritative pointer identify the exact last-good approved artifact",
+          { status: lastGoodResponse.status, pointer_matches_last_good_publication: lastGoodPointer?.current_publication_id === lastGoodPublication.id && lastGoodPointer?.current_artifact_digest === lastGoodPublication.artifact_digest && lastGoodPointer?.pointer_generation === lastGoodPublication.pointer_generation, served_sha256: lastGoodDigest },
+        );
 
         await browser.fill('[data-testid="publication-slug"]', slug);
         await browser.click('[data-testid="publication-publish"]');
@@ -1284,11 +1298,18 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
           { state: failedPublication.state, failure_code: failedPublication.failure_code, staging_exists: existsSync(corruptStaging) },
         );
         const oldResponse = await fetch(`${staticBase}${slug}/`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-        const oldText = await oldResponse.text();
+        const oldBytes = Buffer.from(await oldResponse.arrayBuffer());
+        const oldDigest = createHash("sha256").update(oldBytes).digest("hex");
+        const sitesAfterCorruptPublication = await publicSiteRows(m3, "m3-sites-after-corrupt-publish");
+        const afterCorruptPointer = sitesAfterCorruptPublication.find((site) => site.slug === slug);
+        const corruptLastGoodPreserved = oldResponse.status === 200 && oldBytes.equals(lastGoodBytes) && oldDigest === lastGoodDigest &&
+          afterCorruptPointer?.current_publication_id === lastGoodPointer.current_publication_id &&
+          afterCorruptPointer.current_artifact_digest === lastGoodPointer.current_artifact_digest &&
+          afterCorruptPointer.pointer_generation === lastGoodPointer.pointer_generation;
         expectScenario(
-          oldResponse.status === 200 && oldText.includes(firstNarrative) && !oldText.includes(replacementNarrative),
+          corruptLastGoodPreserved,
           "corrupt replacement leaves last-good static pointer unchanged",
-          { old_status: oldResponse.status, old_content_preserved: oldText.includes(firstNarrative) && !oldText.includes(replacementNarrative) },
+          { old_status: oldResponse.status, old_content_preserved: oldBytes.equals(lastGoodBytes), old_sha256: oldDigest, pointer_unchanged: afterCorruptPointer?.current_publication_id === lastGoodPointer.current_publication_id && afterCorruptPointer?.current_artifact_digest === lastGoodPointer.current_artifact_digest && afterCorruptPointer?.pointer_generation === lastGoodPointer.pointer_generation },
         );
 
         await browser.fill('[data-testid="preview-editor"] [name="profile.introduction"]', recoveryNarrative);
@@ -1341,18 +1362,27 @@ export async function runM3ApprovalPublishScenarios(context, m3, orchestration) 
         );
         await context.waitForHttp(`${staticBase}${slug}/`, 200, "restarted M3 static portfolio");
         const restartedResponse = await fetch(`${staticBase}${slug}/`, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-        const restartedText = await restartedResponse.text();
+        const restartedBytes = Buffer.from(await restartedResponse.arrayBuffer());
+        const restartedDigest = createHash("sha256").update(restartedBytes).digest("hex");
+        await browser.navigate(`${staticBase}${slug}/`);
+        const restartedBrowserText = await browser.text("body");
+        const sitesAfterRecovery = await publicSiteRows(m3, "m3-sites-after-recovered-publish");
+        const recoveredPointer = sitesAfterRecovery.find((site) => site.slug === slug);
         expectScenario(
-          restartedResponse.status === 200 && restartedText.includes(recoveryNarrative) && !restartedText.includes(firstNarrative),
+          restartedResponse.status === 200 && restartedDigest !== lastGoodDigest &&
+            restartedBrowserText.includes(recoveryNarrative) && !restartedBrowserText.includes(firstNarrative) && !restartedBrowserText.includes(replacementNarrative) &&
+            recoveredPointer?.current_publication_id === replacementPublished.id &&
+            recoveredPointer.current_artifact_digest === replacementPublished.artifact_digest &&
+            recoveredPointer.pointer_generation === replacementPublished.pointer_generation,
           "static restart serves the recovered immutable artifact",
-          { status: restartedResponse.status, recovered_content: restartedText.includes(recoveryNarrative), old_content_absent: !restartedText.includes(firstNarrative) },
+          { status: restartedResponse.status, recovered_content: restartedBrowserText.includes(recoveryNarrative), old_content_absent: !restartedBrowserText.includes(firstNarrative), rejected_content_absent: !restartedBrowserText.includes(replacementNarrative), distinct_served_sha256: restartedDigest !== lastGoodDigest, pointer_matches_recovery: recoveredPointer?.current_publication_id === replacementPublished.id && recoveredPointer?.current_artifact_digest === replacementPublished.artifact_digest && recoveredPointer?.pointer_generation === replacementPublished.pointer_generation },
         );
         const rows = await publicationRows(m3, "m3-publication-history");
         return {
           stale_approved_publication_status: staleApprovedPublication.status,
           corrupt_completion_status: corruptCompletion.status,
           corrupt_failure_status: corruptFailure.status,
-          corrupt_last_good_preserved: oldText.includes(firstNarrative) && !oldText.includes(replacementNarrative),
+          corrupt_last_good_preserved: corruptLastGoodPreserved,
           stale_completion_status: staleCompletion.status,
           interrupted_staging_clean: !existsSync(interruptedStaging),
           publication_count: rows.length,

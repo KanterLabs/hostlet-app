@@ -152,7 +152,7 @@ async function runStaticPublicationDevelopment(context) {
       const detailUrl = await browser.evaluate("location.href");
       const detailText = await browser.text("body");
       const detailLinks = await browser.evaluate('[...document.querySelectorAll("a[href]")].map((a) => a.href)');
-      const back = await browser.evaluate('(() => { const a = document.querySelector("a.back[href=\"../../\"]"); return a ? { href: a.href, text: a.textContent?.trim() ?? "" } : null; })()');
+      const back = await browser.evaluate(`(() => { const a = document.querySelector(${JSON.stringify('a.back[href="../../"]')}); return a ? { href: a.href, text: a.textContent?.trim() ?? "" } : null; })()`);
       requireCheck(detailUrl === `${publicUrl}projects/${external.project_reference_id}/` && detailText.includes(external.title) && detailText.includes(external.purpose) && detailText.includes(external.contribution) && detailLinks.includes(publicLink) && back?.href === publicUrl && back.text.includes("Portfolio") && !detailText.includes(privateHeadline) && !detailText.includes(m3.state.selectedSource.commitSha), "published case-study detail or semantic back link did not match approved public values");
       const detailCapture = await captureBrowser(context, browser, "m3-static-publication-detail");
       await browser.click('a.back[href="../../"]');
@@ -168,7 +168,7 @@ async function runStaticPublicationDevelopment(context) {
       }, { waitTimeoutMs: 30_000 });
       const shownUrl = await browser.text('[data-testid="publication-url"]');
       const dashboardCapture = await captureBrowser(context, browser, "m3-static-publication-dashboard-return");
-      requireCheck(shownUrl === publicUrl && (await browser.evaluate('document.querySelector(\'[data-testid="publication-url"]\')?.href')) === publicUrl, "dashboard did not render the exact published static URL after returning from the site");
+      requireCheck(shownUrl === publicUrl && (await browser.evaluate(`document.querySelector(${JSON.stringify('[data-testid="publication-url"]')})?.href`)) === publicUrl, "dashboard did not render the exact published static URL after returning from the site");
 
       observations = {
         diagnostic_only: true, production_capability_registered: false, m3_gate_satisfied: false,

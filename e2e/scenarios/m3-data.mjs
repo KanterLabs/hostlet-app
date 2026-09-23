@@ -1543,19 +1543,19 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     const policyDate = policyTime.toISOString().slice(0, 10);
     for (let attempt = 0; attempt < 64; attempt += 1) {
       await runWorker("scheduler", `fresh-recovery-archive-scheduler-${attempt + 1}`);
-      const archiveId = await m3.postgres.psqlJson("m3-data-fresh-recovery-archive", `SELECT to_jsonb(id::text)
+      const archiveId = await m3.postgres.psqlJson("m3-data-fresh-recovery-archive", `SELECT COALESCE((SELECT to_jsonb(id::text)
         FROM tenant_database_archives WHERE tenant_database_id=${sqlString(database.record.id)}
           AND database_generation=${sqlString(database.record.generation)} AND kind='daily' AND state='usable'
-          AND scheduled_for=${sqlString(policyDate)}::date ORDER BY snapshot_at DESC,id DESC LIMIT 1;`);
+          AND scheduled_for=${sqlString(policyDate)}::date ORDER BY snapshot_at DESC,id DESC LIMIT 1),'null'::jsonb);`);
       if (UUID.test(archiveId ?? "")) return archiveId;
       const { events } = await runWorker("once", `fresh-recovery-archive-operation-${attempt + 1}`);
       if (!events.some((event) => event.event === "tenant_database_operation_claimed")) {
         throw new Error("fresh daily archive was not produced by the real scheduler and worker");
       }
-      const completedArchiveId = await m3.postgres.psqlJson("m3-data-completed-fresh-recovery-archive", `SELECT to_jsonb(id::text)
+      const completedArchiveId = await m3.postgres.psqlJson("m3-data-completed-fresh-recovery-archive", `SELECT COALESCE((SELECT to_jsonb(id::text)
         FROM tenant_database_archives WHERE tenant_database_id=${sqlString(database.record.id)}
           AND database_generation=${sqlString(database.record.generation)} AND kind='daily' AND state='usable'
-          AND scheduled_for=${sqlString(policyDate)}::date ORDER BY snapshot_at DESC,id DESC LIMIT 1;`);
+          AND scheduled_for=${sqlString(policyDate)}::date ORDER BY snapshot_at DESC,id DESC LIMIT 1),'null'::jsonb);`);
       if (UUID.test(completedArchiveId ?? "")) return completedArchiveId;
     }
     throw new Error("fresh daily archive preparation exceeded its bounded operation limit");

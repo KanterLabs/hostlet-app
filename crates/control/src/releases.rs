@@ -902,7 +902,13 @@ async fn complete_reconciliation(
         ));
     }
     let route_generation = reconciliation.expected_route_generation + 1;
-    let drain_expires_at = Utc::now() + Duration::seconds(DRAIN_SECONDS);
+    // PostgreSQL stores timestamptz at microsecond precision. Use a precision
+    // it preserves before hashing the manifest so route history agrees with it.
+    let deadline = Utc::now() + Duration::seconds(DRAIN_SECONDS);
+    let drain_expires_at = Utc
+        .timestamp_millis_opt(deadline.timestamp_millis())
+        .single()
+        .ok_or_else(ApiError::internal)?;
     let manifest = route_manifest(
         &candidate,
         current.as_ref(),

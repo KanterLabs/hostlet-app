@@ -259,11 +259,16 @@ function staticOutput(record) {
   return outputs.find((value) => value?.kind === "static") ?? null;
 }
 
+class ReleaseWorkerExited extends Error {}
+
 async function eventually(label, callback, { timeoutMs = 60_000, intervalMs = 125 } = {}) {
   const deadline = Date.now() + timeoutMs; let last;
   while (Date.now() < deadline) {
     try { const value = await callback(); if (value) return value; }
-    catch (error) { last = error; }
+    catch (error) {
+      if (error instanceof ReleaseWorkerExited) throw error;
+      last = error;
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error(`${label} did not reach its expected durable state${last ? `: ${last.message}` : ""}`);
@@ -309,6 +314,14 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
     const exitCode = Number.isSafeInteger(child.exitCode) ? child.exitCode : null;
     const signal = typeof child.signalCode === "string" ? child.signalCode.slice(0, 32) : null;
     return { present: true, running: exitCode === null && signal === null, exit_code: exitCode, signal };
+  }
+  function assertOwnedReleaseWorkerRunning() {
+    const child = worker?.process?.child;
+    if (!child) return;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new ReleaseWorkerExited(`owned release worker ${worker.workerId} exited before the expected durable release state ` +
+        `(exit code ${child.exitCode ?? "none"}, signal ${child.signalCode ?? "none"})`);
+    }
   }
   async function writeReleaseFailureEvidence({ projectId, releaseId, reconciliationId, waitKind }) {
     const artifactSequence = ++failureEvidenceSequence;
@@ -430,8 +443,9 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
       return await eventually(`release ${releaseId}`, async () => {
         const value = await history(projectId);
         const release = value.releases.find(({ id }) => id === releaseId);
+        if (release && expected.includes(release.state)) return { release, history: value };
+        assertOwnedReleaseWorkerRunning();
         if (!release) return null;
-        if (expected.includes(release.state)) return { release, history: value };
         if (["failed", "healthy", "retired"].includes(release.state)) throw new Error(`release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
         return null;
       }, { timeoutMs: options.promotionTimeoutMs ?? 120_000 });
@@ -473,8 +487,7 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
         }
         const value = await history(staged.projectId);
         const release = value.releases.find(({ id }) => id === staged.releaseId);
-        if (!release) return null;
-        if (expected.includes(release.state)) {
+        if (release && expected.includes(release.state)) {
           if (!migrationFences.has(staged.migration.id)) {
             throw new Error("migration live apply reached a terminal release state before its exact stale lease was fenced");
           }
@@ -489,6 +502,8 @@ export function createM3ReleaseHarness(context, m3, options = {}) {
           }
           return { release, history: value };
         }
+        assertOwnedReleaseWorkerRunning();
+        if (!release) return null;
         if (["failed", "healthy", "retired"].includes(release.state)) {
           throw new Error(`migration release reached unexpected ${release.state}: ${release.failure_code ?? "no code"}`);
         }

@@ -13,7 +13,7 @@ function assertResult(name, condition, evidence) {
 const RELEASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RELEASE_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
-function exactRouteManifest(result, route, history, previousReleaseId, retainedAssets) {
+function exactRouteManifest(result, route, history, previousReleaseId, retainedAssets, diagnostic = null) {
   const release = result.release;
   const expectedFrontend = result.frontendDigest === null ? null : {
     archive_digest: result.frontendDigest, manifest_digest: result.frontendManifestDigest,
@@ -60,7 +60,21 @@ function exactRouteManifest(result, route, history, previousReleaseId, retainedA
       validDigest(asset.archive_digest) && validDigest(asset.manifest_digest)) &&
     typeof expected.drain_expires_at === "string" && Date.parse(expected.drain_expires_at) > Date.now() &&
     RELEASE_UUID.test(expected.health.staged_health_observation_id ?? "") && validDigest(expected.health.staged_health_receipt_digest);
-  return exactTopLevel && exactIdentity && isDeepStrictEqual(route.manifest, expected);
+  const exactValues = isDeepStrictEqual(route.manifest, expected);
+  if (diagnostic) {
+    Object.assign(diagnostic, {
+      exact_top_level: exactTopLevel,
+      exact_identity: exactIdentity,
+      exact_values: exactValues,
+      digest_matches: route.digest === result.routeManifestDigest,
+      mismatched_fields: Object.keys(expected).filter((key) => !isDeepStrictEqual(route.manifest[key], expected[key])),
+      manifest_fields: Object.keys(route.manifest).sort(),
+      expected_fields: Object.keys(expected).sort(),
+      manifest_drain_expires_at: route.manifest.drain_expires_at,
+      history_drain_expires_at: history.current_route.drain_expires_at,
+    });
+  }
+  return exactTopLevel && exactIdentity && exactValues;
 }
 
 function validDigest(value) {
@@ -94,9 +108,11 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
       route1.digest === first.routeManifestDigest,
     { release_id: first.releaseId, source_commit: first.sourceCommit, frontend_digest: first.frontendDigest,
       backend_digest: first.backendDigest, route_manifest_digest: route1.digest });
-  assertResult("m3-release-exact-manifest-v1",
-    exactRouteManifest(first, route1, history1, null, []),
-    { manifest: route1.manifest, release: first.release, route_manifest_digest: route1.digest });
+  const exactManifestV1Diagnostic = {};
+  const exactManifestV1Passed = exactRouteManifest(first, route1, history1, null, [], exactManifestV1Diagnostic);
+  if (!exactManifestV1Passed) context.assertion("m3-release-exact-manifest-v1", "M3 exact route manifest",
+    "active gateway manifest exactly matches durable release and route history", exactManifestV1Diagnostic, false);
+  assertResult("m3-release-exact-manifest-v1", exactManifestV1Passed, exactManifestV1Diagnostic);
   assertResult("m3-release-managed-https",
     first.gateway.origin.startsWith("https://") && first.gateway.hostname.endsWith(".localowned.test") && first.gateway.address === "127.0.0.1",
     { scheme: "https", hostname: first.gateway.hostname, address: first.gateway.address });
@@ -159,12 +175,14 @@ export async function runM3ReleaseScenarios(context, m3, harness) {
       cached_old_frontend_network: cachedOldAgainstNew.network, active_browser_network: newBrowserEvidence.network,
       new_frontend_retained_screenshot: newAgainstRetained.screenshot,
       new_frontend_retained_dom: newAgainstRetained.dom, new_frontend_retained_network: newAgainstRetained.network });
+  const exactManifestV2Diagnostic = {};
   const exactManifestV2Passed = exactRouteManifest(second, route2, history2, first.releaseId, [{
       release_id: first.releaseId, archive_digest: first.frontendDigest, manifest_digest: first.frontendManifestDigest,
-    }]);
-  assertResult("m3-release-exact-manifest-v2", exactManifestV2Passed,
-    { manifest: route2.manifest, release: second.release, route_manifest_digest: route2.digest });
-  const release01Passed = exactRouteManifest(first, route1, history1, null, []) && exactManifestV2Passed &&
+    }], exactManifestV2Diagnostic);
+  if (!exactManifestV2Passed) context.assertion("m3-release-exact-manifest-v2", "M3 exact route manifest",
+    "active gateway manifest exactly matches durable release and route history", exactManifestV2Diagnostic, false);
+  assertResult("m3-release-exact-manifest-v2", exactManifestV2Passed, exactManifestV2Diagnostic);
+  const release01Passed = exactManifestV1Passed && exactManifestV2Passed &&
     initialPairPassed && initialBrowserPairPassed && overlapPassed;
   context.assertion("M3-RELEASE-01", "M3 coordinated releases",
     "exact frontend/backend artifacts become one durable route only after real health checks; old/new clients remain compatible through bounded drain",

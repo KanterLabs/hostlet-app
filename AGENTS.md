@@ -8,7 +8,7 @@ supplied September 21 portfolio-and-demo brief is authoritative; the earlier
 generic-hosting plan is superseded. M1 is complete at HOST-242; read
 `docs/M1-HANDOFF.md` for verified evidence and limits. M2 acceptance is complete
 through HOST-243 using Sol Medium workers; read `docs/M2-HANDOFF.md` for the two
-clean runs and limits. The September 22 assignment authorizes M3 through HOST-233. The resumed assignment uses Luna workers with Sol owning integration and verification. Stop before M4; read docs/M3-SCENARIOS.md before implementation.
+clean runs and limits. The September 22 assignment authorizes M3 through HOST-233. The September 23 correction requires GPT-6 Sol workers at medium reasoning, with the primary owning integration and verification. Stop before M4; read docs/M3-SCENARIOS.md before implementation.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim
@@ -57,7 +57,7 @@ snapshots of the milestone and dependency ordering.
   `ROADMAP.md` and `roadmap.json` when task scope or dependencies change. The
   planned release is a readiness boundary, not an automatic launch instruction.
 - The primary agent owns integration and final verification. Delegate bounded,
-  independent work to `luna_worker` with explicit file ownership; workers must not
+  independent work to GPT-6 Sol workers at medium reasoning with explicit file ownership; workers must not
   spawn agents or revert concurrent edits. Serialize locks, migrations and builds.
 - Later populated-data upgrades require a verified pre-upgrade backup, meaningful
   populated-data migration checks and retained-binary compatibility. Database

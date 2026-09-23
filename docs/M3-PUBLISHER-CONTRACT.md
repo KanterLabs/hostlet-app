@@ -97,15 +97,22 @@ failure prevents the replacement lease from being issued, so the response does
 not claim a clean retry. Failed or reclaimed staging cleanup never changes the
 last-good immutable artifact or its site pointer.
 
-PostgreSQL and a filesystem rename cannot form one transaction. Control first
-commits a promotion intent with the expected next pointer generation. It then
-installs and swaps the verified tree, and finally marks the publication and site
-pointer published in PostgreSQL. A crash before or after the swap leaves the
-intent durable. `reconcile_pending` validates the immutable artifact and current
-symlink, performs the missing swap when needed, then finalizes the same
-generation. It never infers success from an unverified tree. A newer publication
-sequence makes an older completion stale before intent creation; expired or
-wrong-fence attempts cannot create or advance an intent.
+PostgreSQL and a filesystem rename cannot form one transaction. Control validates
+the attempt and staged tree, installs the immutable artifact, then rechecks the
+attempt and publication sequence while committing a promotion intent with the
+expected next pointer generation. It swaps the verified tree into the site
+pointer and finally marks the publication and pointer published in PostgreSQL.
+A crash after intent creation leaves that intent durable. `reconcile_pending`
+validates the installed immutable artifact and current symlink, performs the
+missing swap when needed, then finalizes the same generation. It never infers
+success from an unverified tree. A newer publication sequence makes an older
+completion stale before intent creation; expired or wrong-fence attempts cannot
+create or advance an intent.
+
+A stale completion or crash between artifact installation and intent creation
+can leave an unreferenced immutable artifact. It cannot be served without a site
+pointer. M3 cleans exact attempt staging directories; it does not claim garbage
+collection of these unreferenced immutable artifacts.
 
 The independent `hostlet-publisher serve` process receives only the artifact
 root, bind address and a required `--expected-host HOST` authority. It opens

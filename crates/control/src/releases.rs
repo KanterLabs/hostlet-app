@@ -332,7 +332,9 @@ async fn lease_reconciliation(
     });
     let lease_expires_at: DateTime<Utc> =
         sqlx::query_scalar("SELECT clock_timestamp()+make_interval(secs=>$1)")
-            .bind(state.worker_lease_seconds)
+            // This SQL is shared with build leasing; SQLx caches by SQL text.
+            // Keep the FLOAT8 argument type consistent across both callers.
+            .bind(state.worker_lease_seconds as f64)
             .fetch_one(&mut *tx)
             .await?;
     if resume_prepared {
@@ -430,7 +432,7 @@ async fn renew_reconciliation(
     .bind(request.attempt_id)
     .bind(request.fence)
     .bind(&request.worker_id)
-    .bind(state.worker_lease_seconds)
+    .bind(state.worker_lease_seconds as f64)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((attempt_number, lease_expires_at)) = renewed else {

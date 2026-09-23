@@ -1265,41 +1265,46 @@ export function createM3DataStage(m3, { mainProject } = {}) {
       });
   }
 
+  async function growSecondDatabaseOverLimit() {
+    const fixture = databases[1];
+    if (!fixture) throw new Error("storage overage requires the isolated second tenant database");
+    const migration = await m3.postgres.psqlJson("m3-data-storage-migration-role", `SELECT json_build_object('role_ref',role_ref)
+      FROM tenant_database_credentials WHERE tenant_database_id=${sqlString(fixture.record.id)} AND database_generation=${sqlString(fixture.record.generation)}
+        AND purpose='migration' AND status='active';`);
+    if (!UUID.test(migration?.role_ref ?? "")) throw new Error("storage overage lacks its exact migration role");
+    const migrationRole = `hm_${migration.role_ref.replaceAll("-", "")}`;
+    const databaseName = `hdb_${fixture.record.id.replaceAll("-", "")}`;
+    const growthSql = `SET ROLE ${migrationRole}; CREATE TABLE app.storage_pressure AS
+      SELECT i, string_agg(md5(i::text || ':' || j::text),'') AS payload
+      FROM generate_series(1,1050000) AS i CROSS JOIN LATERAL generate_series(1,34) AS j GROUP BY i;`;
+    const grown = await context.runCommand("grow owned tenant database beyond actual storage limit", "docker", ["exec", "--env", "PGPASSWORD", fixture.target.container_id,
+      "psql", "-X", "-v", "ON_ERROR_STOP=1", "--host", "127.0.0.1", "--port", "5432", "-U", "postgres", "-d", databaseName, "-c", growthSql], {
+      env: { ...process.env, PGPASSWORD: owned.adminPassword(fixture.target) },
+      timeoutMs: 1_800_000, logName: "m3-data-storage-real-growth.log",
+    });
+    if (grown.code !== 0) throw new Error("real tenant database growth failed");
+    const measuredBefore = await context.runCommand("measure grown tenant database", "docker", ["exec", "--env", "PGPASSWORD", fixture.target.container_id,
+      "psql", "-X", "-A", "-t", "--host", "127.0.0.1", "--port", "5432", "-U", "postgres", "-d", "postgres", "-c", `SELECT pg_database_size('${databaseName}')`], {
+      env: { ...process.env, PGPASSWORD: owned.adminPassword(fixture.target) },
+      timeoutMs: 30_000, logName: "m3-data-storage-real-size.log",
+    });
+    const physicalBytes = Number(measuredBefore.stdout.trim());
+    expectScenario(measuredBefore.code === 0 && Number.isSafeInteger(physicalBytes) && physicalBytes > 1_073_741_824,
+      "physical PostgreSQL size crosses the canonical limit", { physicalBytes });
+    return { fixture, physicalBytes };
+  }
+
   async function verifyStorageOverage() {
     return dataStep(context, "M3-DATA-01-STORAGE",
       "real PostgreSQL growth beyond the 1 GiB limit becomes sticky read-only after observation while reads and portable export remain available",
       async () => {
-        const fixture = databases[1];
-        if (!fixture) throw new Error("storage overage requires the isolated second tenant database");
         writeFileSync(join(context.artifactDir, "m3-data-large-archive-timeout.json"), `${JSON.stringify({
           schema: "hostlet.m3-data-large-archive-timeout/v1",
           default_worker_timeout_ms: DATABASE_WORKER_TIMEOUT_MS,
           large_archive_worker_timeout_ms: LARGE_ARCHIVE_WORKER_TIMEOUT_MS,
           drains: ["storage-over-limit-observation", "over-limit-portable-export"],
         }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-        const migration = await m3.postgres.psqlJson("m3-data-storage-migration-role", `SELECT json_build_object('role_ref',role_ref)
-          FROM tenant_database_credentials WHERE tenant_database_id=${sqlString(fixture.record.id)} AND database_generation=${sqlString(fixture.record.generation)}
-            AND purpose='migration' AND status='active';`);
-        if (!UUID.test(migration?.role_ref ?? "")) throw new Error("storage overage lacks its exact migration role");
-        const migrationRole = `hm_${migration.role_ref.replaceAll("-", "")}`;
-        const databaseName = `hdb_${fixture.record.id.replaceAll("-", "")}`;
-        const growthSql = `SET ROLE ${migrationRole}; CREATE TABLE app.storage_pressure AS
-          SELECT i, string_agg(md5(i::text || ':' || j::text),'') AS payload
-          FROM generate_series(1,1050000) AS i CROSS JOIN LATERAL generate_series(1,34) AS j GROUP BY i;`;
-        const grown = await context.runCommand("grow owned tenant database beyond actual storage limit", "docker", ["exec", "--env", "PGPASSWORD", fixture.target.container_id,
-          "psql", "-X", "-v", "ON_ERROR_STOP=1", "--host", "127.0.0.1", "--port", "5432", "-U", "postgres", "-d", databaseName, "-c", growthSql], {
-          env: { ...process.env, PGPASSWORD: owned.adminPassword(fixture.target) },
-          timeoutMs: 1_800_000, logName: "m3-data-storage-real-growth.log",
-        });
-        if (grown.code !== 0) throw new Error("real tenant database growth failed");
-        const measuredBefore = await context.runCommand("measure grown tenant database", "docker", ["exec", "--env", "PGPASSWORD", fixture.target.container_id,
-          "psql", "-X", "-A", "-t", "--host", "127.0.0.1", "--port", "5432", "-U", "postgres", "-d", "postgres", "-c", `SELECT pg_database_size('${databaseName}')`], {
-          env: { ...process.env, PGPASSWORD: owned.adminPassword(fixture.target) },
-          timeoutMs: 30_000, logName: "m3-data-storage-real-size.log",
-        });
-        const physicalBytes = Number(measuredBefore.stdout.trim());
-        expectScenario(measuredBefore.code === 0 && Number.isSafeInteger(physicalBytes) && physicalBytes > 1_073_741_824,
-          "physical PostgreSQL size crosses the canonical limit", { physicalBytes });
+        const { fixture, physicalBytes } = await growSecondDatabaseOverLimit();
         m3.policyClock.advance({ now: new Date(Date.parse(m3.policyClock.current().now) + 86_400_000).toISOString() });
         await drain("storage-over-limit-observation", { workerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS });
         const current = await m3.ownerHTTP(`/v1/projects/${fixture.project.projectId}/services/${fixture.project.databaseService.id}/tenant-database`);
@@ -1323,6 +1328,71 @@ export function createM3DataStage(m3, { mainProject } = {}) {
         return { physicalBytes, growthMode: current.payload.growth_mode, readObserved: true, writeDenied: true, exportPreserved: true,
           largeArchiveWorkerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS };
       });
+  }
+
+  // Focused real-worker diagnostic. Full M3-DATA-01-STORAGE also exercises an
+  // isolated application runtime and portable export; this deliberately does not.
+  async function verifyStorageFreezeDevelopment() {
+    const { fixture, physicalBytes } = await growSecondDatabaseOverLimit();
+    const path = `/v1/projects/${fixture.project.projectId}/services/${fixture.project.databaseService.id}/tenant-database`;
+    const operation = () => m3.postgres.psqlJson("m3-data-storage-development-operation", `SELECT json_build_object(
+      'kind',o.kind,'state',o.state,'result_code',o.result->>'code',
+      'attempt_terminal_code',(SELECT a.terminal_code FROM tenant_database_operation_attempts a
+        WHERE a.operation_id=o.id ORDER BY a.attempt_number DESC LIMIT 1),
+      'storage_bytes',o.result->'proof'->>'storage_bytes',
+      'storage_limit_bytes',o.result->'proof'->>'storage_limit_bytes',
+      'growth_mode',o.result->'proof'->>'growth_mode',
+      'write_denied',o.result->'proof'->>'write_denied',
+      'reads_preserved',o.result->'proof'->>'reads_preserved')
+      FROM tenant_database_operations o
+      WHERE o.tenant_database_id=${sqlString(fixture.record.id)} AND o.database_generation=${sqlString(fixture.record.generation)}
+        AND o.kind='observe_storage' ORDER BY o.created_at DESC,o.id DESC LIMIT 1;`);
+    let receipt;
+    for (let index = 0; index < 2; index += 1) {
+      m3.policyClock.advance({ now: new Date(Date.parse(m3.policyClock.current().now) + 3_600_000).toISOString() });
+      try {
+        await drain(`storage-development-${index + 1}`, { kinds: ["observe_storage"], workerTimeoutMs: LARGE_ARCHIVE_WORKER_TIMEOUT_MS });
+      } catch (error) {
+        let bounded = null;
+        try { bounded = await operation(); } catch { /* original worker failure remains primary */ }
+        throw new ScenarioExpectationError("filtered real storage observation completed", {
+          observation: index + 1,
+          kind: bounded?.kind ?? null,
+          state: bounded?.state ?? null,
+          result_code: bounded?.result_code ?? null,
+          attempt_terminal_code: bounded?.attempt_terminal_code ?? null,
+        });
+      }
+      receipt = await operation();
+      expectScenario(receipt?.kind === "observe_storage" && receipt?.state === "succeeded" &&
+        receipt?.result_code === "storage_observed" && receipt?.growth_mode === "read_only_over_limit" &&
+        Number(receipt.storage_bytes) > 1_073_741_824 && Number(receipt.storage_limit_bytes) === 1_073_741_824 &&
+        receipt?.write_denied === "true" && receipt?.reads_preserved === "true",
+      "real worker proves fresh credential reads and write denial", {
+        observation: index + 1, kind: receipt?.kind ?? null, state: receipt?.state ?? null,
+        result_code: receipt?.result_code ?? null, attempt_terminal_code: receipt?.attempt_terminal_code ?? null,
+        growth_mode: receipt?.growth_mode ?? null,
+        storage_bytes: Number(receipt?.storage_bytes ?? 0), write_denied: receipt?.write_denied ?? null,
+        reads_preserved: receipt?.reads_preserved ?? null,
+      });
+      const current = await m3.ownerHTTP(path);
+      expectScenario(current.status === 200 && current.payload?.id === fixture.record.id &&
+        current.payload.growth_mode === "read_only_over_limit" &&
+        current.payload.measured_storage_bytes > current.payload.storage_limit_bytes &&
+        current.payload.storage_limit_bytes === 1_073_741_824,
+      "actual owner HTTP state remains read-only after storage observation", {
+        observation: index + 1, status: current.status,
+        database_id_matches: current.payload?.id === fixture.record.id,
+        growth_mode: current.payload?.growth_mode ?? null,
+        measured_storage_bytes: current.payload?.measured_storage_bytes ?? null,
+        storage_limit_bytes: current.payload?.storage_limit_bytes ?? null,
+      });
+    }
+    return { database_id: fixture.record.id, physical_bytes: physicalBytes,
+      observations: 2, operation_kind: receipt.kind, operation_state: receipt.state,
+      result_code: receipt.result_code, growth_mode: receipt.growth_mode,
+      worker_fresh_credential_read: true, worker_fresh_credential_write_denied: true,
+      diagnostic_only: true, production_capability_registered: false };
   }
 
   async function runBackupPolicy() {
@@ -1693,6 +1763,7 @@ export function createM3DataStage(m3, { mainProject } = {}) {
     provision,
     verifyProvisioning,
     verifyStorageOverage,
+    verifyStorageFreezeDevelopment,
     runBackupPolicy,
     runExportRestore,
     runMigrationCompatibility,

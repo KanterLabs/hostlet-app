@@ -6,6 +6,19 @@ API, demo and PostgreSQL stores, managed services, and exact Cloudflare records.
 It creates `artifacts/e2e/M3.5/<run-id>/` before setup and writes a failed
 artifact when prerequisites or assertions fail. Stop after a failed full run;
 diagnose its retained receipt before retrying.
+Public-origin readiness uses one 300-second deadline for all three anonymous
+HTTPS hosts, probes them concurrently, and requires all three to return 401
+continuously for 20 seconds before feature checks start. Any other status or
+transport error resets that stability window. Each attempt is recorded under
+`observations.placement.propagation` in `manifest.json` with host, attempt time,
+elapsed time, HTTP status or transport error name/code/cause; a safe Cloudflare
+Ray ID and 1033 code are included when observed. Response bodies are not
+retained. The runner flushes these observations before a readiness failure
+triggers exact route reversal.
+The retained inventory captures pre-existing preview owner, project, release
+and publication IDs before the browser journey. Passwords and provider tokens
+are scrubbed from artifacts; the non-secret Basic username is allowed in paths
+so the recorded private rerun command remains usable.
 
 ```sh
 node e2e/beta/run.mjs \

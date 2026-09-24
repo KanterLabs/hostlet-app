@@ -56,6 +56,7 @@ progress(); // Artifact exists even if parsing, inventory, or setup fails.
 let browser;
 let config;
 let edge;
+let ownerToken;
 let cutoverActive = false;
 let temporaryRestore;
 let interrupted = false;
@@ -111,24 +112,58 @@ const op = (name, replacements = {}) => {
   let result; try { result = JSON.parse(output); } catch { throw new Error(`owned operation ${name} did not return JSON`); }
   return result;
 };
-const owner = async (path, settings = {}) => request(config.origins.dashboard, path, { ...settings, token: state.privateOwnerToken });
-const waitForProtectedOrigins = async () => {
-  const observed = {};
-  for (const [name, origin] of Object.entries(config.origins)) {
-    const started = Date.now();
-    let attempts = 0, status = null;
-    while (Date.now() - started < 45000) {
-      assertLive();
-      attempts += 1;
-      try { status = (await request(origin, "/", { authorized: false })).status; }
-      catch { status = null; }
-      if (status === 401) break;
-      await new Promise((done) => setTimeout(done, 500));
-    }
-    observed[name] = { status, attempts, elapsedMs: Date.now() - started };
-    if (status !== 401) throw new Error(`protected ${name} origin did not become reachable after route cutover`);
+const owner = async (path, settings = {}) => request(config.origins.dashboard, path, { ...settings, token: ownerToken });
+const transportError = (error, depth = 0) => {
+  if (!error || typeof error !== "object" || depth >= 3) return null;
+  return { name: String(error.name ?? "Error"), code: error.code == null ? null : String(error.code), cause: transportError(error.cause, depth + 1) };
+};
+const waitForProtectedOrigins = async (phase) => {
+  const observed = state.observations.placement.propagation[phase] = {};
+  const started = Date.now();
+  const deadlineMs = 300000;
+  const stableRequiredMs = 20000;
+  let stableSince = null;
+  observed.deadlineMs = deadlineMs;
+  observed.stableRequiredMs = stableRequiredMs;
+  const hosts = Object.entries(config.origins).map(([name, origin]) => ({ name, url: new URL("/", origin), host: new URL(origin).hostname }));
+  for (const { name, host } of hosts) observed[name] = { host, status: null, attempts: [], elapsedMs: 0 };
+  while (Date.now() - started < deadlineMs) {
+    assertLive();
+    const timeout = Math.min(5000, deadlineMs - (Date.now() - started));
+    const round = await Promise.all(hosts.map(async ({ name, url, host }) => {
+      const attempt = { host, attemptedAt: new Date().toISOString(), elapsedMs: 0, status: null, error: null, cfRay: null, cloudflareErrorCode: null };
+      try {
+        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeout) });
+        attempt.status = response.status;
+        const cfRay = response.headers.get("cf-ray");
+        if (cfRay && /^[A-Za-z0-9-]{1,64}$/.test(cfRay)) attempt.cfRay = cfRay;
+        if (response.status === 530 && response.body) {
+          const reader = response.body.getReader();
+          try {
+            const chunk = await reader.read();
+            if (chunk.value && /\b1033\b/.test(new TextDecoder().decode(chunk.value.subarray(0, 8192)))) attempt.cloudflareErrorCode = 1033;
+          } finally { await reader.cancel(); }
+        } else await response.body?.cancel();
+      } catch (error) { attempt.error = transportError(error); }
+      attempt.elapsedMs = Date.now() - started;
+      observed[name].status = attempt.status;
+      observed[name].attempts.push(attempt);
+      observed[name].elapsedMs = attempt.elapsedMs;
+      return attempt;
+    }));
+    if (round.every((attempt) => attempt.status === 401 && attempt.error === null)) stableSince ??= Date.now();
+    else stableSince = null;
+    observed.stableSince = stableSince === null ? null : new Date(stableSince).toISOString();
+    observed.stableElapsedMs = stableSince === null ? 0 : Date.now() - stableSince;
+    observed.elapsedMs = Date.now() - started;
+    progress();
+    if (observed.stableElapsedMs >= stableRequiredMs) return observed;
+    const pause = Math.min(500, deadlineMs - (Date.now() - started));
+    if (pause > 0) await new Promise((done) => setTimeout(done, pause));
   }
-  return observed;
+  observed.elapsedMs = Date.now() - started;
+  progress();
+  throw new Error(`protected origins did not remain reachable for ${stableRequiredMs}ms after route cutover`);
 };
 const identity = () => privateJson(join(config.stateDir, "identity-manifest.json"));
 const route = async () => {
@@ -154,6 +189,9 @@ async function execute() {
   edge = { username: edgeInput.username, password: secret(edgeInput.passwordFile) };
   if (!edge.username || !edge.password || config.schema !== "hostlet.beta.config/v1") throw new Error("invalid private preview inputs");
   for (const key of ["dashboard", "demo", "portfolio"]) if (new URL(config.origins[key]).protocol !== "https:") throw new Error(`configured ${key} origin is not HTTPS`);
+  const retained = identity();
+  state.observations.retainedIdentities = { ownerId: retained.identity.ownerId, projectId: retained.identity.projectId, releaseId: retained.runtime.releaseId, publicationId: retained.portfolio.publicationId };
+  check("retained-preview-identities", "pre-existing owned preview IDs are available for exact failed-run inventory", state.observations.retainedIdentities, Object.values(state.observations.retainedIdentities).every(Boolean));
   state.inputs = { configDigest: shaFile(args.config), edgeCredentialFileDigest: shaFile(args["edge-credentials"]), origins: config.origins, rerun: `node e2e/beta/run.mjs --config ${args.config} --edge-credentials ${args["edge-credentials"]} --cloudflare-config ${args["cloudflare-config"]} --cloudflare-before ${args["cloudflare-before"]} --ready-proof ${args["ready-proof"]} --services-manifest ${args["services-manifest"]} --require-clean` };
   state.source.installedReleaseCommit = config.releaseCommit;
   state.source.installedBinaryDigests = Object.fromEntries(Object.entries(config.binaries ?? {}).map(([name, path]) => [name, shaFile(path)]));
@@ -172,8 +210,8 @@ async function execute() {
   op("routeCutover");
   const stagedStatus = op("routeStatus");
   check("M35-PLACE-01-cutover", "all three HTTPS hosts reach the exact staged preview route", { staged: stagedStatus.phase, exactRecords: stagedStatus.exactRecordCounts }, stagedStatus.phase === "cutover" && Object.values(stagedStatus.exactRecordCounts ?? {}).length === 3 && Object.values(stagedStatus.exactRecordCounts).every((value) => value === 1));
-  state.observations.placement = { before, staged: stagedStatus };
-  state.observations.placement.propagation = await waitForProtectedOrigins();
+  state.observations.placement = { before, staged: stagedStatus, propagation: {} };
+  await waitForProtectedOrigins("initial");
 
   const hosts = Object.entries(config.origins);
   for (const [name, origin] of hosts) {
@@ -195,7 +233,7 @@ async function execute() {
   check("M35-ACCESS-01-expired", "revoked owner session cannot read private data", { revokeStatus: revoked.status, accountStatus: expired.status }, revoked.status < 300 && expired.status === 401);
   const freshLogin = await request(config.origins.dashboard, "/v1/sessions", { method: "POST", body: { email: config.owner.email, password: secret(config.owner.passwordFile) } });
   check("M35-ACCESS-01-fresh-session", "owner can sign in again after session revocation", { status: freshLogin.status }, freshLogin.status === 201 && Boolean(freshLogin.payload?.token));
-  state.privateOwnerToken = freshLogin.payload.token;
+  ownerToken = freshLogin.payload.token;
   const manifestBefore = identity();
   check("M35-COMPOSE-01-identities", "owned account, project and exact source are durable", { ownerId: manifestBefore.identity.ownerId, projectId: manifestBefore.identity.projectId, sourceRevisionId: manifestBefore.source.sourceRevisionId }, Boolean(manifestBefore.identity.ownerId && manifestBefore.identity.projectId && manifestBefore.source.sourceRevisionId));
   const released = await route();
@@ -298,7 +336,7 @@ async function execute() {
   check("M35-SEED-01-idempotent", "bootstrap preserves IDs, latest owner edit, approval and publication", { stableIds: JSON.stringify(seedBefore.identity) === JSON.stringify(seedAfter.identity), draftId: draftAfterSeed.payload?.id, publicationId: (await owner("/v1/portfolio/publications/latest")).payload?.id }, JSON.stringify(seedBefore.identity) === JSON.stringify(seedAfter.identity) && draftAfterSeed.payload?.id === stale.newerPrivateDraftId && draftAfterSeed.payload?.draft?.profile?.introduction === intro && (await owner("/v1/portfolio/publications/latest")).payload?.id === published.payload.id);
   const interruptedSeed = op("partialBootstrapAndRepair");
   check("M35-SEED-01-repair", "separate owned partial seed converges without duplicate project or release", interruptedSeed, interruptedSeed.interrupted === true && interruptedSeed.repaired === true && interruptedSeed.duplicateProjects === 0 && interruptedSeed.duplicateReleases === 0);
-  state.observations.retainedIdentities = { ownerId: seedAfter.identity.ownerId, projectId: seedAfter.identity.projectId, secondaryOwnerId: interruptedSeed.ownerId, secondaryProjectId: interruptedSeed.projectId, releaseId, publicationId: published.payload.id };
+  state.observations.retainedIdentities = { ...state.observations.retainedIdentities, ownerId: seedAfter.identity.ownerId, projectId: seedAfter.identity.projectId, secondaryOwnerId: interruptedSeed.ownerId, secondaryProjectId: interruptedSeed.projectId, releaseId, publicationId: published.payload.id };
 
   const backup = op("backupPopulated", { itemId: item.id });
   check("M35-RECOVER-01-backup", "both populated stores produced verified private backups", { platformSha256: backup.platformSha256, projectSha256: backup.projectSha256 }, /^[a-f0-9]{64}$/.test(backup.platformSha256) && /^[a-f0-9]{64}$/.test(backup.projectSha256));
@@ -320,7 +358,7 @@ async function execute() {
   check("M35-PLACE-01-reversal", "exact prior target is restored by provider readback", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget }, reversed.phase === "reversed" && reversed.exactPriorTarget === before.exactPriorTarget);
   op("routeCutover"); cutoverActive = true;
   const reapplied = op("routeStatus");
-  await waitForProtectedOrigins();
+  await waitForProtectedOrigins("reapplied");
   check("M35-PLACE-01-reapply", "preview target is reapplied after exact reversal", { phase: reapplied.phase }, reapplied.phase === "cutover");
   state.observations.placement.reversed = reversed; state.observations.placement.reapplied = reapplied;
   const after = await request(config.origins.portfolio, new URL(portfolioUrl).pathname);
@@ -330,14 +368,14 @@ async function execute() {
   check("M35-PLACE-01-final-reversal", "clean gate restores exact legacy route until both runs pass", { phase: finalReversal.phase, exactPriorTarget: finalReversal.exactPriorTarget }, finalReversal.phase === "reversed" && finalReversal.exactPriorTarget === before.exactPriorTarget);
   state.observations.placement.finalReversal = finalReversal;
   state.observations.browser = { requestedOrigins: [...new Set(requests.map((event) => event.origin))], pageCount: 4 };
-  delete state.privateOwnerToken;
+  ownerToken = undefined;
 }
 
 try {
   await execute();
   state.status = interrupted ? "interrupted" : "passed";
 } catch (error) {
-  delete state.privateOwnerToken;
+  ownerToken = undefined;
   state.status = interrupted ? "interrupted" : "failed";
   state.errors.push({ kind: "gate", message: publicValue(error.message) });
 } finally {
@@ -363,7 +401,7 @@ try {
   if (args["require-clean"] && (!state.source.endingClean || state.source.endingCommit !== state.source.commit)) state.status = "failed";
   progress();
   const availableSecret = (path) => { try { return path ? secret(path) : null; } catch { return null; } };
-  const credentialBytes = [edge?.username, edge?.password, availableSecret(config?.owner?.passwordFile), availableSecret(config?.otherOwner?.passwordFile), process.env.M35_CF_DNS_TOKEN, process.env.M35_CF_TUNNEL_TOKEN].filter((value) => typeof value === "string" && value.length > 3).map((value) => Buffer.from(value));
+  const credentialBytes = [edge?.password, availableSecret(config?.owner?.passwordFile), availableSecret(config?.otherOwner?.passwordFile), process.env.M35_CF_DNS_TOKEN, process.env.M35_CF_TUNNEL_TOKEN].filter((value) => typeof value === "string" && value.length > 3).map((value) => Buffer.from(value));
   const scanCredentials = () => ["manifest.json", "REPORT.md"].flatMap((name) => credentialBytes.filter((value) => readFileSync(join(artifact, name)).includes(value)).map(() => name));
   const credentialMatches = scanCredentials();
   if (credentialMatches.length) {

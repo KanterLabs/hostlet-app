@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "manually_blocked",
-      "status": "blocked"
+      "dependency_state": "owned",
+      "status": "active"
     },
     {
       "key": "HOST-228",
@@ -811,23 +811,25 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12119,
-    "read_at": "2026-09-24T16:53:55.689114552Z",
+    "project_revision": 12127,
+    "read_at": "2026-09-24T20:39:57.985812763Z",
     "completed": 22,
-    "active": 0,
+    "active": 1,
     "backlog": 11,
-    "blocked": 1,
-    "active_task": null,
+    "blocked": 0,
+    "active_task": "HOST-248",
     "assigned_stop": "HOST-248",
-    "stopped_at": "HOST-248",
-    "active_tasks": []
+    "stopped_at": null,
+    "active_tasks": [
+      "HOST-248"
+    ]
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "HOST-246 and HOST-247 complete. HOST-248 blocked after the first full deployed gate failed on demo-origin readiness; exact route reversal and cleanup passed. No retry; M4/M5 remain unclaimed.",
+    "tracking": "Shane authorized focused fixes on 2026-09-24 using Sol Medium workers. HOST-248 active: correct route propagation readiness and failure evidence, preserve deployed state, verify before final cutover. M4/M5 remain unclaimed.",
     "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview."
   }

@@ -40,8 +40,10 @@ See [M3.5 scenarios](docs/M3.5-SCENARIOS.md) and
 [preview contract](docs/M3.5-PREVIEW-CONTRACT.md). HOST-246 and HOST-247 are
 complete; HOST-248 stopped after its first deployed gate failed at public demo
 readiness. The original route was restored. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
-records the incomplete acceptance and required follow-up; no retry or M4 work
-is authorized by the failed run.
+records the incomplete acceptance. Shane subsequently authorized Sol workers
+to deploy focused fixes: retain public-origin diagnostics, correct path redaction,
+and verify observed Cloudflare route propagation before feature assertions.
+Stop again on any full-gate failure. M4 remains outside the assignment.
 
 > Your projects, live and ready to show.
 

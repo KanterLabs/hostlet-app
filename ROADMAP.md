@@ -12,7 +12,7 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
+The snapshot contains **34 cards (22 complete, one blocked, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
@@ -23,12 +23,13 @@ graph makes the final gate depend transitively on all 33 other cards.
 Shane authorized a restricted owner preview at `beta.hostlet.cloud` on
 2026-09-24. HOST-246 defines placement, access and preservation; HOST-247 builds
 the durable seeded composition; HOST-248 deploys and verifies the preview twice.
-M4 depends on HOST-248. Snapshot revision 12127 records HOST-246 and
-HOST-247 complete and HOST-248 active after Shane authorized focused fixes.
-The first failed gate and exact route reversal remain retained in
-[the M3.5 handoff](docs/M3.5-HANDOFF.md). Fixes address observed public-route
-propagation and failure evidence; acceptance is not yet claimed. Later cards
-remain unclaimed.
+M4 depends on HOST-248. Snapshot revision 12133 records HOST-246 and
+HOST-247 complete and HOST-248 blocked after the focused fix deployment.
+Public routing, access and the live demo passed; the full gate stopped at
+a provisioning-receipt query that reads the wrong JSON paths (20 checks passed,
+one failed). The real nested proof was verified read-only, the original route
+was restored, and no repair/retry followed. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
+retains both failed gates and evidence. Later cards remain unclaimed.
 
 Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
 `0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and

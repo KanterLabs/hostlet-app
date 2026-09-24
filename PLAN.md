@@ -43,7 +43,10 @@ readiness. The original route was restored. [The M3.5 handoff](docs/M3.5-HANDOFF
 records the incomplete acceptance. Shane subsequently authorized Sol workers
 to deploy focused fixes: retain public-origin diagnostics, correct path redaction,
 and verify observed Cloudflare route propagation before feature assertions.
-Stop again on any full-gate failure. M4 remains outside the assignment.
+Those focused fixes are deployed at `0ca0ec2`. The next full gate passed public
+access and demo checks, then stopped at incorrect JSON paths in its provisioning
+receipt query. The original route was restored; no repair/retry followed.
+M3.5 remains incomplete and M4 remains outside the assignment.
 
 > Your projects, live and ready to show.
 

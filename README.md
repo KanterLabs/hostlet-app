@@ -28,10 +28,12 @@ production portfolio publication remain disabled. M3.5 now adds a restricted
 owner preview deployment through HOST-248. Its
 [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
 [scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
-the first deployed gate failed at demo-origin readiness and was stopped after
-exact route reversal. The new preview is not yet available at the public URL.
-[The M3.5 handoff](docs/M3.5-HANDOFF.md) records completed setup, the failure
-and verified private receipt. M4 and later milestones remain unclaimed.
+focused routing and diagnostic fixes are deployed. The next full gate passed
+public access and the live demo, then stopped at a provisioning-receipt query
+using wrong JSON paths (20 checks passed, one failed). The original route was
+restored, so the new preview is not handed off at the public URL.
+[The M3.5 handoff](docs/M3.5-HANDOFF.md) records the read-only diagnosis and
+verified private receipts. M4 and later milestones remain unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

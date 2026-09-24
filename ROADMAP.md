@@ -1,6 +1,6 @@
 # Hostlet implementation roadmap
 
-Execution snapshot updated on 2026-09-23. [PLAN.md](PLAN.md) defines the product;
+Execution snapshot updated on 2026-09-24. [PLAN.md](PLAN.md) defines the product;
 [RECOMMENDATIONS.md](RECOMMENDATIONS.md) records adopted answers and benchmark
 targets. [TESTING.md](TESTING.md) defines the required E2E evidence and agent
 stopping rules. [Helm](https://tc.shanekanterman.dev/p/hostlet) owns live task,
@@ -12,33 +12,42 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 cards (thirteen complete, two active, 16 in Backlog),
+The snapshot contains **31 cards (20 complete, none active, 11 in Backlog),
 38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 30 other cards.
 
 ## Start here
 
-**M2 is complete at HOST-243. M3 is assigned through HOST-233; stop before M4.** All eight M1 cards and all
-five M2 cards are complete. Two clean M2 runs each passed 48 assertions on the
-same unchanged implementation commit, including real-browser source/preview
-flows, concurrent admission, bounded compatibility, populated upgrade/restore
-and retained-M1 compatibility. The second rebuilt M1 from its pinned clean source.
-[The M2 handoff](docs/M2-HANDOFF.md) records exact commands, private artifact paths,
-receipt hashes, CI, cleanup and limits. Sol Medium workers implemented M2;
-the primary agent integrated and verified their work.
+**M3 is complete at HOST-233. Stop before M4.** All eight M1 cards, five M2
+cards and seven M3 cards are complete in Helm. The current snapshot is revision
+12047; there are no active claims. The remaining 11 M4/M5 cards stay unclaimed.
 
-M1's two clean runs each passed 54 assertions; its historical evidence remains
-in [the M1 handoff](docs/M1-HANDOFF.md). The upfront M2 inventory remains
-[M2 scenarios](docs/M2-SCENARIOS.md).
+Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
+`0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and
+fixtures. The second rebuilt the retained M2 binary from its pinned clean
+source. Both runs verified populated migration and exact 78-relation recovery,
+real VM builds and isolated runtimes, coordinated releases, approved independent
+static portfolios, private receipts and cleanup with zero surviving relays.
+[The M3 handoff](docs/M3-HANDOFF.md) records exact repeat commands, artifact paths,
+receipt hashes, browser evidence and limits. GPT-6 Sol workers at medium
+reasoning completed the bounded work; the primary integrated and verified it.
 
-The next milestone is **M3 — Working demo and portfolio**, ending at HOST-233.
-HOST-222 and HOST-225 are active in Helm for runtime and disposable-VM build verification. HOST-223 and HOST-227 have completed prerequisites; later dependent cards remain unclaimed. Helm accepted both claims and structured progress; the latest dependency snapshot is revision 11758. The September 23 correction requires GPT-6 Sol workers at medium reasoning, with the primary owning integration and verification. No M3 completion is implied. See [M3 scenarios](docs/M3-SCENARIOS.md) for the upfront acceptance inventory.
-The planned paid-pilot readiness release remains planned; M2 does not authorize
-customer execution, live payments, provider purchases or a production launch.
-The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) retains the observed
-throughput target miss as a production-readiness deferral. Owned-fixture
-acceptance still requires every isolation, resource and functional gate.
+M1's two clean runs each passed 54 assertions, and M2's each passed 48.
+Their historical evidence remains in the [M1 handoff](docs/M1-HANDOFF.md) and
+[M2 handoff](docs/M2-HANDOFF.md). The upfront [M3 scenarios](docs/M3-SCENARIOS.md)
+and completed [execution plan](docs/M3-COMPLETION-PLAN.md) retain scope and
+validation decisions.
+
+The next milestone, requiring a new assignment, is **M4 — Complete product
+behavior**, ending at HOST-244: billing and lifecycle behavior, resource
+visibility, the remaining portfolio layouts, and screenshot/demo readiness.
+The paid-pilot readiness release remains planned. M3 acceptance covers owned
+local fixtures; customer admission remains disabled. Next.js 16 stays
+unsupported, and both full gates missed the provisional throughput target.
+The [runtime decision](docs/M3-RUNTIME-DECISION.md) and handoff preserve these
+production-readiness deferrals. No customer execution, live payment, provider
+purchase or production launch follows from milestone completion.
 
 Keep future cards unclaimed until their prerequisites are complete and their
 milestone is in the assigned scope. Consult Helm for current claimability.
@@ -80,7 +89,7 @@ the agent handoff. Helm claimability alone is not an instruction to continue.
 - Every E2E run, including a failed run, produces verifiable repeatable
   evidence. Missing, incomplete or failed evidence cannot pass a gate.
 - Existing `make check` runs formatting, linting, builds and legacy tests.
-  It is not E2E evidence. M1 and M2 completion is established by the linked clean-run receipts.
+  It is not E2E evidence. M1, M2 and M3 completion is established by the linked clean-run receipts.
 
 The full contract, artifact fields, interruption handling and isolation
 exception are in [TESTING.md](TESTING.md).

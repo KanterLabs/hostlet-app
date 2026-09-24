@@ -8,9 +8,12 @@ These use real disposable build VMs, isolated runtimes, tenant PostgreSQL,
 coordinated releases, owner approval, and independent static publishing.
 Follow [M3-E2E.md](../docs/M3-E2E.md) for the required owned assets and host
 prerequisites and [M3-SCENARIOS.md](../docs/M3-SCENARIOS.md) for acceptance.
-A dirty run is diagnostic evidence; M3 still requires two clean full runs on one
-implementation commit, including `E2E_ARGS='--rebuild-retained'` for one run.
-M3 remains pending until its gate receipts and handoff are complete.
+A dirty run is diagnostic evidence. M3 local acceptance passed two clean full
+runs on one implementation commit, including a forced retained M2 rebuild.
+[The M3 handoff](../docs/M3-HANDOFF.md) records the run IDs, receipt hashes,
+browser evidence, exact `umask 0022` repeat commands and limits. Repeating the
+accepted implementation after later documentation commits requires an isolated
+full-history checkout of its tested commit.
 
 `make e2e-scaffold` is the smaller API/web shell check. `make e2e-failure`
 intentionally corrupts a shell oracle to verify failure evidence. Neither

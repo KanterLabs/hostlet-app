@@ -1,6 +1,12 @@
 # M3 completion plan for GPT-6 Sol agents
 
-Prepared 2026-09-24. This is the remaining execution plan through HOST-233,
+Completed 2026-09-24: two audited clean full gates at `0649f74` each passed
+55/55 assertions and all 11 phases. The [M3 handoff](M3-HANDOFF.md) records the
+verified receipts, exact repeat commands, cleanup and retained compatibility
+limits. Stop before M4. The baseline and checkpoints below preserve the plan as
+written before these runs.
+
+Prepared 2026-09-24. This was the remaining execution plan through HOST-233,
 superseding the earlier final-fix attempt plans. It does not change the product
 scope in [PLAN.md](../PLAN.md), the [scenario inventory](M3-SCENARIOS.md), or
 [TESTING.md](../TESTING.md). Planning does not restart implementation or tests.

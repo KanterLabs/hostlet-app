@@ -6,7 +6,7 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-**Status: M2 accepted; M3 implementation and acceptance are in progress.** M2
+**Status: M2 and M3 accepted for owned local fixtures.** M2
 supports accounts, selected GitHub repositories and branches, bounded
 compatibility checks, and an editable private portfolio preview before paid
 hosting. The control API persists immutable source, configuration, report and
@@ -16,13 +16,16 @@ verified acceptance evidence: two clean 48-assertion runs, exact repeat
 commands, private receipts, and observed limits. M2 acceptance is complete
 through HOST-243.
 
-The current M3 work is limited to owned local fixtures and run-scoped resources.
+M3 acceptance is limited to owned local fixtures and run-scoped resources.
 It covers the working-demo path, deployment and release boundaries, owner
 approval and fact refresh, tenant data lifecycle, and independent static
-portfolio publishing. M3 acceptance is still in progress; no clean HOST-233
-gate has been recorded. Customer admission, production workload execution,
-payment collection, provider purchases, and production or public publication
-remain disabled. M4 and later milestones remain unclaimed.
+portfolio publishing. Two clean 55-assertion full journeys passed on the same
+implementation commit through HOST-233, with one rebuilding the retained M2
+binary. The [M3 handoff](docs/M3-HANDOFF.md) records private receipts, exact
+repeat commands, browser evidence, cleanup and limits. Customer admission,
+production workload execution, payment collection, provider purchases, and
+production portfolio publication remain disabled. M4 and later milestones
+remain unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 
@@ -139,7 +142,7 @@ make check
 ```
 
 After the prerequisites and owned assets in the [M3 E2E guide](docs/M3-E2E.md)
-are available, the diagnostic journey commands are:
+are available, these commands run a diagnostic journey from a development tree:
 
 ```sh
 make e2e-m3
@@ -147,16 +150,19 @@ make e2e-m3 E2E_ARGS='--rebuild-retained'
 ```
 
 These commands may run from a dirty development tree and do not establish M3
-acceptance. The clean-tree command is reserved for the later gate review:
+acceptance. The accepted gates used a clean checkout of the tested
+implementation commit and ran serially with an explicit umask:
 
 ```sh
+umask 0022
 make e2e-m3-gate
+make e2e-m3-gate E2E_ARGS='--rebuild-retained'
 ```
 
-M3 requires two clean runs on the same implementation commit, including one
-retained predecessor rebuild, with verified receipts and a handoff. Follow
-[TESTING.md](TESTING.md) for the artifact contract and stop before claiming M3
-or starting M4.
+See [the handoff](docs/M3-HANDOFF.md) for the exact tested commit, both run IDs,
+verified receipts and observed behavior. Later documentation commits require
+an isolated full-history checkout to repeat the exact accepted source. Follow
+[TESTING.md](TESTING.md) for the artifact contract and stop before M4.
 
 ## Workspace
 

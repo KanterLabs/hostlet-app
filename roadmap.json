@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "updated": "2026-09-23",
+  "updated": "2026-09-24",
   "project": "HOST",
   "repository": "KanterLabs/hostlet-app",
   "release": "Hostlet 0.1 \u2014 paid pilot readiness",
@@ -284,8 +284,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "active",
-      "dependency_state": "owned"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-223",
@@ -304,8 +304,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-225",
@@ -324,8 +324,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "active",
-      "dependency_state": "owned"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-227",
@@ -344,8 +344,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "claimable"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-226",
@@ -366,8 +366,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-229",
@@ -386,8 +386,8 @@
       ],
       "milestone": "M3",
       "is_gate": false,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-233",
@@ -409,8 +409,8 @@
       ],
       "milestone": "M3",
       "is_gate": true,
-      "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "status": "completed",
+      "dependency_state": "completed"
     },
     {
       "key": "HOST-228",
@@ -430,7 +430,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-230",
@@ -450,7 +450,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-231",
@@ -470,7 +470,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-232",
@@ -645,7 +645,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M1 and M2 are complete at HOST-242 and HOST-243. Their handoffs record two clean full E2E runs per milestone, including rebuilt retained binaries, populated recovery and verified private receipts. M3 implementation and acceptance are in progress through HOST-233; no M3 gate is complete. Stop before M4. Routine make check is not product E2E evidence."
+    "current_status": "M1, M2 and M3 are complete at HOST-242, HOST-243 and HOST-233. Each handoff records two clean full E2E runs, populated recovery, retained predecessor compatibility and verified private receipts. M3 passed 55/55 assertions in each run at 0649f74, including a retained-M2 source rebuild. Stop before M4; customer admission stays disabled. Routine make check is not product E2E evidence."
   },
   "milestones": [
     {
@@ -736,26 +736,25 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 11758,
-    "read_at": "2026-09-23T05:23:44.611638342Z",
-    "completed": 13,
-    "active": 2,
-    "backlog": 16,
-    "active_task": "HOST-222",
+    "project_revision": 12047,
+    "read_at": "2026-09-24T03:43:49.146155188Z",
+    "completed": 20,
+    "active": 0,
+    "backlog": 11,
+    "active_task": null,
     "assigned_stop": "HOST-233",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-222",
-      "HOST-225"
-    ]
+    "stopped_at": "HOST-233",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3",
     "stop_gate": "HOST-233",
-    "workers": "luna_worker; Sol owns integration and verification",
+    "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-22",
-    "tracking": "Helm HOST-222 and HOST-225 are claimed for runtime and disposable-VM build verification. HOST-223 and HOST-227 have satisfied prerequisites; dependent M3 and all M4/M5 cards remain unclaimed. No M3 gate is complete.",
-    "data_preservation": "Retained clean M2 binary and source/hash manifest before M3 code changes; fresh verified backup, populated additive upgrade and actual retained-binary compatibility required",
-    "runtime_decision": "docs/M3-RUNTIME-DECISION.md; measured 50% throughput target remains unmet, production readiness deferred, owned-fixture-only evaluation retains all mandatory controls."
+    "tracking": "All seven M3 cards are complete in prerequisite order. HOST-233 is the accepted stopping point. M4 and M5 remain unclaimed; dependency readiness does not authorize further work.",
+    "data_preservation": "Two clean full M3 runs verified fresh backups, populated schema-5 to schema-6 upgrade, actual retained-M2 reads/writes/restart, repeat-migration idempotence and exact 78-relation restore into separate targets without database rewind.",
+    "runtime_decision": "docs/M3-HANDOFF.md and docs/M3-RUNTIME-DECISION.md; full-gate throughput ratios 29.979% and 29.706% miss the 50% target. Owned-fixture-only acceptance, Next16 unsupported, production readiness deferred and customer admission disabled.",
+    "completed_at": "2026-09-24",
+    "handoff": "docs/M3-HANDOFF.md"
   }
 }

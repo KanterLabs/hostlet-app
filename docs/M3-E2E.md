@@ -1,10 +1,11 @@
 # M3 owned E2E preparation and run guide
 
-M3 implementation and validation are in progress. This guide prepares and runs
-the owned HOST-233 journey described in [M3-SCENARIOS.md](M3-SCENARIOS.md).
-It is not an M3 acceptance record, and a successful local invocation is not an
-acceptance claim. The gate still requires the evidence and clean-repeat policy
-in [TESTING.md](../TESTING.md).
+This guide prepares and runs the owned HOST-233 journey described in
+[M3-SCENARIOS.md](M3-SCENARIOS.md). Two clean runs passed M3 local acceptance;
+[M3-HANDOFF.md](M3-HANDOFF.md) records their exact tested source, private
+receipts and limits. A new local invocation is evidence only for its recorded
+source and must satisfy the clean-repeat policy in [TESTING.md](../TESTING.md)
+before it can support another acceptance claim.
 
 The procedure uses only owned local fixtures and run-scoped resources. It does
 not authorize production deployment, customer admission, public publication,
@@ -315,12 +316,19 @@ make e2e-m3 E2E_ARGS='--rebuild-retained'
 ```
 
 `make e2e-m3` permits a dirty development tree and records its source and diff
-digests. Such a run is diagnostic only. Once implementation is committed and
-the milestone prerequisites are satisfied, the clean-tree command is:
+digests. Such a run is diagnostic only. The accepted pair used these clean-tree
+commands serially from the same tested implementation commit:
 
 ```sh
+umask 0022
 make e2e-m3-gate
+make e2e-m3-gate E2E_ARGS='--rebuild-retained'
 ```
+
+Audit the first bundle before the second run. The recorded umask is part of
+each manifest's rerun command. After documentation commits, use an isolated
+full-history checkout of the tested commit from [the handoff](M3-HANDOFF.md)
+to reproduce those gates.
 
 For shorter debugging cycles, the partial data and runtime development
 scenarios can be run directly:
@@ -404,9 +412,9 @@ The database bootstrap diagnostic launches one Node 24 application with a
 control-scoped tenant credential, exercises application read/write, and verifies
 secret mount and runtime cleanup. It does not register a runtime capability.
 
-Do not call the gate complete from this guide. HOST-233 requires two clean runs
-on the same implementation commit, including one retained rebuild run, and a
-separate handoff that records both verified receipts and observed limits.
+The accepted HOST-233 pair and its two verified receipts are recorded in
+[M3-HANDOFF.md](M3-HANDOFF.md). This guide alone does not establish the outcome
+of a later run or authorize M4 or production launch.
 
 ## Verify a run receipt
 

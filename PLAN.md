@@ -12,17 +12,23 @@ M1 is complete at HOST-242. The verified local control foundation and its limits
 are described in [README.md](README.md) and the [M1 handoff](docs/M1-HANDOFF.md).
 M2 acceptance passed through HOST-243: GitHub onboarding, synthetic admission,
 bounded static compatibility and private preview passed two clean 48-assertion
-runs. The [M2 handoff](docs/M2-HANDOFF.md) records verified receipts and limits. M3 is assigned through HOST-233; the September 23 correction requires GPT-6 Sol workers at medium reasoning, with the primary owning integration and verification. M4 and later remain unclaimed. The upfront acceptance inventory is docs/M3-SCENARIOS.md. The product and
-lifecycle defaults below are adopted planning requirements for implementation;
-they are not current capabilities, a published price catalog or permission to
-provision infrastructure. Resource numbers are starting benchmark targets, and
-$5/$12/$20 are pricing hypotheses subject to full-use validation. Provider,
-spend, domain-purchase and production-migration decisions require separate
-authorization.
+runs. The [M2 handoff](docs/M2-HANDOFF.md) records verified receipts and limits.
+M3 acceptance passed through HOST-233 on 2026-09-24 using GPT-6 Sol workers at
+medium reasoning, with the primary owning integration and verification. Two
+clean full runs at `0649f74f4a93ffc691b9c472c1759d1ff56f439d` each passed all 55
+assertions and 11 phases; the second rebuilt the retained M2 binary from its
+pinned source. The [M3 handoff](docs/M3-HANDOFF.md) records repeat commands,
+verified private receipts, populated recovery, cleanup and compatibility limits.
+**Stop at M3; M4 and later remain unclaimed.** The upfront acceptance inventory
+is [M3 scenarios](docs/M3-SCENARIOS.md), and the completed
+[Sol agent execution plan](docs/M3-COMPLETION-PLAN.md) retains the fix rationale.
 
-The remaining M3 work follows the [Sol agent completion plan](docs/M3-COMPLETION-PLAN.md),
-including runtime startup fixes, bounded E2E preflight, two clean full gates and
-the HOST-233 handoff. M3 remains unaccepted until that evidence is complete.
+The product and lifecycle defaults below are adopted planning requirements;
+the handoffs distinguish verified capabilities from future scope. Prices remain
+hypotheses and resource numbers remain benchmark targets. M3 establishes the
+owned-fixture journey, with customer admission disabled: Next.js 16 remains
+unsupported and the runtime throughput target remains unmet. Provider, spend,
+domain-purchase and production-migration decisions require separate authorization.
 
 > Your projects, live and ready to show.
 

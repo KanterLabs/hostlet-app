@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Render only owned preview units. No install, migration, seed, or service mutation occurs during render.
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { connect, isIP } from "node:net";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,12 @@ function arg(value, label) {
   return text;
 }
 function command(...parts) { return parts.map((part, index) => arg(part, `argument ${index}`)).join(" "); }
+function privilegedExecutable() {
+  const path = realpathSync("/usr/bin/sudo");
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0) throw new Error("canonical sudo executable is unavailable");
+  return absolute(path, "canonical sudo executable");
+}
 function renderUnit({ short, release, envFile, exec, user, group, writes = [STATE_ROOT], after = [], privilegedHelper = false, sharedHostTmp = false }) {
   let body = TEMPLATE.replaceAll("{{label}}", short).replaceAll("{{release}}", release)
     .replaceAll("{{envFile}}", envFile).replaceAll("{{command}}", exec).replaceAll("{{writePaths}}", writes.join(" "))
@@ -98,7 +104,7 @@ export function renderManagedServices(config, commit) {
       "--kind", "provision", "--kind", "backup_daily", "--kind", "backup_pre_migration",
       "--kind", "export", "--kind", "observe_storage", "--kind", "archive_expire",
     ], true),
-    managed({ short: "runtime", release, envFile: e("runtime"), after: ["control"], privilegedHelper: true, exec: command(binary("hostlet-runtime"), "release-worker", "--control-url", workerUrl, "--worker-id", "m35-owned-release-worker", "--token-file", p("runtimeTokenFile"), "--coordinator", script("scripts/release/hostlet-release-coordinator.py"), "--probe", script("scripts/runtime/hostlet-runtime-probe"), "--migration-probe", script("scripts/runtime/hostlet-runtime-migration-probe.py"), "--runtime-binary", binary("hostlet-runtime"), "--launcher", script("scripts/runtime/hostlet-runtime-launcher"), "--runsc", p("runsc"), "--peer-helper", script("scripts/runtime/hostlet-runtime-peer"), "--privileged-command", "/usr/bin/sudo", "--state-root", state, "--runtime-root", join(state, "runtime-state"), "--artifact-root", join(state, "private-cas"), "--runtime-artifact-root", join(state, "runtime-artifacts")) }),
+    managed({ short: "runtime", release, envFile: e("runtime"), after: ["control"], privilegedHelper: true, exec: command(binary("hostlet-runtime"), "release-worker", "--control-url", workerUrl, "--worker-id", "m35-owned-release-worker", "--token-file", p("runtimeTokenFile"), "--coordinator", script("scripts/release/hostlet-release-coordinator.py"), "--probe", script("scripts/runtime/hostlet-runtime-probe"), "--migration-probe", script("scripts/runtime/hostlet-runtime-migration-probe.py"), "--runtime-binary", binary("hostlet-runtime"), "--launcher", script("scripts/runtime/hostlet-runtime-launcher"), "--runsc", p("runsc"), "--peer-helper", script("scripts/runtime/hostlet-runtime-peer"), "--privileged-command", privilegedExecutable(), "--state-root", state, "--runtime-root", join(state, "runtime-state"), "--artifact-root", join(state, "private-cas"), "--runtime-artifact-root", join(state, "runtime-artifacts")) }),
     worker("publisher-worker", "hostlet-publisher", "worker", "publisher", "m35-owned-publisher"),
     managed({ short: "publisher-static", release, envFile: e("publisherStatic"), exec: command(binary("hostlet-publisher"), "serve", "--root", join(state, "publisher"), "--bind", `127.0.0.1:${publisherPort}`, "--expected-host", expectedHost) }),
     managed({ short: "dashboard", release, envFile: e("dashboard"), exec: command(p("caddy"), "file-server", "--root", join(release, "web", "dist"), "--listen", `127.0.0.1:${dashboardPort}`), writes: [STATE_ROOT] }),

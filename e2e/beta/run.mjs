@@ -112,6 +112,24 @@ const op = (name, replacements = {}) => {
   return result;
 };
 const owner = async (path, settings = {}) => request(config.origins.dashboard, path, { ...settings, token: state.privateOwnerToken });
+const waitForProtectedOrigins = async () => {
+  const observed = {};
+  for (const [name, origin] of Object.entries(config.origins)) {
+    const started = Date.now();
+    let attempts = 0, status = null;
+    while (Date.now() - started < 45000) {
+      assertLive();
+      attempts += 1;
+      try { status = (await request(origin, "/", { authorized: false })).status; }
+      catch { status = null; }
+      if (status === 401) break;
+      await new Promise((done) => setTimeout(done, 500));
+    }
+    observed[name] = { status, attempts, elapsedMs: Date.now() - started };
+    if (status !== 401) throw new Error(`protected ${name} origin did not become reachable after route cutover`);
+  }
+  return observed;
+};
 const identity = () => privateJson(join(config.stateDir, "identity-manifest.json"));
 const route = async () => {
   const id = identity().identity.projectId;
@@ -155,6 +173,7 @@ async function execute() {
   const stagedStatus = op("routeStatus");
   check("M35-PLACE-01-cutover", "all three HTTPS hosts reach the exact staged preview route", { staged: stagedStatus.phase, exactRecords: stagedStatus.exactRecordCounts }, stagedStatus.phase === "cutover" && Object.values(stagedStatus.exactRecordCounts ?? {}).length === 3 && Object.values(stagedStatus.exactRecordCounts).every((value) => value === 1));
   state.observations.placement = { before, staged: stagedStatus };
+  state.observations.placement.propagation = await waitForProtectedOrigins();
 
   const hosts = Object.entries(config.origins);
   for (const [name, origin] of hosts) {
@@ -301,6 +320,7 @@ async function execute() {
   check("M35-PLACE-01-reversal", "exact prior target is restored by provider readback", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget }, reversed.phase === "reversed" && reversed.exactPriorTarget === before.exactPriorTarget);
   op("routeCutover"); cutoverActive = true;
   const reapplied = op("routeStatus");
+  await waitForProtectedOrigins();
   check("M35-PLACE-01-reapply", "preview target is reapplied after exact reversal", { phase: reapplied.phase }, reapplied.phase === "cutover");
   state.observations.placement.reversed = reversed; state.observations.placement.reapplied = reapplied;
   const after = await request(config.origins.portfolio, new URL(portfolioUrl).pathname);

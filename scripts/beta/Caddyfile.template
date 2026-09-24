@@ -1,0 +1,81 @@
+# Dedicated Cloudflare Tunnel connector reaches this loopback-only HTTP listener.
+# Public HTTPS and HTTP-to-HTTPS redirect are enforced at the Cloudflare edge.
+# The imported private file contains only the basic_auth directive and its
+# bcrypt-hashed preview credential; it must be readable by this Caddy service.
+{
+	admin off
+	auto_https off
+}
+
+http://:@@EDGE_PORT@@ {
+	bind 127.0.0.1
+	@dashboard host beta.hostlet.cloud
+	@demo host beta-demo.hostlet.cloud
+	@portfolio host beta-portfolio.hostlet.cloud
+	@forwarded_http header X-Forwarded-Proto http
+	@signup path /v1/accounts /v1/accounts/
+	@api path /v1 /v1/* /readyz /healthz
+	@web path / /index.html /assets/* /favicon.ico
+
+	handle @dashboard {
+		route {
+			redir @forwarded_http https://{host}{uri} 308
+			import @@AUTH_INCLUDE@@
+			handle @signup {
+				respond "Account creation is unavailable in this restricted preview" 403
+			}
+			handle @api {
+				reverse_proxy 127.0.0.1:@@CONTROL_PORT@@ {
+					header_up Authorization {http.request.header.X-Hostlet-Authorization}
+					header_up -X-Hostlet-Authorization
+					header_up -Cookie
+					header_up -Proxy-Authorization
+				}
+			}
+			handle @web {
+				reverse_proxy 127.0.0.1:@@WEB_PORT@@ {
+					header_up -Authorization
+					header_up -X-Hostlet-Authorization
+					header_up -Cookie
+					header_up -Proxy-Authorization
+				}
+			}
+			respond 404
+		}
+	}
+
+	handle @demo {
+		route {
+			redir @forwarded_http https://{host}{uri} 308
+			import @@AUTH_INCLUDE@@
+			reverse_proxy https://127.0.0.1:@@DEMO_PORT@@ {
+				header_up Host @@DEMO_HOST@@
+				header_up -Authorization
+				header_up -X-Hostlet-Authorization
+				header_up -Proxy-Authorization
+				transport http {
+					tls_trust_pool file @@DEMO_CA_FILE@@
+					tls_server_name @@DEMO_HOST@@
+				}
+			}
+		}
+	}
+
+	handle @portfolio {
+		route {
+			redir @forwarded_http https://{host}{uri} 308
+			import @@AUTH_INCLUDE@@
+			reverse_proxy 127.0.0.1:@@STATIC_PORT@@ {
+				header_up Host @@STATIC_EXPECTED_HOST@@
+				header_up -Authorization
+				header_up -X-Hostlet-Authorization
+				header_up -Cookie
+				header_up -Proxy-Authorization
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

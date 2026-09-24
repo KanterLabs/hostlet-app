@@ -1,0 +1,101 @@
+{
+  "schema": "hostlet.beta.config/v1",
+  "releaseCommit": "REPLACE_WITH_PINNED_IMPLEMENTATION_COMMIT",
+  "stateDir": "/var/lib/hostlet-preview/private",
+  "apiUrl": "http://127.0.0.1:18431",
+  "workerUrl": "http://127.0.0.1:18432",
+  "owner": {
+    "email": "owner@preview.hostlet.invalid",
+    "displayName": "Preview Owner",
+    "githubLogin": "hostlet-owned-fixtures",
+    "passwordFile": "/var/lib/hostlet-preview/secrets/owner-password"
+  },
+  "operator": {
+    "email": "operator@preview.hostlet.invalid",
+    "displayName": "Synthetic Runtime Evaluator",
+    "githubLogin": "hostlet-owned-collaborator",
+    "passwordFile": "/var/lib/hostlet-preview/secrets/operator-password"
+  },
+  "otherOwner": {
+    "email": "other@preview.hostlet.invalid",
+    "displayName": "Synthetic Other Owner",
+    "githubLogin": "hostlet-owned-reviewer",
+    "passwordFile": "/var/lib/hostlet-preview/secrets/other-owner-password"
+  },
+  "roles": {
+    "buildTokenFile": "/var/lib/hostlet-preview/secrets/build-token",
+    "databaseTokenFile": "/var/lib/hostlet-preview/secrets/database-token",
+    "runtimeTokenFile": "/var/lib/hostlet-preview/secrets/runtime-token",
+    "publisherTokenFile": "/var/lib/hostlet-preview/secrets/publisher-token",
+    "admissionTokenFile": "/var/lib/hostlet-preview/secrets/worker-token",
+    "tenantRecoveryKeyFile": "/var/lib/hostlet-preview/secrets/tenant-recovery-key"
+  },
+  "postgres": {
+    "stateDir": "/var/lib/hostlet-preview/private/databases",
+    "platform": { "port": 18433, "connectionUrlFile": "/var/lib/hostlet-preview/secrets/platform-database-url" },
+    "project": {
+      "endpointIpv4": "10.247.35.2",
+      "endpointIpv6": "fd35:247::2"
+    }
+  },
+  "provider": {
+    "enabled": true,
+    "port": 18435,
+    "stateFile": "/var/lib/hostlet-preview/private/provider-state.json",
+    "credentialsFile": "/var/lib/hostlet-preview/secrets/provider.json"
+  },
+  "origins": {
+    "dashboard": "https://beta.hostlet.cloud",
+    "demo": "https://beta-demo.hostlet.cloud",
+    "portfolio": "https://beta-portfolio.hostlet.cloud"
+  },
+  "binaries": {
+    "control": "/opt/hostlet-preview/releases/IMPLEMENTATION_COMMIT/target/debug/hostlet-control",
+    "builder": "/opt/hostlet-preview/releases/IMPLEMENTATION_COMMIT/target/debug/hostlet-builder",
+    "database": "/opt/hostlet-preview/releases/IMPLEMENTATION_COMMIT/target/debug/hostlet-database",
+    "runtime": "/opt/hostlet-preview/releases/IMPLEMENTATION_COMMIT/target/debug/hostlet-runtime",
+    "publisher": "/opt/hostlet-preview/releases/IMPLEMENTATION_COMMIT/target/debug/hostlet-publisher"
+  },
+  "services": {
+    "user": "shane",
+    "group": "shane",
+    "managedProcessDispatch": true,
+    "provider": { "enabled": true },
+    "envFiles": {
+      "control": "/var/lib/hostlet-preview/secrets/control.env",
+      "dashboard": "/var/lib/hostlet-preview/secrets/dashboard.env",
+      "builder": "/var/lib/hostlet-preview/secrets/builder.env",
+      "database": "/var/lib/hostlet-preview/secrets/database.env",
+      "runtime": "/var/lib/hostlet-preview/secrets/runtime.env",
+      "publisher": "/var/lib/hostlet-preview/secrets/publisher.env",
+      "publisherStatic": "/var/lib/hostlet-preview/secrets/publisher-static.env",
+      "demoGateway": "/var/lib/hostlet-preview/secrets/demo-gateway.env",
+      "gateway": "/var/lib/hostlet-preview/secrets/gateway.env",
+      "tunnel": "/var/lib/hostlet-preview/secrets/tunnel.env",
+      "provider": "/var/lib/hostlet-preview/secrets/provider.env"
+    },
+    "paths": {
+      "buildProfile": "/opt/hostlet-preview/assets/build-profile.json",
+      "buildProfiles": {
+        "m3-owned-node24-v1": "/opt/hostlet-preview/assets/build-profile-node24.json",
+        "m3-owned-node22-v1": "/opt/hostlet-preview/assets/build-profile-node22.json"
+      },
+      "runsc": "/opt/hostlet-preview/assets/runsc",
+      "runtimeTokenFile": "/var/lib/hostlet-preview/secrets/runtime-token",
+      "demoCertificate": "/var/lib/hostlet-preview/private/demo.crt",
+      "demoPrivateKey": "/var/lib/hostlet-preview/private/demo.key",
+      "caddy": "/opt/hostlet-preview/tools/caddy-2.11.4",
+      "caddyConfig": "/var/lib/hostlet-preview/private/Caddyfile",
+      "cloudflared": "/opt/hostlet-preview/tools/cloudflared-2026.9.1",
+      "providerConfig": "/var/lib/hostlet-preview/private/config.json"
+    },
+    "ports": { "dashboard": 18430, "publisherStatic": 18436, "gateway": 18437, "demoGateway": 18438, "tunnelMetrics": 18439 },
+    "publisherExpectedHost": "beta-portfolio.hostlet.cloud",
+    "demoHostname": "demo.localowned.test",
+    "projectId": "SET_AFTER_SEED"
+  },
+  "runtimeNodeBases": {
+    "22": { "rootfs": "/opt/hostlet-preview/assets/node22/runtime-base/rootfs", "manifest": "/opt/hostlet-preview/assets/node22/runtime-base/base.json" },
+    "24": { "rootfs": "/opt/hostlet-preview/assets/node24/runtime-base/rootfs", "manifest": "/opt/hostlet-preview/assets/node24/runtime-base/base.json" }
+  }
+}

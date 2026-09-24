@@ -1,5 +1,5 @@
-import { createHash, generateKeyPairSync, randomBytes, randomUUID, verify } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes, randomUUID, verify } from "node:crypto";
+import { readFileSync, writeFileSync, renameSync, chmodSync, existsSync, lstatSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 
@@ -50,7 +50,7 @@ function linkHeader(baseUrl, pathname, page, lastPage) {
   return links.join(", ");
 }
 
-export async function startGitHubFixture(context, { callbackUrl, fixtureData, fixturePath, gitBlobSha1 = false } = {}) {
+export async function startGitHubFixture(context, { callbackUrl, fixtureData, fixturePath, gitBlobSha1 = false, stableCredentials, stateFile, listenPort = 0, previewOAuthUsers } = {}) {
   if (!context || typeof context.registerSensitiveValues !== "function") {
     throw new Error("GitHub fixture requires an E2E context with sensitive-value registration");
   }
@@ -59,15 +59,31 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
   const fixture = parsedFixture.fixture;
   const primaryUser = Object.freeze(cloneSafe(fixture.oauth_users?.primary || DEFAULT_USER));
   const secondaryUser = Object.freeze(cloneSafe(fixture.oauth_users?.secondary || SECOND_USER));
-  const { publicKey, privateKey } = generateKeyPairSync("rsa", {
+  let previewUsers = null;
+  if (previewOAuthUsers !== undefined) {
+    if (!previewOAuthUsers || typeof previewOAuthUsers !== "object" || Array.isArray(previewOAuthUsers)) throw new Error("preview OAuth users must be an explicit login map");
+    previewUsers = new Map();
+    const userIds = new Set();
+    for (const [login, candidate] of Object.entries(previewOAuthUsers)) {
+      if (!/^[a-z0-9][a-z0-9-]{0,38}$/.test(login) || candidate?.login !== login ||
+          !Number.isSafeInteger(candidate.id) || candidate.id <= 0 || userIds.has(candidate.id)) {
+        throw new Error("preview OAuth user map has an invalid or repeated identity");
+      }
+      userIds.add(candidate.id);
+      previewUsers.set(login, Object.freeze({ id: candidate.id, login }));
+    }
+    if (previewUsers.size !== 3) throw new Error("preview OAuth requires exactly three distinct owned users");
+  }
+  const { publicKey: generatedPublicKey, privateKey } = stableCredentials ? { privateKey: stableCredentials.privateKeyPem } : generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
   });
-  const appId = 31001;
-  const clientId = `Iv1.hostlet-${opaque(9)}`;
-  const clientSecret = opaque(36);
-  const webhookSecret = opaque(40);
+  const publicKey = generatedPublicKey ?? createPublicKey(privateKey).export({ type: "spki", format: "pem" });
+  const appId = stableCredentials?.appId ?? 31001;
+  const clientId = stableCredentials?.clientId ?? `Iv1.hostlet-${opaque(9)}`;
+  const clientSecret = stableCredentials?.clientSecret ?? opaque(36);
+  const webhookSecret = stableCredentials?.webhookSecret ?? opaque(40);
   const privateKeyPem = String(privateKey);
   context.registerSensitiveValues([clientSecret, webhookSecret, privateKeyPem]);
   if (parsedFixture.path) context.registerFixture?.(`${fixture.fixture_name || "synthetic GitHub"} repositories`, parsedFixture.path);
@@ -77,10 +93,30 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
   const observations = [];
   const oauthCodes = new Map();
   const userTokens = new Map();
+  if (stateFile && existsSync(stateFile)) {
+    const stat = lstatSync(stateFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw new Error("persistent provider state must be a private regular file");
+    const persisted = JSON.parse(readFileSync(stateFile, "utf8"));
+    if (persisted.schema !== "hostlet.beta.synthetic-provider/v1" || !Array.isArray(persisted.userTokens)) throw new Error("invalid persistent provider state");
+    for (const entry of persisted.userTokens) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" ||
+          !Number.isFinite(entry[1]?.expiresAt) || typeof entry[1]?.user?.id !== "number") throw new Error("invalid persistent provider token state");
+      userTokens.set(entry[0], entry[1]);
+    }
+  }
+  function persistTokens() {
+    if (!stateFile) return;
+    const tmp = `${stateFile}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ schema: "hostlet.beta.synthetic-provider/v1", userTokens: [...userTokens] })}\n`, { mode: 0o600, flag: "wx" });
+    chmodSync(tmp, 0o600);
+    const handle = openSync(tmp, "r");
+    try { fsyncSync(handle); } finally { closeSync(handle); }
+    renameSync(tmp, stateFile);
+  }
   const installationTokens = new Map();
   const oauthQueue = [];
   const deniedRepositories = new Set();
-  const usersWithInstallation = new Set([primaryUser.id, secondaryUser.id]);
+  const usersWithInstallation = new Set([primaryUser.id, secondaryUser.id, ...(previewUsers ? [...previewUsers.values()].map((user) => user.id) : [])]);
   let grantedRepositoryIds = new Set(repositories.keys());
   let installationRevoked = false;
   let installationSuspended = false;
@@ -317,10 +353,11 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
         const redirectUri = url.searchParams.get("redirect_uri");
         if (state) context.registerSensitiveValues([state]);
         if (challenge) context.registerSensitiveValues([challenge]);
-        const next = oauthQueue.shift() || { mode: "success", user: primaryUser };
+        const requestedPreviewUser = previewUsers?.get(url.searchParams.get("hostlet_preview_login"));
+        const next = previewUsers ? { mode: "success", user: requestedPreviewUser } : oauthQueue.shift() || { mode: "success", user: primaryUser };
         const valid = url.searchParams.get("client_id") === clientId && redirectUri === expectedCallbackUrl &&
           typeof state === "string" && state.length >= 32 && typeof challenge === "string" && challenge.length >= 32 &&
-          url.searchParams.get("code_challenge_method") === "S256";
+          url.searchParams.get("code_challenge_method") === "S256" && (!previewUsers || requestedPreviewUser !== undefined);
         if (!valid) {
           observe(method, pathname, "none", 400, { outcome: "oauth_request_rejected" });
           sendJson(response, 400, { error: "invalid_request" });
@@ -372,6 +409,7 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
         const accessToken = opaque(43);
         context.registerSensitiveValues([accessToken]);
         userTokens.set(accessToken, { user: record.user, expiresAt: Date.now() + 8 * 60 * 60_000, revoked: false });
+        persistTokens();
         observe(method, pathname, "client_secret", 200, { outcome: "oauth_token_issued" });
         sendJson(response, 200, {
           access_token: accessToken,
@@ -650,7 +688,7 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
 
   await new Promise((resolveListen, rejectListen) => {
     server.once("error", rejectListen);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(listenPort, "127.0.0.1", () => {
       server.off("error", rejectListen);
       resolveListen();
     });
@@ -703,6 +741,7 @@ export async function startGitHubFixture(context, { callbackUrl, fixtureData, fi
     usersWithInstallation.clear();
     usersWithInstallation.add(primaryUser.id);
     usersWithInstallation.add(secondaryUser.id);
+    if (previewUsers) for (const user of previewUsers.values()) usersWithInstallation.add(user.id);
     grantedRepositoryIds = new Set(repositories.keys());
     repositories.clear();
     for (const repository of originalRepositories) repositories.set(repository.id, cloneSafe(repository));

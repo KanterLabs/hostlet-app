@@ -1,0 +1,27 @@
+[Unit]
+Description=Hostlet owned preview: {{label}}
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User={{user}}
+Group={{group}}
+WorkingDirectory={{release}}
+EnvironmentFile={{envFile}}
+ExecStart={{command}}
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=45s
+TimeoutStopSec=30s
+KillMode=control-group
+NoNewPrivileges={{noNewPrivileges}}
+PrivateTmp={{privateTmp}}
+ProtectHome=true
+ProtectSystem={{protectSystem}}
+ReadWritePaths={{writePaths}}
+
+[Install]
+WantedBy=multi-user.target

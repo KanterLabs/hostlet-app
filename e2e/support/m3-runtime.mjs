@@ -157,6 +157,7 @@ function requestFor(allocation, operation, network, overrides = {}) {
 }
 
 export function createM3RuntimeHarness(context, m3, options = {}) {
+  const persistent = options.persistent === true;
   const runtimeBinary = resolve(options.runtimeBinary ?? join(context.repo, "target/debug/hostlet-runtime"));
   const runsc = resolve(options.runsc ?? `/opt/hostlet-owned-fixture-tools/gvisor/${RUNSC_RELEASE}/runsc`);
   const launcher = resolve(options.launcher ?? join(context.repo, "scripts/runtime/hostlet-runtime-launcher"));
@@ -336,7 +337,7 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     entry.networkSlot = reservation.index;
     active.set(entry.allocation.id, entry);
     try {
-      if (!cleanupRegistered.has(entry)) {
+      if (!persistent && !cleanupRegistered.has(entry)) {
         cleanupRegistered.add(entry);
         context.registerCleanup(`M3 runtime allocation ${entry.allocation.id}`, async () => {
           await stopAndCleanup(entry, { cleanup: true });
@@ -411,7 +412,7 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     // Runner cleanup is LIFO. Register this before any allocation callback so
     // every runtime, relay, and fixture callback completes before the
     // root-owned runsc state is torn down through the narrow helper.
-    context.registerCleanup("M3 runtime root teardown", async () => {
+    if (!persistent) context.registerCleanup("M3 runtime root teardown", async () => {
       const result = await runOwnedHelper(
         "Remove exact M3 runtime runsc state",
         runtimeCleanupHelper,
@@ -422,7 +423,7 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
       );
       if (result.code !== 0) throw new Error(`runtime root teardown failed with exit ${result.code}`);
     });
-    context.registerCleanup("M3 native baseline cgroup cleanup", async () => {
+    if (!persistent) context.registerCleanup("M3 native baseline cgroup cleanup", async () => {
       const result = await runOwnedHelper(
         "Remove exact M3 native baseline cgroup",
         nativeBaselineHelper,
@@ -434,6 +435,64 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
       if (result.code !== 0) throw new Error(`native baseline cleanup failed with exit ${result.code}`);
     });
     return api;
+  }
+
+  // A preview restart must prove the existing roots before using them. It
+  // must never register the E2E teardown callback or recreate ownership.
+  async function initializeExisting() {
+    if (!persistent) throw new Error("existing runtime reattachment requires persistent mode");
+    for (const path of [runtimeBinary, runsc, launcher, peerHelper, runtimeCleanupHelper, relay, relayStopHelper, artifactPreparer]) {
+      if (!existsSync(path) || !statSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error(`runtime prerequisite is missing or unsafe: ${path}`);
+    }
+    if (createHash("sha256").update(readFileSync(runsc)).digest("hex") !== RUNSC_SHA256) throw new Error("persisted runtime gVisor pin changed");
+    for (const [path, marker, expected] of [
+      [stateRoot, ".hostlet-runtime-owned", "hostlet-runtime-state-v1"],
+      [artifactRoot, ".hostlet-artifacts-owned", "hostlet-artifacts-v1"],
+    ]) {
+      const markerPath = join(path, marker);
+      if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !statSync(path).isDirectory() || realpathSync(path) !== path ||
+          (statSync(path).mode & 0o077) !== 0 || !existsSync(markerPath) || lstatSync(markerPath).isSymbolicLink() ||
+          !statSync(markerPath).isFile() || (statSync(markerPath).mode & 0o077) !== 0 ||
+          readFileSync(markerPath, "utf8").trim() !== expected) {
+        throw new Error(`persisted runtime root is not owned: ${path}`);
+      }
+    }
+    for (const path of [requestsRoot, relaysRoot]) privateDirectory(path);
+    commandSequence = readdirSync(requestsRoot).reduce((maximum, name) => {
+      const match = /^([0-9]+)-/.exec(name);
+      return match ? Math.max(maximum, Number(match[1])) : maximum;
+    }, 0);
+    if (!Number.isSafeInteger(commandSequence)) throw new Error("persisted runtime request sequence is invalid");
+    return api;
+  }
+
+  function attachRegisteredEvaluation(evaluation, buildOutputs, { allowExpired = false } = {}) {
+    if (!persistent) throw new Error("runtime capability reattachment requires persistent mode");
+    if (!UUID.test(evaluation?.id ?? "") || !DIGEST.test(evaluation?.evidenceDigest ?? "") ||
+        !DIGEST.test(evaluation?.capability_digest ?? "") || evaluation?.receipt?.schema !== "hostlet.runtime.executor-receipt/v1" ||
+        evaluation.receipt.result !== "passed" || evaluation.receipt.evaluation?.performance?.decision !== "owned_fixture_only" ||
+        evaluation.receipt.evaluation?.performance?.production_ready !== false ||
+        (!allowExpired && Date.parse(evaluation.expires_at) <= Date.now())) throw new Error("persisted runtime capability is missing, expired or outside owned-fixture scope");
+    const hex = evaluation.evidenceDigest.slice(7);
+    const path = join(m3.policyClock.stateDir, "evidence", "sha256", hex.slice(0, 2), `${hex.slice(2)}.json`);
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || sha256(readFileSync(path)) !== evaluation.evidenceDigest ||
+        JSON.stringify(JSON.parse(readFileSync(path, "utf8"))) !== JSON.stringify(evaluation.receipt)) {
+      throw new Error("persisted runtime capability receipt differs from its protected CAS object");
+    }
+    const patterns = evaluation.receipt.evaluation.patterns;
+    if (!Array.isArray(patterns) || patterns.length < REQUIRED_PATTERN_KEYS.length) throw new Error("persisted runtime capability omits required observed patterns");
+    const builds = outputsMap(buildOutputs);
+    for (const [key, raw] of builds) {
+      const build = (Array.isArray(raw) ? raw : [raw]).find((candidate) => candidate?.kind === "application") ?? raw;
+      if (!build?.archiveDigest) continue;
+      const matching = patterns.find((pattern) => pattern.artifact_digest === build.archiveDigest &&
+        pattern.manifest_digest === build.manifestDigest && pattern.build_profile_digest === build.buildProfileDigest &&
+        pattern.source_commit === build.sourceCommit && pattern.framework === build.framework && pattern.node_major === build.nodeMajor);
+      if (matching) evaluatedCapabilities.set(build.archiveDigest, evaluation);
+      else if (REQUIRED_PATTERN_KEYS.includes(key)) throw new Error(`persisted runtime capability does not match exact ${key} build`);
+    }
+    if (evaluatedCapabilities.size === 0) throw new Error("persisted runtime capability matches no current build");
+    return evaluation;
   }
 
   function casStore(receipt, label) {
@@ -3026,6 +3085,6 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     return { patterns, compatibility, network, resources, benchmark, performance, evaluatorDigests: raw.evaluatorDigests, evaluationIdentity: raw.evaluationIdentity, spareEvaluationIdentities: raw.spareEvaluationIdentities, policyEvaluationIdentities: raw.policyEvaluationIdentities, evaluationObservedAtUnixMs: raw.evaluationObservedAtUnixMs };
   }
 
-  const api = Object.freeze({ initialize, assembleArtifacts, runNativeBaseline, exerciseRuntimeEvaluation, exerciseAdmittedEnforcement, exercisePostCapability, invoke, launch, launchDiagnosticBootstrap, launchRelease, launchProbeAgainstDatabase, stopRelease, startRelay, stopAndCleanup, allocate, attachPostgres, registerEvaluation, registerEvaluationVariant, evaluateRelease, finalizeObservedEvaluation, runtimeDatabaseProbe, runtimeReadOnlyDatabaseProbe, pauseDatabasePeer, withEndpointsPaused, stateRoot, artifactRoot, relaysRoot, runsc, runtimeBinary, active });
+  const api = Object.freeze({ initialize, initializeExisting, attachRegisteredEvaluation, assembleArtifacts, runNativeBaseline, exerciseRuntimeEvaluation, exerciseAdmittedEnforcement, exercisePostCapability, invoke, launch, launchDiagnosticBootstrap, launchRelease, launchProbeAgainstDatabase, stopRelease, startRelay, stopRelay, stopAndCleanup, allocate, attachPostgres, registerEvaluation, registerEvaluationVariant, evaluateRelease, finalizeObservedEvaluation, runtimeDatabaseProbe, runtimeReadOnlyDatabaseProbe, pauseDatabasePeer, withEndpointsPaused, stateRoot, artifactRoot, relaysRoot, runsc, runtimeBinary, active });
   return api;
 }

@@ -110,11 +110,16 @@ pub fn run(options: Options, output: &mut impl Write) -> Result<(), Failure> {
 
     loop {
         let clock = client.clock()?;
-        if clock.schema_version != 1 || clock.generation < 1 {
+        if clock.schema_version != 1 || clock.generation < 0 {
             return Err(Failure::Response);
         }
         let tick = client.scheduler_tick()?;
-        if tick.policy_time != clock.now {
+        // Generation 0 is control's real wall clock: a second HTTP request can
+        // only observe a later instant. Positive generations are fixture pins
+        // and must continue to match byte-for-byte across both calls.
+        if (clock.generation == 0 && tick.policy_time < clock.now)
+            || (clock.generation > 0 && tick.policy_time != clock.now)
+        {
             return Err(Failure::Response);
         }
         write_event(

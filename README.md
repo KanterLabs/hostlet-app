@@ -38,7 +38,7 @@ routes, preview validation, provider boundaries and internal admission controls.
 The [product plan](PLAN.md) follows the brief supplied on September 21 and replaces
 the provisional generic-hosting baseline. `PLAN.md` is the canonical current plan;
 the [recommended answers](RECOMMENDATIONS.md) are the adopted planning baseline
-and rationale. The [roadmap](ROADMAP.md) records five milestone stops and mirrors
+and rationale. The [roadmap](ROADMAP.md) records six milestone stops and mirrors
 Helm's live prerequisite graph. [TESTING.md](TESTING.md) defines the E2E evidence
 and agent handoff policy. Prices, benchmark resource allowances and production
 provider/spend/domain placement still require validation or explicit authorization.

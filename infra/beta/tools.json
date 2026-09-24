@@ -1,0 +1,16 @@
+[
+  {
+    "name": "caddy",
+    "version": "v2.11.4",
+    "url": "https://github.com/caddyserver/caddy/releases/download/v2.11.4/caddy_2.11.4_linux_amd64.tar.gz",
+    "archive_sha256": "sha256:527fbf917c39189a1e3b31d34fa955601680b2d5c8055d2a87b8b9588dec7bb9",
+    "binary_sha256": "sha256:b7105518e3ed1c0761f232e44fc09345535533c9cb0abf0e12809416c7ac64d9"
+  },
+  {
+    "name": "cloudflared",
+    "version": "2026.9.1",
+    "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.9.1/cloudflared-linux-amd64",
+    "archive_sha256": "sha256:03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc",
+    "binary_sha256": "sha256:03f1f25d1cc93b9ad6c60569d44060bc4f17ed97075760ed8cfca4b12dcd68cc"
+  }
+]

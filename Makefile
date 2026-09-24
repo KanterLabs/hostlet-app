@@ -1,4 +1,4 @@
-.PHONY: help install dev-api dev-web e2e e2e-scaffold e2e-gate e2e-failure e2e-m3 e2e-m3-gate check check-rust check-web
+.PHONY: help install dev-api dev-web e2e e2e-scaffold e2e-gate e2e-failure e2e-m3 e2e-m3-gate e2e-m35-gate check check-rust check-web
 
 help:
 	@echo 'make install    Install locked Rust and web dependencies'
@@ -10,6 +10,7 @@ help:
 	@echo 'make e2e-failure  Prove a corrupted oracle fails and retains evidence'
 	@echo 'make e2e-m3     Run the full owned M3 journey with real VM/runtime prerequisites'
 	@echo 'make e2e-m3-gate  Run the M3 journey and require a clean source tree'
+	@echo 'make e2e-m35-gate  Verify the staged restricted preview using private E2E_ARGS'
 	@echo 'make check      Format, lint, test and build the workspace'
 
 install:
@@ -37,6 +38,9 @@ e2e-m3:
 
 e2e-m3-gate:
 	node e2e/run.mjs --require-clean --milestone M3 --task HOST-233 --scenario-module e2e/scenarios/m3-journey.mjs --operation-timeout 3600000 --run-timeout 7200000 $(E2E_ARGS)
+
+e2e-m35-gate:
+	node e2e/beta/run.mjs --require-clean $(E2E_ARGS)
 
 check: check-rust check-web
 

@@ -1,6 +1,9 @@
 # Infrastructure boundary
 
-No deploy or provisioning automation is installed by this scaffold.
+M3.5 adds scoped private-preview automation under `scripts/beta/`. Its
+placement and access boundary is [the preview contract](../docs/M3.5-PREVIEW-CONTRACT.md);
+[tools.json](beta/tools.json) pins the edge and connector release artifacts.
+These tools are not installed by CI and do not authorize a production launch.
 
 Separate trusted platform data/control, artifact registry, build execution, tenant
 runtime, project databases and public static portfolio delivery. Customer builds
@@ -16,5 +19,7 @@ Included project databases need backups and tested restore/export before launch.
 Choose retention, recovery targets and storage boundaries explicitly. Published
 portfolio artifacts must keep serving independently of dashboard and app health.
 
-Preserve existing Hostlet resources and billing records. Provisioning, migration,
-cutover, provider purchases and production data changes are outside scaffold scope.
+Preserve existing Hostlet resources and billing records. M3.5 authorizes
+an isolated preview and reversible exact-host cutover on existing resources.
+Provider purchases, customer admission and production data changes remain
+outside that scope.

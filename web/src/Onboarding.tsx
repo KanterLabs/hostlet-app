@@ -16,6 +16,7 @@ import type {
   GitHubRepository,
   GitHubSource,
   ProjectGraph,
+  ProjectSummary,
 } from "./api";
 import {
   safeProjectName,
@@ -26,6 +27,7 @@ import { PreviewEditor } from "./PreviewEditor";
 import "./onboarding.css";
 
 type AuthView = "signin" | "signup";
+const restrictedPreview = import.meta.env.VITE_HOSTLET_RESTRICTED_PREVIEW === "true";
 
 const initialDefaults: ProjectDefaults = {
   shape: "vite",
@@ -58,6 +60,7 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
   const [projectName, setProjectName] = useState("");
   const [defaults, setDefaults] = useState<ProjectDefaults>(initialDefaults);
   const [project, setProject] = useState<ProjectGraph | null>(null);
+  const [previewProjects, setPreviewProjects] = useState<ProjectSummary[]>([]);
   const [source, setSource] = useState<GitHubSource | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -71,6 +74,7 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
     setRepositoryId("");
     setBranchRef("");
     setProject(null);
+    setPreviewProjects([]);
     setSource(null);
   }, []);
 
@@ -169,6 +173,15 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
   }, [handleError, loadGitHub, token, user]);
 
   useEffect(() => {
+    if (!restrictedPreview || !user || !token) return;
+    let active = true;
+    void api.listProjects(token).then((response) => {
+      if (active) setPreviewProjects(response.projects);
+    }).catch((error: unknown) => { if (active) handleError(error); });
+    return () => { active = false; };
+  }, [handleError, token, user]);
+
+  useEffect(() => {
     if (!token || !installationId || connection?.status !== "active") return;
     let active = true;
     setRepositories([]);
@@ -215,7 +228,7 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
     setBusy("auth");
     setNotice(null);
     try {
-      if (authView === "signup") {
+      if (authView === "signup" && !restrictedPreview) {
         await api.createAccount({
           email,
           password,
@@ -288,6 +301,24 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
     }
   }
 
+  async function openSavedProject(projectId: string) {
+    if (!token) return;
+    setBusy("saved-project");
+    setNotice(null);
+    try {
+      const [graph, binding] = await Promise.all([
+        api.getProject(token, projectId),
+        api.getSource(token, projectId),
+      ]);
+      setProject(graph);
+      setSource(binding);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const disabledReason = !enabled ? "The local control service must be ready before you can sign in." : null;
 
   return (
@@ -312,12 +343,24 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
         <p className="notice" role="status" data-testid="onboarding-notice">{notice ?? disabledReason}</p>
       )}
 
+      {restrictedPreview && user && <div className="step-card" data-testid="restricted-preview-projects">
+        <div>
+          <h3>Owned preview projects</h3>
+          {previewProjects.length === 0 ? <p>No owned project is available yet.</p> : <ul>
+            {previewProjects.map((item) => <li key={item.id}>
+              {item.name} · {item.mode} <button type="button" onClick={() => void openSavedProject(item.id)} disabled={busy === "saved-project"}>Open saved source</button>
+            </li>)}
+          </ul>}
+        </div>
+      </div>}
+
       {!user && (
         <div className="auth-card" aria-busy={checkingSession || busy === "auth"}>
-          <div className="segmented" aria-label="Account action">
+          {!restrictedPreview && <div className="segmented" aria-label="Account action">
             <button type="button" aria-pressed={authView === "signin"} onClick={() => setAuthView("signin")}>Sign in</button>
             <button type="button" aria-pressed={authView === "signup"} onClick={() => setAuthView("signup")}>Create account</button>
-          </div>
+          </div>}
+          {restrictedPreview && <p>Owner account sign-in only. This preview uses synthetic project data.</p>}
           {checkingSession ? <p>Checking your session…</p> : (
             <form className="form-stack" onSubmit={(event) => void authenticate(event)} data-testid="auth-form">
               {authView === "signup" && <label>Display name<input name="displayName" autoComplete="name" required maxLength={100} /></label>}

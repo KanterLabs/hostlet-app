@@ -36,6 +36,7 @@ type HealthPayload = {
 };
 
 const REQUEST_TIMEOUT_MS = 5_000;
+const restrictedPreview = import.meta.env.VITE_HOSTLET_RESTRICTED_PREVIEW === "true";
 
 class InvalidResponseError extends Error {}
 
@@ -361,19 +362,16 @@ export function App() {
           </span>
           <span>Hostlet</span>
         </a>
-        <span className="environment-label">Development preview</span>
+        <span className="environment-label">{restrictedPreview ? "Restricted owned-data preview" : "Development preview"}</span>
       </header>
 
       <main className="page-content">
         <section className="hero" aria-labelledby="page-title">
           <p className="eyebrow">A portfolio built around your projects</p>
           <h1 id="page-title">Your projects, live and ready to show.</h1>
-          <p className="hero__copy">
-            Connect GitHub, turn supported projects into live demos, and publish a portfolio you’re
-            proud to share. You’ll review every project story before it goes live. Start by saving a
-            repository and exact branch source; hosting and publishing remain unavailable in this
-            development preview.
-          </p>
+          <p className="hero__copy">{restrictedPreview
+            ? "This owner-only preview uses synthetic project data. Sign in to review the saved project, its demo, and the approved portfolio. Customer sign-up, payments, and customer hosting are unavailable."
+            : "Connect GitHub, turn supported projects into live demos, and publish a portfolio you’re proud to share. You’ll review every project story before it goes live. Start by saving a repository and exact branch source; hosting and publishing remain unavailable in this development preview."}</p>
         </section>
 
         <Onboarding enabled={readiness.status === "ready"} />
@@ -447,7 +445,7 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel empty-panel" aria-labelledby="empty-title">
+        {!restrictedPreview && <section className="panel empty-panel" aria-labelledby="empty-title">
           <div className="empty-panel__icon" aria-hidden="true">
             <span />
             <span />
@@ -461,12 +459,12 @@ export function App() {
               result, or saved narrative is never publication approval.
             </p>
           </div>
-        </section>
+        </section>}
       </main>
 
       <footer className="footer">
         <span>Hostlet · Your projects, ready to share.</span>
-        <span>Development preview · Local control plane · 127.0.0.1:8080</span>
+        <span>{restrictedPreview ? "Restricted owner preview · Synthetic project data" : "Development preview · Local control plane · 127.0.0.1:8080"}</span>
       </footer>
     </div>
   );

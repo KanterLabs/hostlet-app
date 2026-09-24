@@ -292,7 +292,11 @@ async function requestDetailed<T>(path: string, init: RequestInit = {}, token?: 
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (token) {
+    headers.set(import.meta.env.VITE_HOSTLET_RESTRICTED_PREVIEW === "true"
+      ? "X-Hostlet-Authorization"
+      : "Authorization", `Bearer ${token}`);
+  }
   if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }

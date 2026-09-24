@@ -125,7 +125,7 @@ async function execute() {
     const read = await api(`/v1/projects/${ids.identity.projectId}/services/${database.serviceId}/tenant-database`, { token: ownerToken });
     const source = await projectSource();
     const platform = await platformSource();
-    const receipt = JSON.parse(sql(platform, "postgres", `SELECT row_to_json(t) FROM (SELECT id,tenant_database_id,database_generation,state,attempt_count,result->>'fixture_bootstrap_sha256' AS fixture_digest,result->>'fixture_populated_rows' AS fixture_rows FROM tenant_database_operations WHERE tenant_database_id=${quote(database.id)}::uuid AND database_generation=${quote(database.generation)}::uuid AND kind='provision' ORDER BY created_at DESC LIMIT 1) t;`) || "null");
+    const receipt = JSON.parse(sql(platform, "postgres", `SELECT row_to_json(t) FROM (SELECT id,tenant_database_id,database_generation,state,attempt_count,result#>>'{proof,fixture_bootstrap_sha256}' AS fixture_digest,result#>>'{proof,fixture_populated_rows}' AS fixture_rows FROM tenant_database_operations WHERE tenant_database_id=${quote(database.id)}::uuid AND database_generation=${quote(database.generation)}::uuid AND kind='provision' ORDER BY created_at DESC LIMIT 1) t;`) || "null");
     return { clockGeneration: before.generation, clockSchema: before.schema_version, beforeTime: before.now, tickTimes: ticks.map(tick => tick.policy_time), afterTime: after.now,
       ready: read.status === 200 && read.payload?.state === "ready", databaseId: read.payload?.id, databaseGeneration: read.payload?.generation,
       containerId: source.containerId, receipt, bootstrapDigest,

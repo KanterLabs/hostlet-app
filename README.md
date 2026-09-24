@@ -33,7 +33,9 @@ public access and the live demo, then stopped at a provisioning-receipt query
 using wrong JSON paths (20 checks passed, one failed). The original route was
 restored, so the new preview is not handed off at the public URL.
 [The M3.5 handoff](docs/M3.5-HANDOFF.md) records the read-only diagnosis and
-verified private receipts. M4 and later milestones remain unclaimed.
+verified private receipts. The authorized two-path receipt correction now
+passes its focused populated-database check; full acceptance is pending.
+M4 and later milestones remain unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

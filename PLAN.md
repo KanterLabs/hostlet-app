@@ -46,6 +46,10 @@ and verify observed Cloudflare route propagation before feature assertions.
 Those focused fixes are deployed at `0ca0ec2`. The next full gate passed public
 access and demo checks, then stopped at incorrect JSON paths in its provisioning
 receipt query. The original route was restored; no repair/retry followed.
+Shane then authorized correcting only the two receipt JSON paths and deploying
+the matching source for another bounded acceptance attempt. The focused check
+passes against the existing populated database. Stop on any new full-gate
+failure; otherwise retain two clean runs before final cutover and handoff.
 M3.5 remains incomplete and M4 remains outside the assignment.
 
 > Your projects, live and ready to show.

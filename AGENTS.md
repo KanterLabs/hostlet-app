@@ -13,8 +13,13 @@ workers at medium reasoning, with the primary owning integration and verificatio
 Read `docs/M3-HANDOFF.md` for the two clean 55-assertion runs, retained-M2 rebuild,
 repeatable private artifacts and owned-fixture-only limits. Customer admission
 remains disabled; Next.js 16 and the throughput target remain deferred.
-**Stop before M4.** Later work requires a new assignment; read the applicable
-scenario inventory before implementation.
+Shane assigned M3.5 on 2026-09-24: deploy the restricted private beta preview
+through HOST-248 using GPT-6 Sol Medium workers. Read `docs/M3.5-SCENARIOS.md`
+and `docs/M3.5-PREVIEW-CONTRACT.md` before implementation. Preserve the legacy
+beta route/data, use isolated owned preview resources, and verify the deployed
+browser journey and persistence twice. This authorizes the scoped preview
+cutover; it does not authorize purchases, customer admission or live payments.
+**Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone
 stop points and the artifact contract. Helm owns live task, dependency and claim

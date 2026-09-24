@@ -413,6 +413,67 @@
       "dependency_state": "completed"
     },
     {
+      "key": "HOST-246",
+      "slug": "m35-foundation",
+      "phase": "preview",
+      "title": "Define isolated preview placement, access and preservation",
+      "goal": "Prepare an isolated owned-fixture preview at beta.hostlet.cloud using existing authorized resources, with concrete access, data preservation, rollback and E2E contracts before deployment.",
+      "acceptance": [
+        "Inspect the occupied beta route and intended host; retain a private before-state and exact reversible cutover plan without changing unrelated routes, guest disks, databases or provider mappings.",
+        "Define restricted owner access, service-scoped credentials, separate trusted dashboard/demo/portfolio boundaries, persistence, resource limits and no-customer-admission behavior.",
+        "Write M3.5 browser/system scenarios and failure outcomes before behavior implementation; identify repeatable artifacts, restart persistence, access denial and rollback checks.",
+        "Confirm the reviewed placement and prerequisites on existing resources; no purchases, live payments, customer workload admission or M4 implementation."
+      ],
+      "depends_on": [
+        "HOST-233"
+      ],
+      "milestone": "M3.5",
+      "is_gate": false,
+      "dependency_state": "completed",
+      "status": "completed"
+    },
+    {
+      "key": "HOST-247",
+      "slug": "m35-preview",
+      "phase": "preview",
+      "title": "Build durable seeded preview composition",
+      "goal": "Provide the real Hostlet dashboard/control API, durable seeded owner/project state, a working owned Node/PostgreSQL demo and approved independently served portfolio with repeatable preview automation.",
+      "acceptance": [
+        "Use real product binaries and isolated durable preview state; idempotent bootstrap preserves existing preview data and never borrows old Hostlet databases or credentials.",
+        "Dashboard login/project/portfolio flows operate on the seeded state, with working demo and portfolio links and clear preview scope.",
+        "Working owned demo reads/writes its own PostgreSQL and the approved portfolio remains independent of dashboard and application availability.",
+        "Bounded startup/readiness failures retain diagnostic evidence; exact preview resources restart with data preserved and unauthorized access is denied. No post-implementation unit tests."
+      ],
+      "depends_on": [
+        "HOST-246"
+      ],
+      "milestone": "M3.5",
+      "is_gate": false,
+      "dependency_state": "owned",
+      "status": "active"
+    },
+    {
+      "key": "HOST-248",
+      "slug": "m35-gate",
+      "phase": "milestone",
+      "title": "M3.5 stop \u2014 deploy and verify private beta preview",
+      "goal": "Deploy the reviewed isolated preview to beta.hostlet.cloud, verify the complete owner-facing journey through HTTPS twice and hand off access and rollback evidence, then stop before M4.",
+      "acceptance": [
+        "Capture verified backups/before-state where populated state or a route changes, stage and health-check the new origin, then make only the authorized preview cutover with a retained rollback path.",
+        "Two clean repeated E2E runs verify HTTPS, restricted access, real account/project/portfolio interactions, live demo/database data, independent approved static portfolio and restart persistence.",
+        "Every run retains REPORT.md, manifest.json, assertions, exact rerun/source identities, relevant browser outputs, private checksum receipt and explicit retained-resource/cleanup results. A full gate failure produces a complete report and stops the loop.",
+        "Run make check, review public suitability, publish source and verify CI; update canonical plan, live dependencies and committed roadmap snapshots with an M3.5 handoff.",
+        "Give Shane the working preview URL and an appropriate private access path; keep customer admission/payment disabled, preserve M3 deferrals, and leave M4/M5 unclaimed."
+      ],
+      "depends_on": [
+        "HOST-247"
+      ],
+      "milestone": "M3.5",
+      "is_gate": true,
+      "dependency_state": "dependency_blocked",
+      "status": "backlog"
+    },
+    {
       "key": "HOST-228",
       "slug": "billing-testmode-seven-day-refund",
       "phase": "launch",
@@ -425,12 +486,12 @@
         "No live payment method, real price, or public checkout path is enabled by this task, and failed later releases do not restart the refund window."
       ],
       "depends_on": [
-        "HOST-233"
+        "HOST-248"
       ],
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "claimable"
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-230",
@@ -445,12 +506,12 @@
         "Concurrent end-to-end tenant load scenarios use actual workers/databases to prove isolation and reserved rollout/recovery headroom; produce machine-readable usage and health evidence."
       ],
       "depends_on": [
-        "HOST-233"
+        "HOST-248"
       ],
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "claimable"
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-231",
@@ -465,12 +526,12 @@
         "Accessibility checks cover keyboard navigation, heading structure, contrast, link names, and responsive rendering for every launch layout."
       ],
       "depends_on": [
-        "HOST-233"
+        "HOST-248"
       ],
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "claimable"
+      "dependency_state": "dependency_blocked"
     },
     {
       "key": "HOST-232",
@@ -645,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M1, M2 and M3 are complete at HOST-242, HOST-243 and HOST-233. Each handoff records two clean full E2E runs, populated recovery, retained predecessor compatibility and verified private receipts. M3 passed 55/55 assertions in each run at 0649f74, including a retained-M2 source rebuild. Stop before M4; customer admission stays disabled. Routine make check is not product E2E evidence."
+    "current_status": "M1, M2 and M3 remain accepted. M3.5 private preview is now assigned through HOST-248 and requires upfront scenarios, real browser/system proof, private verifiable artifacts and a clean repeat run. M4 waits for M3.5 and remains unclaimed."
   },
   "milestones": [
     {
@@ -702,10 +763,24 @@
       "stop_after_gate": true
     },
     {
+      "id": "M3.5",
+      "title": "Private beta preview",
+      "gate": "HOST-248",
+      "previous_gate": "HOST-233",
+      "tasks": [
+        "HOST-246",
+        "HOST-247",
+        "HOST-248"
+      ],
+      "exit_evidence": "Restricted HTTPS preview with real seeded dashboard, working owned Node/PostgreSQL demo, approved independent portfolio, persistent restart/backup/rollback proof and two clean repeated browser/system E2E receipts.",
+      "artifact_path": "artifacts/e2e/M3.5/<run-id>/",
+      "stop_after_gate": true
+    },
+    {
       "id": "M4",
       "title": "Complete product behavior",
       "gate": "HOST-244",
-      "previous_gate": "HOST-233",
+      "previous_gate": "HOST-248",
       "tasks": [
         "HOST-228",
         "HOST-230",
@@ -736,25 +811,25 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12047,
-    "read_at": "2026-09-24T03:43:49.146155188Z",
+    "project_revision": 12089,
+    "read_at": "2026-09-24T15:24:51.35491507Z",
     "completed": 20,
-    "active": 0,
-    "backlog": 11,
-    "active_task": null,
-    "assigned_stop": "HOST-233",
-    "stopped_at": "HOST-233",
-    "active_tasks": []
+    "active": 1,
+    "backlog": 13,
+    "active_task": "HOST-246",
+    "assigned_stop": "HOST-248",
+    "stopped_at": null,
+    "active_tasks": [
+      "HOST-246"
+    ]
   },
   "assignment": {
-    "milestone": "M3",
-    "stop_gate": "HOST-233",
+    "milestone": "M3.5",
+    "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
-    "authorized_at": "2026-09-22",
-    "tracking": "All seven M3 cards are complete in prerequisite order. HOST-233 is the accepted stopping point. M4 and M5 remain unclaimed; dependency readiness does not authorize further work.",
-    "data_preservation": "Two clean full M3 runs verified fresh backups, populated schema-5 to schema-6 upgrade, actual retained-M2 reads/writes/restart, repeat-migration idempotence and exact 78-relation restore into separate targets without database rewind.",
-    "runtime_decision": "docs/M3-HANDOFF.md and docs/M3-RUNTIME-DECISION.md; full-gate throughput ratios 29.979% and 29.706% miss the 50% target. Owned-fixture-only acceptance, Next16 unsupported, production readiness deferred and customer admission disabled.",
-    "completed_at": "2026-09-24",
-    "handoff": "docs/M3-HANDOFF.md"
+    "authorized_at": "2026-09-24",
+    "tracking": "HOST-246 placement/access/preservation complete. HOST-247 durable composition active; HOST-248 waits. M4/M5 remain unclaimed.",
+    "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
+    "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview."
   }
 }

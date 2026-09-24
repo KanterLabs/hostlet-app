@@ -19,7 +19,7 @@ clean full runs at `0649f74f4a93ffc691b9c472c1759d1ff56f439d` each passed all 55
 assertions and 11 phases; the second rebuilt the retained M2 binary from its
 pinned source. The [M3 handoff](docs/M3-HANDOFF.md) records repeat commands,
 verified private receipts, populated recovery, cleanup and compatibility limits.
-**Stop at M3; M4 and later remain unclaimed.** The upfront acceptance inventory
+**M3.5 — Private beta preview is now assigned through HOST-248; stop before M4.** The upfront acceptance inventory
 is [M3 scenarios](docs/M3-SCENARIOS.md), and the completed
 [Sol agent execution plan](docs/M3-COMPLETION-PLAN.md) retains the fix rationale.
 
@@ -29,6 +29,15 @@ hypotheses and resource numbers remain benchmark targets. M3 establishes the
 owned-fixture journey, with customer admission disabled: Next.js 16 remains
 unsupported and the runtime throughput target remains unmet. Provider, spend,
 domain-purchase and production-migration decisions require separate authorization.
+
+On 2026-09-24 Shane authorized M3.5: deploy a restricted owner preview at
+`beta.hostlet.cloud` with a seeded account, working owned Node/PostgreSQL demo
+and approved independent portfolio. Use isolated state on existing resources,
+preserve the prior route and data, verify persistence and rollback, and retain
+two clean browser/system E2E receipts. This authorizes the scoped preview
+cutover, not provider purchases, customer admission, live payments or M4 work.
+See [M3.5 scenarios](docs/M3.5-SCENARIOS.md) and
+[preview contract](docs/M3.5-PREVIEW-CONTRACT.md).
 
 > Your projects, live and ready to show.
 
@@ -275,7 +284,7 @@ graph and milestone ordering, mirrored from Helm; updating execution status does
 not require changing this plan. They preserve the existing `HOST-209` and
 `HOST-210` IDs.
 
-The five milestones are **agent stopping points**. Default execution scope is one
+The six milestones, including M3.5, are **agent stopping points**. Default execution scope is one
 milestone. Tasks within that milestone can run in parallel where Helm's actual
 prerequisite edges permit; every later milestone depends on the preceding stop
 gate. Completing a gate makes later work dependency-ready, but does not instruct
@@ -287,6 +296,7 @@ on a later instruction or an explicit larger scope from Shane.
 | **M1 — Foundation** | First establish the real-process E2E runner and artifact contract; then typed project/portfolio contracts, authenticated ownership, durable PostgreSQL records, scoped secrets/jobs, additive migrations and platform recovery. |
 | **M2 — Onboarding** | Selected-repository and branch authorization, signed events, bounded compatibility analysis, editable private preview, capacity admission and slot accounting. No prepurchase execution of customer code. |
 | **M3 — Working demo and portfolio** | An owned fixture travels from exact commit through a disposable VM build and isolated runtime to a coordinated frontend/backend/database release, then an owner-approved independent static portfolio. Prove failed-update retention. |
+| **M3.5 — Private beta preview** | Restricted HTTPS owner preview, durable seeded account/project, real owned Node/PostgreSQL demo, independent approved portfolio and verified restart/rollback evidence. |
 | **M4 — Complete product behavior** | Three templates, screenshot approval and demo readiness, resource enforcement and actionable health/logs, test-mode billing/refunds, cancellation, nonpayment, retention, export and deletion. |
 | **M5 — Pilot readiness** | Measured full-use economics, reviewed test catalog, costed provider/domain configuration and dry-run runbooks, linked security/recovery evidence and a final readiness handoff. Stop without launching. |
 

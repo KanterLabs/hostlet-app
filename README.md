@@ -24,8 +24,11 @@ implementation commit through HOST-233, with one rebuilding the retained M2
 binary. The [M3 handoff](docs/M3-HANDOFF.md) records private receipts, exact
 repeat commands, browser evidence, cleanup and limits. Customer admission,
 production workload execution, payment collection, provider purchases, and
-production portfolio publication remain disabled. M4 and later milestones
-remain unclaimed.
+production portfolio publication remain disabled. M3.5 now adds a restricted
+owner preview deployment through HOST-248. Its
+[preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
+[scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
+completion is not yet claimed. M4 and later milestones remain unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

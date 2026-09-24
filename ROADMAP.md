@@ -12,16 +12,19 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **31 cards (20 complete, none active, 11 in Backlog),
-38 prerequisite links and five milestone stop gates** in one planned release. Every later milestone
+The snapshot contains **34 cards (21 complete, one active, 12 in Backlog),
+41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
-graph makes the final gate depend transitively on all 30 other cards.
+graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
 
-**M3 is complete at HOST-233. Stop before M4.** All eight M1 cards, five M2
-cards and seven M3 cards are complete in Helm. The current snapshot is revision
-12047; there are no active claims. The remaining 11 M4/M5 cards stay unclaimed.
+**M3 is complete at HOST-233. M3.5 is assigned through HOST-248; stop before M4.**
+Shane authorized a restricted owner preview at `beta.hostlet.cloud` on
+2026-09-24. HOST-246 defines placement, access and preservation; HOST-247 builds
+the durable seeded composition; HOST-248 deploys and verifies the preview twice.
+M4 now depends on HOST-248. The current snapshot is revision
+12089 at insertion; HOST-246 is now complete, HOST-247 is active and later cards are unclaimed.
 
 Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
 `0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and
@@ -39,9 +42,14 @@ Their historical evidence remains in the [M1 handoff](docs/M1-HANDOFF.md) and
 and completed [execution plan](docs/M3-COMPLETION-PLAN.md) retain scope and
 validation decisions.
 
-The next milestone, requiring a new assignment, is **M4 — Complete product
-behavior**, ending at HOST-244: billing and lifecycle behavior, resource
-visibility, the remaining portfolio layouts, and screenshot/demo readiness.
+The current milestone is **M3.5 — Private beta preview**: a real dashboard,
+seeded owner/project, working owned Node/PostgreSQL demo and approved independent
+portfolio. Preserve the occupied legacy route/data, stage the new isolated
+origin and verify the authorized exact-host cutover with rollback evidence.
+The [M3.5 scenarios](docs/M3.5-SCENARIOS.md) and
+[preview contract](docs/M3.5-PREVIEW-CONTRACT.md) define acceptance.
+The following milestone, requiring a later assignment, is **M4 — Complete
+product behavior**, ending at HOST-244.
 The paid-pilot readiness release remains planned. M3 acceptance covers owned
 local fixtures; customer admission remains disabled. Next.js 16 stays
 unsupported, and both full gates missed the provisional throughput target.
@@ -59,6 +67,7 @@ milestone is in the assigned scope. Consult Helm for current claimability.
 | **M1 — Foundation** | **HOST-242** | HOST-241, HOST-209, HOST-210, HOST-215, HOST-216, HOST-217, HOST-218, HOST-242 | Account/ownership and durable-state E2E, restart/failure cases, populated migration and platform restore receipts. |
 | **M2 — Onboarding** | **HOST-243** | HOST-219, HOST-220, HOST-221, HOST-224, HOST-243 | Selected-source, compatibility, private preview and concurrent slot-admission E2E without prepurchase customer code. |
 | **M3 — Working demo and portfolio** | **HOST-233** | HOST-222, HOST-223, HOST-225, HOST-226, HOST-227, HOST-229, HOST-233 | Real isolated build/runtime/database journey, failed-update retention and independent approved static portfolio. |
+| **M3.5 — Private beta preview** | **HOST-248** | HOST-246, HOST-247, HOST-248 | Restricted HTTPS owner journey, durable seeded state, working demo, independent portfolio, restart/rollback and repeated browser/system receipts. |
 | **M4 — Complete product behavior** | **HOST-244** | HOST-228, HOST-230, HOST-231, HOST-232, HOST-234, HOST-244 | Three layouts, screenshot/readiness, quotas and payment/retention/export/deletion E2E with an explicit test clock. |
 | **M5 — Pilot readiness** | **HOST-239** | HOST-235, HOST-236, HOST-237, HOST-238, HOST-239 | Repeatable full-use evidence, reviewed test catalog, costed production dry-runs and recovery/security receipts; no launch. |
 
@@ -122,9 +131,12 @@ the graph and omitted here when a direct link would be redundant.
 | HOST-226 | M3 | Coordinate frontend, backend, migration, and last-good releases | HOST-225, HOST-222, HOST-223 |
 | HOST-229 | M3 | Publish one independent static portfolio template | HOST-227 |
 | HOST-233 | M3 | M3 stop — prove the working demo and portfolio E2E | HOST-226, HOST-229 |
-| HOST-228 | M4 | Implement test-mode billing and the first-subscription seven-day refund | HOST-233 |
-| HOST-230 | M4 | Enforce resource limits and ship logs, health alerts, and metrics | HOST-233 |
-| HOST-231 | M4 | Complete the three launch portfolio layouts | HOST-233 |
+| HOST-246 | M3.5 | Define isolated preview placement, access and preservation | HOST-233 |
+| HOST-247 | M3.5 | Build durable seeded preview composition | HOST-246 |
+| HOST-248 | M3.5 | M3.5 stop — deploy and verify private beta preview | HOST-247 |
+| HOST-228 | M4 | Implement test-mode billing and the first-subscription seven-day refund | HOST-248 |
+| HOST-230 | M4 | Enforce resource limits and ship logs, health alerts, and metrics | HOST-248 |
+| HOST-231 | M4 | Complete the three launch portfolio layouts | HOST-248 |
 | HOST-232 | M4 | Implement cancellation, nonpayment, export, and deletion lifecycle | HOST-228 |
 | HOST-234 | M4 | Add approved screenshots and separate demo-readiness checks | HOST-230 |
 | HOST-244 | M4 | M4 stop — verify product lifecycle E2E and hand off | HOST-231, HOST-232, HOST-234 |
@@ -136,7 +148,9 @@ the graph and omitted here when a direct link would be redundant.
 
 ## Reconciliation and verification
 
-- Preserved all 27 current implementation card IDs, goals and comments while
+- Added three scoped M3.5 cards, HOST-246 through HOST-248, after the accepted
+  M3 gate. M4 entry cards now depend on HOST-248; all existing IDs are preserved.
+- Preserved all 27 original implementation card IDs, goals and comments while
   aligning their acceptance criteria with E2E evidence and milestone stops.
 - Added HOST-241 (E2E harness), HOST-242 (M1 gate), HOST-243 (M2 gate) and
   HOST-244 (M4 gate). Retained HOST-233 and HOST-239 as the M3 and M5 gates.

@@ -120,8 +120,8 @@ and legacy tests. It is not an E2E run and cannot by itself establish
 complex-feature completion. Run it where the task requires it and report its
 result separately from E2E evidence.
 
-The roadmap's five milestones are stopping points for agents. The default
-assignment is one milestone scope, with parallel work inside that milestone
+The roadmap's six milestones, including M3.5, are stopping points for agents.
+The default assignment is one milestone scope, with parallel work inside that milestone
 only where the real dependency graph permits it. Do not claim the next
 milestone merely because its prerequisites appear unblocked.
 

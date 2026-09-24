@@ -20,6 +20,10 @@ $5/$12/$20 are pricing hypotheses subject to full-use validation. Provider,
 spend, domain-purchase and production-migration decisions require separate
 authorization.
 
+The remaining M3 work follows the [Sol agent completion plan](docs/M3-COMPLETION-PLAN.md),
+including runtime startup fixes, bounded E2E preflight, two clean full gates and
+the HOST-233 handoff. M3 remains unaccepted until that evidence is complete.
+
 > Your projects, live and ready to show.
 
 ## Customer and outcome

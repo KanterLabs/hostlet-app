@@ -1,8 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile, mkdir, stat, lstat, rename, open, rm } from 'node:fs/promises';
 import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
+import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
 // Persistent M3.5 preview composition. This module never initializes or migrates a schema.
@@ -302,20 +304,28 @@ export async function backupDatabase({ stateDir, source, archivePath, database =
   const password = await readPrivate(source.passwordFile);
   const temp = `${archivePath}.${randomUUID()}.tmp`;
   await privateDir(resolve(archivePath, '..'));
-  const handle = await open(temp, 'wx', 0o600);
+  const sink = createWriteStream(temp, { flags: 'wx', mode: 0o600 });
   try {
     await run('docker', ['exec', '--env', 'PGPASSWORD', source.containerId, 'pg_dump', '-Fc', '--no-owner', '--no-privileges', '-h', '127.0.0.1', '-U', 'postgres', '-d', database], {
-      env: { ...process.env, PGPASSWORD: password }, outputFile: handle.createWriteStream({ autoClose: false }), timeoutMs: 120_000,
+      env: { ...process.env, PGPASSWORD: password }, outputFile: sink, timeoutMs: 120_000,
     });
-    await handle.sync();
-  } catch (error) { await handle.close(); await rm(temp, { force: true }); throw error; }
-  await handle.close();
-  const bytes = await readFile(temp);
-  requireValue(bytes.length > 0, 'empty PostgreSQL backup');
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
+    await finished(sink);
+    const handle = await open(temp, 'r');
+    try { await handle.sync(); } finally { await handle.close(); }
+  } catch (error) {
+    sink.destroy();
+    await finished(sink).catch(() => {});
+    await rm(temp, { force: true });
+    throw error;
+  }
+  const digest = createHash('sha256');
+  let size = 0;
+  for await (const chunk of createReadStream(temp)) { digest.update(chunk); size += chunk.length; }
+  requireValue(size > 0, 'empty PostgreSQL backup');
+  const sha256 = digest.digest('hex');
   if (await exists(archivePath)) throw new Error('backup target already exists');
   await rename(temp, archivePath);
-  return { archivePath, sha256, bytes: bytes.length, database, containerId: source.containerId };
+  return { archivePath, sha256, bytes: size, database, containerId: source.containerId };
 }
 
 export async function restoreDatabase({ stateDir, archivePath, sha256, restoreId, database = 'postgres' }) {

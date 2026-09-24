@@ -449,8 +449,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": false,
-      "dependency_state": "owned",
-      "status": "active"
+      "dependency_state": "completed",
+      "status": "completed"
     },
     {
       "key": "HOST-248",
@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "dependency_blocked",
-      "status": "backlog"
+      "dependency_state": "manually_blocked",
+      "status": "blocked"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M1, M2 and M3 remain accepted. M3.5 private preview is now assigned through HOST-248 and requires upfront scenarios, real browser/system proof, private verifiable artifacts and a clean repeat run. M4 waits for M3.5 and remains unclaimed."
+    "current_status": "M1, M2 and M3 remain accepted. M3.5 composition is implemented, but its first full deployed gate failed before browser work. The original route was restored, private receipt verified, and the loop stopped. Two clean gates and final cutover remain required; see docs/M3.5-HANDOFF.md."
   },
   "milestones": [
     {
@@ -811,24 +811,23 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12089,
-    "read_at": "2026-09-24T15:24:51.35491507Z",
-    "completed": 20,
-    "active": 1,
-    "backlog": 13,
-    "active_task": "HOST-246",
+    "project_revision": 12119,
+    "read_at": "2026-09-24T16:53:55.689114552Z",
+    "completed": 22,
+    "active": 0,
+    "backlog": 11,
+    "blocked": 1,
+    "active_task": null,
     "assigned_stop": "HOST-248",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-246"
-    ]
+    "stopped_at": "HOST-248",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "HOST-246 placement/access/preservation complete. HOST-247 durable composition active; HOST-248 waits. M4/M5 remain unclaimed.",
+    "tracking": "HOST-246 and HOST-247 complete. HOST-248 blocked after the first full deployed gate failed on demo-origin readiness; exact route reversal and cleanup passed. No retry; M4/M5 remain unclaimed.",
     "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview."
   }

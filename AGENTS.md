@@ -19,6 +19,10 @@ and `docs/M3.5-PREVIEW-CONTRACT.md` before implementation. Preserve the legacy
 beta route/data, use isolated owned preview resources, and verify the deployed
 browser journey and persistence twice. This authorizes the scoped preview
 cutover; it does not authorize purchases, customer admission or live payments.
+M3.5 composition is implemented, but HOST-248 is blocked after its first full
+deployed gate failed at demo-origin readiness. Read `docs/M3.5-HANDOFF.md`.
+The original route was restored and the repair/retry loop stopped as requested;
+do not resume that loop without a new instruction.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

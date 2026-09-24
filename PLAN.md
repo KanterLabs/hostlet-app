@@ -37,7 +37,11 @@ preserve the prior route and data, verify persistence and rollback, and retain
 two clean browser/system E2E receipts. This authorizes the scoped preview
 cutover, not provider purchases, customer admission, live payments or M4 work.
 See [M3.5 scenarios](docs/M3.5-SCENARIOS.md) and
-[preview contract](docs/M3.5-PREVIEW-CONTRACT.md).
+[preview contract](docs/M3.5-PREVIEW-CONTRACT.md). HOST-246 and HOST-247 are
+complete; HOST-248 stopped after its first deployed gate failed at public demo
+readiness. The original route was restored. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
+records the incomplete acceptance and required follow-up; no retry or M4 work
+is authorized by the failed run.
 
 > Your projects, live and ready to show.
 

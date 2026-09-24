@@ -94,7 +94,10 @@ export function renderManagedServices(config, commit) {
   const units = [
     managed({ short: "control", release, envFile: e("control"), exec: binary("hostlet-control") }),
     worker("builder", "hostlet-builder", "project-build-worker", "builder", "m35-owned-builder", ["--profile", p("buildProfile"), "--cas-root", join(state, "private-cas"), "--work-root", join(state, "build-work")], true),
-    worker("database-worker", "hostlet-database", "worker", "database", "m35-owned-database", [], true),
+    worker("database-worker", "hostlet-database", "worker", "database", "m35-owned-database", [
+      "--kind", "provision", "--kind", "backup_daily", "--kind", "backup_pre_migration",
+      "--kind", "export", "--kind", "observe_storage", "--kind", "archive_expire",
+    ], true),
     managed({ short: "runtime", release, envFile: e("runtime"), after: ["control"], privilegedHelper: true, exec: command(binary("hostlet-runtime"), "release-worker", "--control-url", workerUrl, "--worker-id", "m35-owned-release-worker", "--token-file", p("runtimeTokenFile"), "--coordinator", script("scripts/release/hostlet-release-coordinator.py"), "--probe", script("scripts/runtime/hostlet-runtime-probe"), "--migration-probe", script("scripts/runtime/hostlet-runtime-migration-probe.py"), "--runtime-binary", binary("hostlet-runtime"), "--launcher", script("scripts/runtime/hostlet-runtime-launcher"), "--runsc", p("runsc"), "--peer-helper", script("scripts/runtime/hostlet-runtime-peer"), "--privileged-command", "/usr/bin/sudo", "--state-root", state, "--runtime-root", join(state, "runtime-state"), "--artifact-root", join(state, "private-cas"), "--runtime-artifact-root", join(state, "runtime-artifacts")) }),
     worker("publisher-worker", "hostlet-publisher", "worker", "publisher", "m35-owned-publisher"),
     managed({ short: "publisher-static", release, envFile: e("publisherStatic"), exec: command(binary("hostlet-publisher"), "serve", "--root", join(state, "publisher"), "--bind", `127.0.0.1:${publisherPort}`, "--expected-host", expectedHost) }),
@@ -282,6 +285,10 @@ export async function activateManagedRelay({ config, commit, tuplePath, outputDi
   const identity = serviceIdentity(config.services ?? {});
   const install = installExactUnit(unit, outputDir, identity);
   const short = unit.short;
+  const before = inspectManagedUnit(short, identity);
+  if (before.ActiveState !== "active" && await tcpProbe("127.0.0.1", tuple.listen_port)) {
+    throw new Error(`${unit.name} cannot start: exact relay port ${tuple.listen_port} is occupied before managed activation`);
+  }
   const status = operateManagedUnit("start", short, identity);
   const plan = { identity, readiness: [{ short, kind: "tcp", host: "127.0.0.1", port: tuple.listen_port, deadlineMs: 30000 }] };
   const readiness = await waitManagedReadiness(plan, short);

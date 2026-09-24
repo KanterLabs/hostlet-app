@@ -33,6 +33,8 @@ The reviewed launch order is: provision the two exact PostgreSQL resources and v
 
 The builder unit deliberately sets `PrivateTmp=false`. Its worker creates Unix sockets under host `/tmp`, then launches QEMU in a separate transient systemd unit whose `BindPaths` names those exact sockets. A private `/tmp` in the parent worker would hide the source paths from the system manager and break the build. The QEMU unit itself still uses `PrivateTmp=yes`, `ProtectHome=tmpfs`, and `ProtectSystem=strict`. The other preview units keep `PrivateTmp=true`; their inspected persistent roots and configured binaries are under private `/var/lib/hostlet-preview` and pinned `/opt/hostlet-preview`, with runtime helper access to `/run/netns` and cgroups through the existing trusted executor boundary.
 
+The continuous managed `database-worker` advertises only `provision`, `backup_daily`, `backup_pre_migration`, `export`, `observe_storage`, and `archive_expire`. These operations use the placed primary target or its owned archive repository. Scheduler ticks can still queue `restore_drill`; it remains queued because the continuous worker does not request it. `restore_drill` and `migration_trial` require an operator to provision an exact isolated replacement target first, then run a separately scoped one-shot worker with `--kind restore_drill` or `--kind migration_trial`. `migration_live_apply` also stays out of the continuous preview worker and requires its separate verified populated compatibility gate. Do not mark a queued drill as passed or delete it to clear a failed service. The deployed backup/isolated-restore acceptance scenario must still complete against a real provisioned target.
+
 Render and review before the parent-owned install:
 
 ```sh

@@ -66,8 +66,9 @@ const pinnedImage = config => {
   const base = JSON.parse(readFileSync(config.runtimeNodeBases?.['24']?.manifest, 'utf8'));
   if (base.schema !== 'hostlet.runtime-base/v1' || !/^node:24-bookworm-slim@sha256:[a-f0-9]{64}$/.test(base.image)) throw new Error('pinned Node runtime base missing');
   const image = JSON.parse(exact('docker', ['image', 'inspect', base.image]));
-  if (image.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(image[0].Id) || !image[0].RepoDigests?.includes(base.image)) throw new Error('local Node image does not match runtime repository digest');
-  return { image: image[0].Id, repositoryDigest: base.image, baseManifestSha256: sha(readFileSync(config.runtimeNodeBases['24'].manifest)) };
+  const repositoryDigest = `node@${base.image.split('@')[1]}`;
+  if (image.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(image[0].Id) || !image[0].RepoDigests?.includes(repositoryDigest)) throw new Error('local Node image does not match runtime repository digest');
+  return { image: image[0].Id, repositoryDigest, baseManifestSha256: sha(readFileSync(config.runtimeNodeBases['24'].manifest)) };
 };
 
 export async function probeRestoredProject({ config, manifest, restore, directory, runId, originalItemId }) {

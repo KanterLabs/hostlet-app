@@ -161,11 +161,15 @@ Record each receipt's own SHA-256. Check artifact content as well as exit codes.
 The rebuild must come from pinned clean retained M2 source with locked
 dependencies. Any subsequent implementation change requires a new pair.
 
-**Stop rule:** any unexpected diagnosis, regression, workspace-check or full-gate
-failure ends the attempt after owned cleanup and a complete report. Do not
-automatically repair, retry, start Gate B after Gate A fails, or publish. An
-intentional negative case passes only when its predeclared rejection and state
-invariants are actually asserted; it never excuses a failed top-level gate.
+**Stop rule (clarified on September 24):** a failed full acceptance gate ends
+the attempt after owned cleanup and a complete report. Do not automatically
+repair or retry that gate, start Gate B after Gate A fails, or publish. Resolve
+routine tooling problems before the gates using task-owned paths; a Python
+bytecode-cache write error is not a failed product assertion. Focused checks
+must establish the changed behavior before freezing the implementation. Keep
+any failed evidence and fix only the demonstrated cause. An intentional
+negative case passes only when its predeclared rejection and state invariants
+are actually asserted; it never excuses a failed top-level gate.
 
 ## Checkpoint 5 — finish the milestone and hand off working evidence
 

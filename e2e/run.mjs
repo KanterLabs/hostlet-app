@@ -121,6 +121,7 @@ const effectiveRunnerCommand = [
   "e2e/run.mjs",
   ...effectiveRunnerArgs,
 ];
+const runnerUmask = `0${process.umask().toString(8).padStart(3, "0")}`;
 
 const state = {
   schemaVersion: 1,
@@ -138,7 +139,7 @@ const state = {
   command: {
     argv: [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
     effective: shellJoin(effectiveRunnerCommand),
-    rerun: shellJoin(effectiveRunnerCommand),
+    rerun: `umask ${runnerUmask} && ${shellJoin(effectiveRunnerCommand)}`,
     workingDirectory: "$REPO",
   },
   configuration: {
@@ -146,6 +147,7 @@ const state = {
     dynamicPorts: true,
     operationTimeoutMs: args.operationTimeoutMs,
     runTimeoutMs: args.runTimeoutMs,
+    runnerUmask,
     requireClean: args.requireClean,
     rebuildRetained: args.rebuildRetained,
     artifactVisibility: "private; ignored by Git",

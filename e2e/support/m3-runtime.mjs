@@ -1553,9 +1553,10 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     return { cpuUsec, peakMemoryBytes };
   }
 
-  async function waitForNativeBaseline(process) {
+  async function waitForNativeBaseline(process, signal) {
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       if (existsSync(nativeBaselineMetadataPath)) {
         try {
           const metadata = JSON.parse(readFileSync(nativeBaselineMetadataPath, "utf8"));
@@ -1564,10 +1565,98 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
           // The root helper writes the exact metadata atomically; retry while it starts.
         }
       }
-      if (process.child.exitCode !== null || process.child.signalCode !== null) throw new Error("native baseline helper exited before publishing its owned process metadata");
-      await context.delay(50);
+      if (process.record.stoppedAt !== null) throw new Error(`native baseline helper exited before publishing its owned process metadata (code ${process.record.exitCode}, signal ${process.record.signal ?? "none"})`);
+      await Promise.race([context.delay(50), process.exited]);
     }
     throw new Error("native baseline helper did not publish its owned process metadata");
+  }
+
+  function exactPathAbsent(path) {
+    try { lstatSync(path); return false; }
+    catch (error) {
+      if (error.code === "ENOENT") return true;
+      throw error;
+    }
+  }
+
+  function procStarttimeTicks(pid) {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
+      if (!/^\d+$/.test(fields[19] ?? "")) throw new Error(`native baseline PID ${pid} has invalid process starttime`);
+      return fields[19];
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  function exactPidAbsent(pid, starttimeTicks) {
+    const current = procStarttimeTicks(pid);
+    return current === null || (starttimeTicks !== null && current !== starttimeTicks);
+  }
+
+  async function waitForNativeReadiness(process, url, signal, evidence) {
+    const started = performance.now();
+    const deadline = started + 10_000;
+    let exitOutcome = null;
+    let activeRequest = null;
+    const exited = process.exited.then((outcome) => {
+      exitOutcome = outcome;
+      activeRequest?.abort();
+      return { kind: "exit", outcome };
+    });
+    try { while (performance.now() < deadline) {
+      signal?.throwIfAborted();
+      if (exitOutcome) throw new Error(`native baseline helper exited during readiness (code ${exitOutcome.code}, signal ${exitOutcome.signal ?? "none"})`);
+      const requestAbort = new AbortController();
+      activeRequest = requestAbort;
+      const requestMs = Math.max(1, Math.min(500, Math.ceil(deadline - performance.now())));
+      const requestSignal = AbortSignal.any([requestAbort.signal, AbortSignal.timeout(requestMs), ...(signal ? [signal] : [])]);
+      try {
+        const outcome = await Promise.race([
+          fetch(url, { signal: requestSignal, cache: "no-store" }).then((response) => ({ kind: "response", response }), (error) => ({ kind: "request_error", error })),
+          exited,
+        ]);
+        if (outcome.kind === "exit") throw new Error(`native baseline helper exited during readiness (code ${outcome.outcome.code}, signal ${outcome.outcome.signal ?? "none"})`);
+        signal?.throwIfAborted();
+        if (exitOutcome) throw new Error(`native baseline helper exited during readiness (code ${exitOutcome.code}, signal ${exitOutcome.signal ?? "none"})`);
+        if (outcome.kind === "response") {
+          evidence.last_health = `HTTP ${outcome.response.status}`;
+          if (outcome.response.status === 200) {
+            let body;
+            try { body = await outcome.response.text(); }
+            catch (error) {
+              if (exitOutcome) throw new Error(`native baseline helper exited during readiness (code ${exitOutcome.code}, signal ${exitOutcome.signal ?? "none"})`);
+              if (signal?.aborted) signal.throwIfAborted();
+              evidence.last_health = context.redact(error.message);
+              continue;
+            }
+            signal?.throwIfAborted();
+            if (exitOutcome) throw new Error(`native baseline helper exited during readiness (code ${exitOutcome.code}, signal ${exitOutcome.signal ?? "none"})`);
+            evidence.health_status = 200;
+            evidence.health_body = context.redact(body.slice(0, 4096));
+            evidence.readiness_elapsed_ms = Math.max(0, performance.now() - started);
+            return;
+          }
+          await outcome.response.body?.cancel();
+        } else {
+          if (signal?.aborted) signal.throwIfAborted();
+          evidence.last_health = context.redact(outcome.error.message);
+        }
+      } finally {
+        requestAbort.abort();
+        activeRequest = null;
+      }
+      if (exitOutcome) throw new Error(`native baseline helper exited during readiness (code ${exitOutcome.code}, signal ${exitOutcome.signal ?? "none"})`);
+      await Promise.race([context.delay(Math.min(100, Math.max(1, Math.ceil(deadline - performance.now())))), exited]);
+    }
+    evidence.readiness_elapsed_ms = Math.max(0, performance.now() - started);
+    throw new Error(`native baseline did not become healthy within 10000ms: ${evidence.last_health}`);
+    } finally {
+      evidence.readiness_elapsed_ms ??= Math.max(0, performance.now() - started);
+      activeRequest?.abort();
+    }
   }
 
   async function observeNativeBaseline(label) {
@@ -1799,24 +1888,49 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     return result;
   }
 
-  async function runNativeBaseline(build) {
+  async function runNativeBaseline(build, { measure = true, abortSignal } = {}) {
     if (!build.runtimeRootfs) throw new Error("native baseline requires the assembled owned Node rootfs");
+    const signal = AbortSignal.any([context.abortSignal, ...(abortSignal ? [abortSignal] : [])]);
+    signal.throwIfAborted();
     const port = await context.allocatePort();
     const relayPort = await context.allocatePort();
     if (existsSync(nativeBaselineMetadataPath)) throw new Error("native baseline metadata from an earlier run is still present");
     const [baselineExecutable, baselineArguments] = command(nativeBaselineHelper, ["start", "--state-root", stateRoot, "--artifact-root", artifactRoot, "--rootfs", build.runtimeRootfs, "--port", String(port), "--relay-port", String(relayPort)]);
+    const helperLogName = `m3-runtime-native-baseline-${randomUUID()}.log`;
     const process = context.spawnManaged(
       "M3 native Node baseline",
       baselineExecutable,
       baselineArguments,
       { env: m3.componentEnvironment("runtime") },
-      "m3-runtime-native-baseline.log",
+      helperLogName,
     );
+    const baselineStarted = performance.now();
+    const evidence = {
+      schema: "hostlet.runtime.native-readiness/v1", rootfs_tree_digest: build.runtimeTreeDigest ?? null,
+      helper_pid: process.child.pid, helper_log: process.record.log,
+      metadata_deadline_ms: 10_000, readiness_deadline_ms: 10_000, request_interval_ms: 500,
+      last_health: "no response", health_status: null, health_body: null,
+      readiness_elapsed_ms: null, total_elapsed_ms: null, helper_exit: null,
+      failure_observed_at: null, exit_to_failure_ms: null, metadata_identity_available: false,
+      cgroup_path: null, relay_pid: null, node_starttime_ticks: null, relay_starttime_ticks: null,
+      metadata_absent: null, cgroup_absent: null, node_pid_absent: null, relay_pid_absent: null,
+      cleanup_succeeded: null,
+    };
+    let primaryError = null;
     try {
-      const metadata = await waitForNativeBaseline(process);
+      const metadata = await waitForNativeBaseline(process, signal);
       if (metadata.relay_port !== relayPort) throw new Error("native baseline metadata does not bind the requested owned relay port");
+      if (!/^\/sys\/fs\/cgroup\/hostlet-native-baseline-[0-9a-f]{32}$/.test(metadata.cgroup_path) || !Number.isInteger(metadata.relay_pid) || metadata.relay_pid <= 0) throw new Error("native baseline metadata has invalid owned process identity");
+      evidence.node_pid = metadata.pid;
+      evidence.relay_port = metadata.relay_port;
+      evidence.relay_pid = metadata.relay_pid;
+      evidence.cgroup_path = metadata.cgroup_path;
+      evidence.node_starttime_ticks = procStarttimeTicks(metadata.pid);
+      evidence.relay_starttime_ticks = procStarttimeTicks(metadata.relay_pid);
+      evidence.metadata_identity_available = true;
       const baselineUrl = `http://127.0.0.1:${relayPort}${build.healthPath ?? "/healthz"}`;
-      await context.waitForHttp(baselineUrl, 200, "M3 native Node baseline");
+      await waitForNativeReadiness(process, baselineUrl, signal, evidence);
+      if (!measure) return evidence;
       for (let index = 0; index < 2; index += 1) {
         const warmup = await fetch(baselineUrl, { signal: AbortSignal.any([AbortSignal.timeout(5_000), context.abortSignal]) });
         if (warmup.status !== 200) throw new Error("native baseline warmup request failed");
@@ -1849,7 +1963,46 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
       };
       writePrivate(join(context.artifactDir, `m3-runtime-native-baseline-${++measurementSequence}.json`), jsonLine(result), "wx");
       return result;
-    } finally { await context.stopManaged(process, "M3 native baseline complete"); }
+    } catch (error) {
+      primaryError = error;
+      evidence.failure_observed_at = new Date().toISOString();
+      if (process.record.stoppedAt !== null) evidence.exit_to_failure_ms = Math.max(0, Date.parse(evidence.failure_observed_at) - Date.parse(process.record.stoppedAt));
+      throw error;
+    } finally {
+      evidence.total_elapsed_ms = Math.max(0, performance.now() - baselineStarted);
+      evidence.helper_exit = process.record.stoppedAt === null ? null : { code: process.record.exitCode, signal: process.record.signal, stopped_at: process.record.stoppedAt };
+      evidence.ready = primaryError === null && evidence.health_status === 200;
+      if (primaryError) {
+        evidence.error = context.redact(primaryError.message);
+        primaryError.nativeBaselineEvidence = evidence;
+      }
+      let cleanupError = null;
+      try { await context.stopManaged(process, "M3 native baseline complete"); }
+      catch (error) { cleanupError = error; }
+      try {
+        evidence.metadata_absent = exactPathAbsent(nativeBaselineMetadataPath);
+        if (evidence.metadata_identity_available) {
+          evidence.cgroup_absent = exactPathAbsent(evidence.cgroup_path);
+          evidence.node_pid_absent = exactPidAbsent(evidence.node_pid, evidence.node_starttime_ticks);
+          evidence.relay_pid_absent = exactPidAbsent(evidence.relay_pid, evidence.relay_starttime_ticks);
+        }
+        evidence.cleanup_succeeded = !cleanupError && evidence.metadata_absent &&
+          (!evidence.metadata_identity_available || (evidence.cgroup_absent && evidence.node_pid_absent && evidence.relay_pid_absent)) &&
+          process.record.stoppedAt !== null;
+        if (!evidence.cleanup_succeeded && !cleanupError) cleanupError = new Error("native baseline exact owned cleanup verification failed");
+      } catch (error) { cleanupError ??= error; evidence.cleanup_succeeded = false; }
+      if (cleanupError) {
+        evidence.cleanup_error = context.redact(cleanupError.message);
+        if (primaryError) primaryError.cleanupError = cleanupError;
+      }
+      evidence.helper_exit ??= process.record.stoppedAt === null ? null : { code: process.record.exitCode, signal: process.record.signal, stopped_at: process.record.stoppedAt };
+      try { persistRuntimeArtifact(join(context.artifactDir, `m3-runtime-native-readiness-${process.child.pid}.json`), evidence, "native baseline readiness artifact"); }
+      catch (error) {
+        if (primaryError) primaryError.evidenceError = error;
+        else throw error;
+      }
+      if (!primaryError && cleanupError) throw cleanupError;
+    }
   }
 
   async function exerciseRuntimeEvaluation({ buildOutputs, tenantPeers, nodeBaseRoots }) {
@@ -2873,6 +3026,6 @@ export function createM3RuntimeHarness(context, m3, options = {}) {
     return { patterns, compatibility, network, resources, benchmark, performance, evaluatorDigests: raw.evaluatorDigests, evaluationIdentity: raw.evaluationIdentity, spareEvaluationIdentities: raw.spareEvaluationIdentities, policyEvaluationIdentities: raw.policyEvaluationIdentities, evaluationObservedAtUnixMs: raw.evaluationObservedAtUnixMs };
   }
 
-  const api = Object.freeze({ initialize, assembleArtifacts, exerciseRuntimeEvaluation, exerciseAdmittedEnforcement, exercisePostCapability, invoke, launch, launchDiagnosticBootstrap, launchRelease, launchProbeAgainstDatabase, stopRelease, startRelay, stopAndCleanup, allocate, attachPostgres, registerEvaluation, registerEvaluationVariant, evaluateRelease, finalizeObservedEvaluation, runtimeDatabaseProbe, runtimeReadOnlyDatabaseProbe, pauseDatabasePeer, withEndpointsPaused, stateRoot, artifactRoot, relaysRoot, runsc, runtimeBinary, active });
+  const api = Object.freeze({ initialize, assembleArtifacts, runNativeBaseline, exerciseRuntimeEvaluation, exerciseAdmittedEnforcement, exercisePostCapability, invoke, launch, launchDiagnosticBootstrap, launchRelease, launchProbeAgainstDatabase, stopRelease, startRelay, stopAndCleanup, allocate, attachPostgres, registerEvaluation, registerEvaluationVariant, evaluateRelease, finalizeObservedEvaluation, runtimeDatabaseProbe, runtimeReadOnlyDatabaseProbe, pauseDatabasePeer, withEndpointsPaused, stateRoot, artifactRoot, relaysRoot, runsc, runtimeBinary, active });
   return api;
 }

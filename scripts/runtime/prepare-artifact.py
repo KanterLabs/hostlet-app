@@ -178,6 +178,35 @@ def safe_archive_path(raw):
     return value
 
 
+def create_guest_parents(root, destination):
+    """Create only new guest directories with canonical, umask-free modes."""
+    relative = destination.relative_to(root)
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if os.path.lexists(current):
+            if current.is_symlink() or not current.is_dir():
+                fail("runtime_guest_parent_invalid")
+            continue
+        current.mkdir(mode=0o755)
+        current.chmod(0o755)
+
+
+def validate_guest_app_dirs(rootfs):
+    app = rootfs / "app"
+    if app.is_symlink() or not app.is_dir():
+        fail("runtime_artifact_collision")
+    for directory, names, _files in os.walk(app, topdown=True, followlinks=False):
+        current = Path(directory)
+        metadata = current.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o755:
+            fail("runtime_artifact_collision")
+        for name in names:
+            child = current / name
+            if child.is_symlink() or not child.is_dir():
+                fail("runtime_artifact_collision")
+
+
 def unpack_hca(archive, app_root, build_manifest):
     with archive.open("rb") as source:
         if read_exact(source, 4) != b"HCA1":
@@ -205,7 +234,7 @@ def unpack_hca(archive, app_root, build_manifest):
             if mode not in (0o644, 0o755) or size > MAX_UNPACKED or observed + size > total:
                 fail("runtime_hca_entry_invalid")
             destination = app_root.joinpath(*PurePosixPath(relative).parts)
-            destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            create_guest_parents(app_root, destination.parent)
             flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(destination, flags, mode)
             try:
@@ -327,6 +356,7 @@ def main():
                 not valid_digest(existing.get("rootfs_tree_digest"))):
             fail("runtime_artifact_collision")
         validate_tree(rootfs)
+        validate_guest_app_dirs(rootfs)
         if tree_digest(rootfs) != existing["rootfs_tree_digest"]:
             fail("runtime_artifact_collision")
         print(canonical_json(existing).decode(), end="")
@@ -339,9 +369,10 @@ def main():
         if app.exists() or app.is_symlink():
             fail("runtime_base_app_collision")
         app.mkdir(mode=0o755)
+        app.chmod(0o755)
         unpack_hca(archive, app, build)
         shim = rootfs / "hostlet" / "bin" / "secret-env"
-        shim.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        create_guest_parents(rootfs, shim.parent)
         if shim.exists() or shim.is_symlink():
             fail("runtime_base_shim_collision")
         shim.write_bytes(SECRET_ENV_SHIM)
@@ -355,6 +386,7 @@ def main():
         secret_mountpoint.mkdir(mode=0o755, parents=True, exist_ok=True)
         secret_mountpoint.chmod(0o755)
         validate_tree(rootfs)
+        validate_guest_app_dirs(rootfs)
         manifest_value = {**expected_manifest, "rootfs_tree_digest": tree_digest(rootfs)}
         (temporary / "manifest.json").write_bytes(canonical_json(manifest_value))
         (temporary / ".hostlet-artifact-owned").write_text(MARKER)

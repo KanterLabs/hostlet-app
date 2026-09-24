@@ -46,11 +46,13 @@ and verify observed Cloudflare route propagation before feature assertions.
 Those focused fixes are deployed at `0ca0ec2`. The next full gate passed public
 access and demo checks, then stopped at incorrect JSON paths in its provisioning
 receipt query. The original route was restored; no repair/retry followed.
-Shane then authorized correcting only the two receipt JSON paths and deploying
-the matching source for another bounded acceptance attempt. The focused check
-passes against the existing populated database. Stop on any new full-gate
-failure; otherwise retain two clean runs before final cutover and handoff.
-M3.5 remains incomplete and M4 remains outside the assignment.
+Shane then authorized correcting the two receipt JSON paths. That correction
+is deployed at `cc990bc5` and passes in the full gate. The run recorded 23
+passing checks before a Chromium portfolio-save confirmation timeout. The
+edit did not persist; the exact cause is unconfirmed. Original routing was
+restored and the loop stopped. HOST-248 is blocked pending a new instruction;
+two clean complete runs and final cutover/handoff remain required. M3.5 is
+incomplete and M4 remains outside the assignment.
 
 > Your projects, live and ready to show.
 

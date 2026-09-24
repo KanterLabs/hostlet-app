@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "owned",
-      "status": "active"
+      "dependency_state": "manually_blocked",
+      "status": "blocked"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Authorized receipt-query correction passes the actual populated-database operation. Install matching source and run bounded full acceptance; stop on any failure. Two clean runs and final cutover remain required; M4/M5 unclaimed."
+    "current_status": "Receipt correction deployed at cc990bc5 and passes full gate. 23 checks passed before browser save confirmation timed out; edit did not persist and root cause is unconfirmed. Exact original route restored; stop rule followed. HOST-248 blocked; M4/M5 unclaimed."
   },
   "milestones": [
     {
@@ -811,25 +811,23 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12137,
-    "read_at": "2026-09-24T21:19:30.626459588Z",
+    "project_revision": 12145,
+    "read_at": "2026-09-24T21:25:58.986597179Z",
     "completed": 22,
-    "active": 1,
+    "active": 0,
     "backlog": 11,
-    "blocked": 0,
-    "active_task": "HOST-248",
+    "blocked": 1,
+    "active_task": null,
     "assigned_stop": "HOST-248",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-248"
-    ]
+    "stopped_at": "HOST-248",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "Authorized receipt-query correction passes the actual populated-database operation. Install matching source and run bounded full acceptance; stop on any failure. Two clean runs and final cutover remain required; M4/M5 unclaimed.",
+    "tracking": "Receipt correction deployed at cc990bc5 and passes full gate. 23 checks passed before browser save confirmation timed out; edit did not persist and root cause is unconfirmed. Exact original route restored; stop rule followed. HOST-248 blocked; M4/M5 unclaimed.",
     "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview."
   }

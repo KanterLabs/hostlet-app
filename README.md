@@ -28,14 +28,13 @@ production portfolio publication remain disabled. M3.5 now adds a restricted
 owner preview deployment through HOST-248. Its
 [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
 [scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
-focused routing and diagnostic fixes are deployed. The next full gate passed
-public access and the live demo, then stopped at a provisioning-receipt query
-using wrong JSON paths (20 checks passed, one failed). The original route was
-restored, so the new preview is not handed off at the public URL.
-[The M3.5 handoff](docs/M3.5-HANDOFF.md) records the read-only diagnosis and
-verified private receipts. The authorized two-path receipt correction now
-passes its focused populated-database check; full acceptance is pending.
-M4 and later milestones remain unclaimed.
+the receipt-query correction is deployed and passes. The latest full gate
+recorded 23 passing checks before a browser portfolio-save confirmation timeout.
+The edit did not persist; the underlying cause is unconfirmed. The original
+route was restored and no repair/retry followed, so the new preview has not
+been handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
+records the complete outcome, evidence gaps and verified private receipt.
+HOST-248 is blocked; M4 and later milestones remain unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

@@ -1,12 +1,11 @@
 # Hostlet development
 
-M3.5 final recovery stopped under the full-gate failure rule on 2026-09-25.
-Installed `d681a41` passed full run 1 (62/62). Run 2 passed 61 assertions but
-failed a provider-status read during final route cleanup. Separate exact
-cleanup restored the live preview and owner content; all eight demo rows and
-all eleven ready services are retained. Read `docs/M3.5-FINAL-RESULT.md`.
-HOST-248 is blocked at 3/5. Do not repair or rerun a gate without a new
-assignment. Preserve the live preview and stop before M4.
+M3.5 completion was explicitly resumed by Shane on 2026-09-25. Follow
+`docs/M3.5-COMPLETION-PLAN.md` through HOST-248 using Sol medium workers and
+primary integration/verification. The prior stopped result remains preserved in
+`docs/M3.5-FINAL-RESULT.md`; its second full gate failed a final provider-status
+read. Preserve the live preview, owner content and populated databases. Complete
+two clean full gates and publication before marking acceptance. Stop before M4.
 
 This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
 `README.md` and the adopted planning baseline in `RECOMMENDATIONS.md` before
@@ -23,7 +22,8 @@ repeatable private artifacts and owned-fixture-only limits. Customer admission
 remains disabled; Next.js 16 and the throughput target remain deferred.
 M3.5 uses isolated owned preview resources and the access boundary in
 `docs/M3.5-PREVIEW-CONTRACT.md`. Historical attempts are retained in
-`docs/M3.5-HANDOFF.md`; the current result is `docs/M3.5-FINAL-RESULT.md`.
+`docs/M3.5-HANDOFF.md` and `docs/M3.5-FINAL-RESULT.md`; the current assignment
+is `docs/M3.5-COMPLETION-PLAN.md`.
 `docs/M3.5-DEMO-ACCESS.md` explains the separate browser gate and application
 credentials. Customer admission, purchases and live payments remain disabled.
 **Stop before M4.** Later work requires a new assignment.

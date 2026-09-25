@@ -1,12 +1,10 @@
 # Hostlet — portfolio and live demos
 
-**Current M3.5 stop (2026-09-25):** Installed `d681a41` passed the first full
-gate (62/62); the second recorded 61 passing assertions but failed a provider
-status read during final route cleanup. Exact cleanup restored the live preview
-and owner content. HOST-248 is blocked at 3/5 under the stop-on-full-failure rule.
-[The full result](docs/M3.5-FINAL-RESULT.md) records the evidence and remaining
-acceptance/publication work. Another repair or gate requires a new assignment.
-Stop before M4.
+**Current M3.5 assignment (2026-09-25):** Shane resumed completion after the
+prior route-cleanup failure. [The completion plan](docs/M3.5-COMPLETION-PLAN.md)
+tracks four dependent checkpoints through focused verification, two clean full
+passes and publication. [The prior result](docs/M3.5-FINAL-RESULT.md) remains
+historical evidence. Preserve the live preview and owner data; stop before M4.
 
 Authoritative product direction for `hostlet-app`, based on the brief supplied
 by Shane on 2026-09-21. This supersedes the provisional September generic-hosting
@@ -43,10 +41,10 @@ isolated resources, a seeded account, owned Node/PostgreSQL demo and approved
 independent portfolio. Preserve the live preview, legacy route and owner data.
 The [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
 [scenarios](docs/M3.5-SCENARIOS.md) define its scope. HOST-246 and HOST-247 are
-complete; HOST-248 remains incomplete after the final recovery's second full
-gate failed. [The handoff](docs/M3.5-HANDOFF.md) retains earlier attempts and
-[the final report](docs/M3.5-FINAL-RESULT.md) is the current authority. No source
-publication/CI or M4 work followed the failure. The protected demo remains
+complete; HOST-248 is active under the explicit completion assignment.
+[The handoff](docs/M3.5-HANDOFF.md) and
+[prior report](docs/M3.5-FINAL-RESULT.md) retain earlier attempts.
+The protected demo remains
 available; [access instructions](docs/M3.5-DEMO-ACCESS.md) distinguish browser
 gate credentials from application credentials.
 

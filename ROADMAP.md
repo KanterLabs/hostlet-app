@@ -12,23 +12,20 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one blocked, 11 in Backlog),
+The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
 
-**Current stop, 2026-09-25:** HOST-248 is blocked at checkpoint 3/5 under the
-[final M3.5 plan](docs/M3.5-FINAL-PLAN.md). Snapshot revision 12256 records
-22 completed tasks, one blocked task, eleven dependency-blocked future tasks
-and no active claims. Sol medium workers' corrections are installed at `d681a41`.
-The first clean full gate passed 62/62; the second passed 61 assertions but
-failed a provider-status read during final route cleanup. Exact cleanup restored
-the live preview and original owner content, with all eight demo rows and all
-eleven services ready. [Full report and receipts](docs/M3.5-FINAL-RESULT.md).
-No repair, third gate, source publication or CI followed. M4/M5 remain unclaimed;
-another repair or gate requires a new assignment.
+**Current assignment, 2026-09-25:** HOST-248 is active under the explicit
+[completion plan](docs/M3.5-COMPLETION-PLAN.md). Snapshot revision 12260
+records 22 completed tasks, one owned task and eleven dependency-blocked future
+tasks. Correct the provider-read/cleanup boundary, verify focused evidence,
+install clean source, complete two full passes and publish with CI. Preserve the
+live preview and owner state. [The prior failed result](docs/M3.5-FINAL-RESULT.md)
+remains historical evidence. M4/M5 remain unclaimed.
 
 **Private demo access remains available.**
 [Access instructions](docs/M3.5-DEMO-ACCESS.md) explain the two credential layers.

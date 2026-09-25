@@ -3,14 +3,18 @@
 
 import argparse
 import base64
+import datetime
+import email.utils
 import fcntl
 import hashlib
 import json
 import os
 import secrets
+import signal
 import stat
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,10 +24,67 @@ from contextlib import contextmanager
 API = "https://api.cloudflare.com/client/v4"
 HOSTS = ("beta.hostlet.cloud", "beta-demo.hostlet.cloud", "beta-portfolio.hostlet.cloud")
 GUARDS = ("*.hostlet.cloud", "hostlet.cloud")
+READ_ATTEMPTS = 3
+READ_DEADLINE_SECONDS = 12
+READ_TIMEOUT_SECONDS = 4
+RETRY_DELAYS_SECONDS = (0.25, 0.5)
+CURRENT_COMMAND = None
+CURRENT_GET_ATTEMPT = 0
 
 
 class Refusal(Exception):
     pass
+
+
+class ProviderRefusal(Refusal):
+    def __init__(self, code, method, http_status=None, attempts=1):
+        super().__init__(code)
+        self.code = code
+        self.method = method
+        self.http_status = http_status
+        self.attempts = attempts
+
+
+def diagnostic(schema, code, method=None, http_status=None, **fields):
+    print(json.dumps({"schema": schema, "command": CURRENT_COMMAND,
+                      "code": code, "method": method, "httpStatus": http_status,
+                      **fields}, sort_keys=True), file=sys.stderr)
+
+
+def retry_after_seconds(value):
+    if not value:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            return None
+        return max(0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+@contextmanager
+def read_wall_deadline():
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    started = time.monotonic()
+
+    def expired(_signum, _frame):
+        raise ProviderRefusal("transport_failure", "GET", attempts=max(1, CURRENT_GET_ATTEMPT))
+
+    signal.signal(signal.SIGALRM, expired)
+    previous_remaining, previous_interval = signal.setitimer(signal.ITIMER_REAL, READ_DEADLINE_SECONDS)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_remaining:
+            remaining = max(0.001, previous_remaining - (time.monotonic() - started))
+            signal.setitimer(signal.ITIMER_REAL, remaining, previous_interval)
 
 
 def require_private_file(path):
@@ -92,21 +153,60 @@ def exclusive_lock(cfg):
 
 
 def api(method, path, token, body=None):
+    if method == "GET":
+        with read_wall_deadline():
+            return api_request(method, path, token, body)
+    return api_request(method, path, token, body)
+
+
+def api_request(method, path, token, body=None):
+    global CURRENT_GET_ATTEMPT
     payload = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(
         API + path, data=payload, method=method,
         headers={"Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            result = json.load(response)
-    except urllib.error.HTTPError as exc:
-        raise Refusal(f"Cloudflare {method} failed with HTTP {exc.code}") from None
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-        raise Refusal(f"Cloudflare {method} transport or response failure") from None
-    if not isinstance(result, dict) or result.get("success") is not True:
-        raise Refusal(f"Cloudflare {method} rejected request")
-    return result.get("result"), result.get("result_info", {})
+    started = time.monotonic()
+    deadline = started + READ_DEADLINE_SECONDS if method == "GET" else None
+    limit = READ_ATTEMPTS if method == "GET" else 1
+    last_code = "transport_failure"
+    last_status = None
+    for attempt in range(1, limit + 1):
+        if method == "GET":
+            CURRENT_GET_ATTEMPT = attempt
+        remaining = deadline - time.monotonic() if deadline else None
+        if remaining is not None and remaining <= 0:
+            raise ProviderRefusal(last_code, method, last_status, attempt - 1)
+        timeout = min(READ_TIMEOUT_SECONDS, remaining) if remaining is not None else 20
+        retry_after = None
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                try:
+                    result = json.load(response)
+                except (ValueError, UnicodeError):
+                    raise ProviderRefusal("response_failure", method, attempts=attempt) from None
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            retry_after = retry_after_seconds(exc.headers.get("Retry-After") if exc.headers else None)
+            exc.close()
+            if method != "GET" or not (status == 429 or 500 <= status <= 599):
+                raise ProviderRefusal("http_failure", method, status, attempt) from None
+            code = "http_retry_exhausted"
+        except (urllib.error.URLError, TimeoutError, OSError):
+            status = None
+            code = "transport_failure"
+        else:
+            if not isinstance(result, dict) or result.get("success") is not True:
+                raise ProviderRefusal("provider_rejected", method, attempts=attempt)
+            return result.get("result"), result.get("result_info", {})
+        remaining = deadline - time.monotonic() if deadline else 0
+        last_code, last_status = code, status
+        delay = retry_after if retry_after is not None else RETRY_DELAYS_SECONDS[attempt - 1] if attempt < limit else 0
+        if attempt == limit or delay >= remaining:
+            raise ProviderRefusal(code, method, status, attempt) from None
+        diagnostic("hostlet.beta.cloudflare.retry/v1", code, method, status,
+                   attempt=attempt, elapsedMs=int((time.monotonic() - started) * 1000))
+        time.sleep(delay)
 
 
 def query(params):
@@ -125,8 +225,19 @@ def dns_view(record):
     return {key: record.get(key) for key in ("id", "type", "name", "content", "proxied", "ttl", "comment", "tags", "settings")}
 
 
-def dns_equal(a, b):
-    return dns_view(a) == dns_view(b)
+def dns_matches_baseline(actual, baseline):
+    # Cloudflare may return an empty comment after PATCH clears a baseline null.
+    # Every other field, including tags and settings, must still match exactly.
+    if not isinstance(actual, dict) or not isinstance(baseline, dict):
+        return False
+    if baseline.get("comment") is None and actual.get("comment") == "":
+        actual = {**actual, "comment": None}
+    return actual == baseline
+
+
+def dns_list_matches_baseline(actual, baseline):
+    return len(actual) == len(baseline) and all(
+        dns_matches_baseline(a, b) for a, b in zip(actual, baseline))
 
 
 def current_dns(cfg):
@@ -210,7 +321,9 @@ def validate_baseline(cfg, before):
                 raise Refusal("before-state record incomplete")
         # The read-only snapshot omitted settings; compare the fields it captured.
         fields = ("id", "type", "name", "content", "proxied", "ttl", "comment", "tags")
-        if [{k: r.get(k) for k in fields} for r in live[name]] != [{k: r.get(k) for k in fields} for r in expected[name]]:
+        actual = [{k: r.get(k) for k in fields} for r in live[name]]
+        baseline = [{k: r.get(k) for k in fields} for r in expected[name]]
+        if not (dns_list_matches_baseline(actual, baseline) if name == HOSTS[0] else actual == baseline):
             raise Refusal("DNS changed since before-state capture")
     legacy_live = tunnel_get(cfg, legacy["id"])
     if legacy_live.get("name") != legacy.get("name") or legacy_live.get("created_at") != legacy.get("created_at"):
@@ -285,7 +398,8 @@ def prepare(cfg, j):
         raise Refusal("prepare is only valid before cutover")
     now = assert_guards(cfg, j)
     for name in HOSTS:
-        if now[name] != j["beforeDns"][name]:
+        if not (dns_list_matches_baseline(now[name], j["beforeDns"][name]) if name == HOSTS[0]
+                else now[name] == j["beforeDns"][name]):
             raise Refusal("exact DNS changed before prepare")
     matches = tunnel_list(cfg, j["tunnelName"])
     if len(matches) > 1:
@@ -375,7 +489,7 @@ def cutover(cfg, j, proof):
                 elif j["phase"] == "reversed" or not any(a["action"] == "cutover" and a.get("host") == name for a in j["actions"]):
                     raise Refusal("unrecorded beta route change")
                 continue
-            if rs[0] != old:
+            if not dns_matches_baseline(rs[0], old):
                 raise Refusal("legacy beta DNS target or metadata changed")
             j["pending"] = "cutover:" + name
             save_journal(cfg, j)
@@ -445,7 +559,7 @@ def reverse(cfg, j):
             old = j["beforeDns"][name][0]
             if len(rs) != 1 or rs[0]["id"] != old["id"]:
                 raise Refusal("legacy beta DNS identity changed")
-            if rs[0] == old:
+            if dns_matches_baseline(rs[0], old):
                 if j.get("pending") == "reverse:" + name:
                     log_action(cfg, j, "reversed-beta", host=name, recordId=old["id"])
                 elif j["phase"] == "cutover":
@@ -462,9 +576,7 @@ def reverse(cfg, j):
             api("PATCH", f"/zones/{cfg['zoneId']}/dns_records/{old['id']}", os.environ["M35_CF_DNS_TOKEN"], restore)
             after = records(cfg, name)
             actual = dns_view(after[0]) if len(after) == 1 else None
-            if actual and old.get("comment") is None and actual.get("comment") == "":
-                actual["comment"] = None
-            if actual != old:
+            if not dns_matches_baseline(actual, old):
                 raise Refusal("exact legacy beta restoration readback mismatch")
             log_action(cfg, j, "reversed-beta", host=name, recordId=old["id"])
     j["phase"] = "reversed"
@@ -475,10 +587,8 @@ def reverse(cfg, j):
 def status(cfg, j):
     now = assert_guards(cfg, j)
     old = j["beforeDns"][HOSTS[0]][0]
-    current_beta = dict(now[HOSTS[0]][0]) if len(now[HOSTS[0]]) == 1 else None
-    if current_beta and old.get("comment") is None and current_beta.get("comment") == "":
-        current_beta["comment"] = None
-    exact_original = (current_beta == old
+    current_beta = now[HOSTS[0]][0] if len(now[HOSTS[0]]) == 1 else None
+    exact_original = (dns_matches_baseline(current_beta, old)
                       and all(not now[name] for name in HOSTS[1:]))
     exact_preview = False
     if j.get("tunnelId") and all(len(now[name]) == 1 for name in HOSTS):
@@ -495,12 +605,14 @@ def status(cfg, j):
 
 
 def main():
+    global CURRENT_COMMAND
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("inventory", "prepare", "cutover", "reverse", "status"))
     parser.add_argument("--config", required=True, help="private 0600 JSON configuration")
     parser.add_argument("--before", help="private 0600 read-only before-state JSON, inventory only")
     parser.add_argument("--ready-proof", help="private 0600 readiness JSON, cutover only")
     args = parser.parse_args()
+    CURRENT_COMMAND = args.command
     try:
         cfg = load_config(args.config)
         if not os.environ.get("M35_CF_DNS_TOKEN") or not os.environ.get("M35_CF_TUNNEL_TOKEN"):
@@ -522,9 +634,13 @@ def main():
                     reverse(cfg, j)
                 else:
                     status(cfg, j)
-    except (Refusal, KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
-        message = str(exc) if isinstance(exc, Refusal) else "private input or journal malformed"
-        print("refused: " + message, file=sys.stderr)
+    except (Refusal, KeyError, IndexError, AttributeError, TypeError, ValueError, OSError) as exc:
+        if isinstance(exc, ProviderRefusal):
+            diagnostic("hostlet.beta.cloudflare.error/v1", exc.code, exc.method,
+                       exc.http_status, attempts=exc.attempts)
+        else:
+            code = "guard_refusal" if isinstance(exc, Refusal) else "input_or_journal_malformed"
+            diagnostic("hostlet.beta.cloudflare.error/v1", code, attempts=0)
         return 2
     return 0
 

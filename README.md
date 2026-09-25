@@ -6,12 +6,12 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-The restricted demo is live on installed `d681a41`. The first full M3.5 gate
-passed 62/62 checks; the second failed final route cleanup after 61 passing
-checks. Exact cleanup restored the preview and original owner content. M3.5
-remains incomplete; HOST-248 is blocked and M4 unclaimed. See the
-[current failure report](docs/M3.5-FINAL-RESULT.md) and
-[demo access instructions](docs/M3.5-DEMO-ACCESS.md).
+The restricted demo is live on installed `d681a41`. M3.5 completion is active
+under Shane's explicit reassignment. See the
+[completion plan](docs/M3.5-COMPLETION-PLAN.md),
+[historical failed result](docs/M3.5-FINAL-RESULT.md) and
+[private access instructions](docs/M3.5-DEMO-ACCESS.md). Two clean full passes,
+canonical publication and mirror CI are required before acceptance. Stop before M4.
 
 **Status: M2 and M3 accepted for owned local fixtures.** M2
 supports accounts, selected GitHub repositories and branches, bounded

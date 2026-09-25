@@ -47,6 +47,27 @@ reversal within each full gate. Cleanup restores and verifies the entry route
 on both success and failure; a live preview at entry remains live. The focused
 `--phase login` checks a real browser's rejected application password, accurate
 notice, signed-out form and subsequent correct sign-in without editing content.
+
+Route cleanup failure scenarios for the full gate and focused `--phase
+route-only` probe:
+
+- After the second exact reversal, a settled `reversed` journal and exact
+  original provider route return directly through guarded cutover to a live
+  preview found at entry. Cleanup verifies the exact preview and the seven
+  protected HTTPS paths; it does not issue another reverse.
+- If an interrupted cutover or reversal leaves a pending journal or mixed
+  owned route, cleanup uses the existing guarded reverse to reconcile it,
+  verifies the exact original route and cleared pending state, then cutovers
+  only when the entry route was preview. An unknown or foreign provider state
+  fails cleanup without a blind mutation retry.
+- If guarded provider status fails before a cleanup decision, the run fails
+  and preserves safe command diagnostics. A mutation that succeeds but fails
+  subsequent status readback also leaves the run failed; a later run must
+  inspect the retained artifact and provider state before proceeding.
+- An original route found at entry is restored exactly, including after a
+  failed feature phase. Any failure to prove the entry route, or protected
+  HTTPS readiness for a live preview entry, keeps the run failed.
+
 The focused `--phase route-only` needs no prior synthetic phase receipts. It
 checks the current approved publication, private draft, protected HTML bytes
 and exact demo items, then proves original route, preview reapplication,

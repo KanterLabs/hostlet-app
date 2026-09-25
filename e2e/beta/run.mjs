@@ -67,7 +67,22 @@ const run = (program, argv, { timeout = 60000, env } = {}) => {
       childFailure = { operation: field(parsed.operation), code: field(parsed.code), substep: field(parsed.substep), unit: field(parsed.unit), policy, waitedMs: Number.isSafeInteger(parsed.waitedMs) ? parsed.waitedMs : null, primaryCode: field(parsed.primary?.code), primarySubstep: field(parsed.primarySubstep), cleanupCode: field(parsed.cleanup?.code), cleanupSubstep: field(parsed.cleanupSubstep) };
     } catch { /* never persist raw child stderr */ }
   }
-  const diagnostic = { program: basename(program), operation: argv[0] === "e2e/beta/operations.mjs" ? argv[1] : argv[0], exitStatus: result.status, elapsedMs: Date.now() - started, errorCode: result.error?.code ?? null, childFailure };
+  let providerFailure = null;
+  const providerRetries = [];
+  if (argv[0] === "scripts/beta/cloudflare.py") {
+    const verbs = new Set(["inventory", "prepare", "cutover", "reverse", "status"]);
+    const codes = new Set(["transport_failure", "http_retry_exhausted", "http_failure", "provider_rejected", "response_failure", "guard_refusal", "input_or_journal_malformed"]);
+    for (const line of (result.stderr ?? "").trim().split("\n").slice(-12)) {
+      try {
+        const event = JSON.parse(line);
+        if (!verbs.has(event.command) || event.command !== argv[1] || !codes.has(event.code)) continue;
+        const safe = { command: event.command, code: event.code, method: ["GET", "POST", "PATCH", "DELETE"].includes(event.method) ? event.method : null, httpStatus: Number.isInteger(event.httpStatus) && event.httpStatus >= 100 && event.httpStatus <= 599 ? event.httpStatus : null };
+        if (event.schema === "hostlet.beta.cloudflare.error/v1" && result.status !== 0) providerFailure = { ...safe, attempts: Number.isSafeInteger(event.attempts) && event.attempts >= 0 ? event.attempts : null };
+        if (event.schema === "hostlet.beta.cloudflare.retry/v1" && providerRetries.length < 10) providerRetries.push({ ...safe, attempt: Number.isSafeInteger(event.attempt) && event.attempt >= 1 ? event.attempt : null, elapsedMs: Number.isSafeInteger(event.elapsedMs) && event.elapsedMs >= 0 ? event.elapsedMs : null });
+      } catch { /* never persist raw provider stderr */ }
+    }
+  }
+  const diagnostic = { program: basename(program), operation: argv[0] === "e2e/beta/operations.mjs" || argv[0] === "scripts/beta/cloudflare.py" ? argv[1] : argv[0], exitStatus: result.status, elapsedMs: Date.now() - started, errorCode: result.error?.code ?? null, childFailure, providerFailure, providerRetries };
   if (state.observations.operations) { state.observations.operations.push(diagnostic); progress(); }
   if (result.error || result.status !== 0) throw new Error(`${diagnostic.program} ${diagnostic.operation} failed (exit ${diagnostic.exitStatus ?? diagnostic.errorCode ?? "unknown"})`);
   return result.stdout.trim();
@@ -765,14 +780,17 @@ try {
   if (entryRoutePhase && routeMayBeMutated) {
     try {
       let result = op("routeStatus");
-      if (entryRoutePhase === "cutover" && !(result.phase === "cutover" && result.exactPreviewRoute === true && result.pending === null)) {
-        op("routeReverse");
-        op("routeCutover"); result = op("routeStatus");
-      } else if (entryRoutePhase !== "cutover" && !(result.exactOriginalRoute === true && result.pending === null)) {
-        op("routeReverse"); result = op("routeStatus");
+      const exactOriginal = (status) => ["prepared", "reversed"].includes(status.phase) && status.pending === null && status.exactOriginalRoute === true && status.exactPreviewRoute !== true;
+      const exactPreview = (status) => status.phase === "cutover" && status.pending === null && status.exactPreviewRoute === true && status.exactOriginalRoute !== true;
+      if (!["prepared", "reversed", "cutover"].includes(result.phase)) throw new Error("route cleanup found an unknown journal phase");
+      if (!exactOriginal(result) && !exactPreview(result)) {
+        result = op("routeReverse");
+        if (!exactOriginal(result)) throw new Error("route cleanup reverse did not verify exact original route");
       }
       const liveEntry = entryRoutePhase === "cutover";
-      check("M35-PLACE-01-entry-restored", "provider readback restores exact verified entry route after gate or failure", { entryPhase: entryRoutePhase, finalPhase: result.phase, exactOriginalRoute: result.exactOriginalRoute, exactPreviewRoute: result.exactPreviewRoute, pending: result.pending }, result.pending === null && (liveEntry ? result.phase === "cutover" && result.exactPreviewRoute === true : result.exactOriginalRoute === true));
+      if (liveEntry && exactOriginal(result)) result = op("routeCutover");
+      if (!liveEntry && exactPreview(result)) result = op("routeReverse");
+      check("M35-PLACE-01-entry-restored", "provider readback restores exact verified entry route after gate or failure", { entryPhase: entryRoutePhase, finalPhase: result.phase, exactOriginalRoute: result.exactOriginalRoute, exactPreviewRoute: result.exactPreviewRoute, pending: result.pending }, liveEntry ? exactPreview(result) : exactOriginal(result));
       if (liveEntry) await waitForProtectedOrigins("entry-restored", `/${state.outputs.slug ?? state.prerequisites.currentPublishedSite.slug}/`);
       state.cleanup.push({ resource: "owned Cloudflare route", result: `exact entry ${liveEntry ? "preview" : "original"} route restored and verified` });
     } catch (error) { state.cleanup.push({ resource: "owned Cloudflare route", result: `restore failed: ${publicValue(error.message)}` }); state.status = "failed"; }

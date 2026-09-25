@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "manually_blocked",
-      "status": "blocked"
+      "dependency_state": "owned",
+      "status": "in_progress"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Final M3.5 recovery stopped at3/5: clean d681a41 full1 passed62/62; full2 passed61 assertions but failed final provider-status readback during route cleanup. Exact live preview, original owner content, eight rows and all eleven ready services restored separately. No repair/retry/publication/CI followed. HOST-248 blocked; M4/M5 unclaimed."
+    "current_status": "M3.5 explicitly resumed: provider-read reliability and exact cleanup correction, focused boundary evidence, two clean full passes, canonical publication and CI; preserve live preview and data; stop before M4."
   },
   "milestones": [
     {
@@ -811,59 +811,54 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12256,
-    "read_at": "2026-09-25T17:17:05.685550208Z",
+    "project_revision": 12260,
+    "read_at": "2026-09-25T17:59:50.947016416Z",
     "completed": 22,
-    "active": 0,
+    "active": 1,
     "backlog": 11,
-    "blocked": 1,
-    "active_task": null,
+    "blocked": 0,
+    "active_task": "HOST-248",
     "assigned_stop": "HOST-248",
-    "stopped_at": "HOST-248",
-    "active_tasks": []
+    "stopped_at": null,
+    "active_tasks": [
+      "HOST-248"
+    ]
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
-    "authorized_at": "2026-09-24",
-    "tracking": "Final M3.5 recovery stopped at3/5: clean d681a41 full1 passed62/62; full2 passed61 assertions but failed final provider-status readback during route cleanup. Exact live preview, original owner content, eight rows and all eleven ready services restored separately. No repair/retry/publication/CI followed. HOST-248 blocked; M4/M5 unclaimed.",
+    "authorized_at": "2026-09-25",
+    "tracking": "M3.5 explicitly resumed: provider-read reliability and exact cleanup correction, focused boundary evidence, two clean full passes, canonical publication and CI; preserve live preview and data; stop before M4.",
     "data_preservation": "Preserve now-live restricted preview and exact legacy rollback route, immutable owner history, approved public content and private draft; verify backups before install and use only guarded API compensation after synthetic gate writes.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
-    "recovery_plan": "docs/M3.5-FINAL-PLAN.md",
+    "recovery_plan": "docs/M3.5-COMPLETION-PLAN.md",
     "recovery_checkpoints": [
       {
-        "id": "preservation",
+        "id": "reliability-preservation",
         "depends_on": [],
-        "exit": "Verified current entry state and populated backups."
+        "exit": "Safe provider reads and cleanup with retained owner baseline."
       },
       {
-        "id": "focused",
+        "id": "focused-install",
         "depends_on": [
-          "preservation"
+          "reliability-preservation"
         ],
-        "exit": "Observed fixes pass focused real-boundary checks and preservation cleanup."
-      },
-      {
-        "id": "freeze",
-        "depends_on": [
-          "focused"
-        ],
-        "exit": "Reviewed clean candidate, required checks and immutable installation match."
+        "exit": "Focused evidence, reviewed clean source, verified backups and immutable install."
       },
       {
         "id": "acceptance",
         "depends_on": [
-          "freeze"
+          "focused-install"
         ],
-        "exit": "Two clean full passes; stop on any full failure."
+        "exit": "Two clean full passes with guarded owner compensation and complete receipts."
       },
       {
         "id": "delivery",
         "depends_on": [
           "acceptance"
         ],
-        "exit": "Canonical source, mirror CI and protected owner handoff verified; stop before M4."
+        "exit": "Canonical source, mirror CI, final handoff and completed HOST-248; stop before M4."
       }
     ],
     "demo_handoff": {

@@ -75,6 +75,15 @@ the first-full-failure stop rule. No second gate, final publication/cutover or
 access handoff occurred. A new instruction is required to resume; M4 remains
 unclaimed. See the [updated handoff](docs/M3.5-HANDOFF.md).
 
+On 2026-09-25 Shane separately authorized a scoped demo handoff with "Go":
+retain the existing restricted preview at its three configured HTTPS hosts after
+verifying normal browser login, save/reload, demo interaction and approved
+portfolio viewing. This permits preview access before two clean full gates;
+it does not accept M3.5 or authorize M4. Preserve the exact original route for
+rollback and all existing data. Do not run service outage/restart, restore or
+full-gate drills in this assignment. The remaining milestone acceptance stays
+incomplete. The scoped browser scenarios and artifact are recorded separately.
+
 > Your projects, live and ready to show.
 
 ## Customer and outcome

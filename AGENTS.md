@@ -20,15 +20,23 @@ beta route/data, use isolated owned preview resources, and verify the deployed
 browser journey and persistence twice. This authorizes the scoped preview
 cutover; it does not authorize purchases, customer admission or live payments.
 M3.5 recovery on 2026-09-25 used Sol medium workers and installed `bba9d67`.
-The focused invalid-save case still returns HTTP 400 `malformed_if_match`:
-outer `foundation::require_ready` overwrites the preview's `no-transform` header,
-allowing public compression to weaken its ETag. Read `docs/M3.5-HANDOFF.md`.
-The recovery plan's same-failure stop rule applied at checkpoint 2. HOST-248 is
-resumed by Shane's subsequent "use sol and fix" instruction; no full gate ran in the prior assignment. Exact original routing, the
-original draft/publication and existing stores are preserved. The new instruction authorizes the scoped correction and recovery. This assignment follows
-`docs/M3.5-RECOVERY-PLAN.md`, first proving the final response header through
-all middleware/public encoding boundaries, then focused E2E and two clean full
-gates. Keep the existing stop-on-full-gate-failure rule.
+At that historical stop, the focused invalid-save case returned HTTP 400
+`malformed_if_match`: outer `foundation::require_ready` overwrote the preview's
+`no-transform` header, allowing public compression to weaken its ETag. Read `docs/M3.5-HANDOFF.md`.
+That was the historical checkpoint-2 stop. Shane's later "use sol and fix"
+instruction resumed the scoped recovery. Saving and all selected focused
+phases passed, but the first full gate on clean installed
+`a1ffa60d5e0fc767042247980fda9175328f3ea6` failed at bounded startup
+recovery after 54 passing assertions; the full route round trip was not
+reached. Manager journals and source indicate the fourth control start hit
+the unchanged three-per-minute limit; the gate artifact itself retained only
+a generic child failure code. The exact prior route was restored, and a
+separate cleanup readback verified all eleven services ready and populated
+data preserved. HOST-248 is blocked at checkpoint 3/5 under the
+stop-on-full-gate-failure rule. No second gate, final cutover, source
+publication/CI or access handoff occurred. Read `docs/M3.5-HANDOFF.md` and
+`docs/M3.5-RECOVERY-PLAN.md`; a new instruction is required before repair or
+another gate.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "owned",
-      "status": "active"
+      "dependency_state": "manually_blocked",
+      "status": "blocked"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Shane resumed HOST-248 with use sol and fix. Correct outer middleware, verify candidate final HTTP header before installation and public encoding before browser saves; finish focused phases then two full gates. Preserve data and exact route; stop on full-gate failure; M4 remains unclaimed."
+    "current_status": "Sol medium recovery fixed saving and passed all focused phases. First full gate on a1ffa60 stopped at bounded startup after 54 passing checks; exact route reversed and temporary resources removed. HOST-248 blocked at 3/5; no second gate or further repair. New instruction required; M4 remains unclaimed."
   },
   "milestones": [
     {
@@ -811,25 +811,23 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12173,
-    "read_at": "2026-09-25T11:54:35.751868342Z",
+    "project_revision": 12210,
+    "read_at": "2026-09-25T13:29:45.431133413Z",
     "completed": 22,
-    "active": 1,
+    "active": 0,
     "backlog": 11,
-    "blocked": 0,
-    "active_task": "HOST-248",
+    "blocked": 1,
+    "active_task": null,
     "assigned_stop": "HOST-248",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-248"
-    ]
+    "stopped_at": "HOST-248",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "Shane resumed HOST-248 with use sol and fix. Correct outer middleware, verify candidate final HTTP header before installation and public encoding before browser saves; finish focused phases then two full gates. Preserve data and exact route; stop on full-gate failure; M4 remains unclaimed.",
+    "tracking": "Sol medium recovery fixed saving and passed all focused phases. First full gate on a1ffa60 stopped at bounded startup after 54 passing checks; exact route reversed and temporary resources removed. HOST-248 blocked at 3/5; no second gate or further repair. New instruction required; M4 remains unclaimed.",
     "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
     "recovery_plan": "docs/M3.5-RECOVERY-PLAN.md",

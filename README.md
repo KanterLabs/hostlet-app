@@ -28,17 +28,20 @@ production portfolio publication remain disabled. M3.5 now adds a restricted
 owner preview deployment through HOST-248. Its
 [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
 [scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
-the receipt-query correction is deployed and passes. The latest full gate
-recorded 23 passing checks before a browser portfolio-save confirmation timeout.
-The September 25 recovery traced the error to public compression weakening the
-revision ETag. Its first correction at `bba9d67` was overwritten by outer API
-middleware, so the focused browser save still failed. The recovery plan's
-checkpoint stop rule applied; no new full gate ran. Exact original routing and
-the original draft/publication are preserved. The new preview has not been
-handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md) records
-the diagnosis and verified receipt. HOST-248 resumed after Shane's next "use sol and fix" instruction; M4 remains unclaimed.
-The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) defines the next diagnostic,
-focused E2E and acceptance checkpoints for this resumed Sol medium execution.
+the receipt-query correction and subsequent save correction were deployed.
+The September 25 recovery passed rejected, stale and repeated browser saves
+and all selected later focused phases. Its first full gate on clean installed
+`a1ffa60d5e0fc767042247980fda9175328f3ea6` recorded 54 passing assertions
+but stopped at bounded startup recovery before the full route round trip. The
+manager journal and source indicate the fourth control start hit the unchanged
+three-per-minute limit; the artifact retained only a generic child failure
+code. The exact original route was restored, and separate cleanup readback
+found all eleven services ready with populated data preserved. HOST-248 is
+blocked at checkpoint 3/5; there was no second full gate,
+final cutover or preview handoff. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
+records the verified receipt and earlier failure history. The
+[recovery plan](docs/M3.5-RECOVERY-PLAN.md) requires a new instruction before
+repair or another gate. M4 remains unclaimed.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

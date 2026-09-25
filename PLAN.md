@@ -63,8 +63,17 @@ checkpoint 2: `bba9d67` still returns `malformed_if_match` because outer API
 middleware overwrites the preview's `no-transform` header. No new full gate ran.
 Exact original routing and the original draft/publication are retained;
 Shane then instructed "use sol and fix", resuming HOST-248 for the outer
-middleware correction and staged recovery. See the updated handoff. The
-full-gate failure rule and M4 stop boundary remain in force.
+middleware correction and staged recovery. Saving and all selected focused
+phases passed. The first full run on clean installed `a1ffa60d5e0fc767042247980fda9175328f3ea6`
+recorded 54 passing assertions but failed at bounded startup recovery before
+the full route round trip. Manager journals and source indicate the fourth
+control start hit the unchanged three-per-minute limit; the artifact itself
+retains only a generic child failure code. The exact original route was
+restored, and a separate cleanup readback found all eleven services ready and
+populated data preserved. HOST-248 is blocked at checkpoint 3/5 under
+the first-full-failure stop rule. No second gate, final publication/cutover or
+access handoff occurred. A new instruction is required to resume; M4 remains
+unclaimed. See the [updated handoff](docs/M3.5-HANDOFF.md).
 
 > Your projects, live and ready to show.
 

@@ -88,6 +88,7 @@ const progress = () => {
 progress(); // Artifact exists even if parsing, inventory, or setup fails.
 
 let browser;
+let initialBrowserPending = false;
 let config;
 let edge;
 let ownerToken;
@@ -95,6 +96,7 @@ let cutoverActive = false;
 let temporaryRestore;
 let interrupted = false;
 let activePhase;
+let publicationAction;
 const beginPhase = (name, deadlineMs) => { activePhase = { name, startedAt: new Date().toISOString(), deadlineMs, status: "running", actions: [] }; state.observations.phases.push(activePhase); progress(); };
 const phaseAction = (action, observed = {}) => { if (activePhase) activePhase.actions.push({ action, at: new Date().toISOString(), ...observed }); progress(); };
 const endPhase = () => { if (activePhase) { activePhase.status = "passed"; activePhase.endedAt = new Date().toISOString(); progress(); activePhase = undefined; } };
@@ -155,7 +157,8 @@ const transportError = (error, depth = 0) => {
   if (!error || typeof error !== "object" || depth >= 3) return null;
   return { name: String(error.name ?? "Error"), code: error.code == null ? null : String(error.code), cause: transportError(error.cause, depth + 1) };
 };
-const waitForProtectedOrigins = async (phase) => {
+const waitForProtectedOrigins = async (phase, portfolioPath) => {
+  if (!/^\/[a-z0-9][a-z0-9-]{0,62}\/$/.test(portfolioPath)) throw new Error("published portfolio readiness path is invalid");
   const observed = state.observations.placement.propagation[phase] = {};
   const started = Date.now();
   const deadlineMs = 300000;
@@ -164,18 +167,32 @@ const waitForProtectedOrigins = async (phase) => {
   observed.deadlineMs = deadlineMs;
   observed.stableRequiredMs = stableRequiredMs;
   const hosts = Object.entries(config.origins).map(([name, origin]) => ({ name, url: new URL("/", origin), host: new URL(origin).hostname }));
+  hosts.push({ name: "dashboardApi", url: new URL("/v1/me", config.origins.dashboard), host: new URL(config.origins.dashboard).hostname, headers: { Authorization: basic(), "X-Hostlet-Authorization": "Bearer malformed", Accept: "application/json" } });
+  const protectedHeaders = { Authorization: basic(), Accept: "application/json" };
+  for (const [name, origin, path] of [["dashboardHtml", config.origins.dashboard, "/"], ["demoHtml", config.origins.demo, "/"], ["portfolioHtml", config.origins.portfolio, portfolioPath]]) hosts.push({ name, url: new URL(path, origin), host: new URL(origin).hostname, headers: protectedHeaders, html: true });
   for (const { name, host } of hosts) observed[name] = { host, status: null, attempts: [], elapsedMs: 0 };
   while (Date.now() - started < deadlineMs) {
     assertLive();
     const timeout = Math.min(5000, deadlineMs - (Date.now() - started));
-    const round = await Promise.all(hosts.map(async ({ name, url, host }) => {
-      const attempt = { host, attemptedAt: new Date().toISOString(), elapsedMs: 0, status: null, error: null, cfRay: null, cloudflareErrorCode: null };
+    const round = await Promise.all(hosts.map(async ({ name, url, host, headers }) => {
+      const attempt = { host, path: url.pathname, attemptedAt: new Date().toISOString(), elapsedMs: 0, status: null, mimeType: null, apiErrorCode: null, error: null, cfRay: null, cfCacheStatus: null, ageSeconds: null, cloudflareErrorCode: null };
       try {
-        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(timeout) });
+        const response = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(timeout) });
         attempt.status = response.status;
+        const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+        if (mimeType && /^[a-z0-9.+-]+\/[a-z0-9.+-]{1,80}$/.test(mimeType)) attempt.mimeType = mimeType;
         const cfRay = response.headers.get("cf-ray");
         if (cfRay && /^[A-Za-z0-9-]{1,64}$/.test(cfRay)) attempt.cfRay = cfRay;
-        if (response.status === 530 && response.body) {
+        const cfCacheStatus = response.headers.get("cf-cache-status");
+        if (cfCacheStatus && /^[A-Za-z-]{1,40}$/.test(cfCacheStatus)) attempt.cfCacheStatus = cfCacheStatus;
+        const age = response.headers.get("age");
+        if (age && /^(?:0|[1-9][0-9]{0,9})$/.test(age)) attempt.ageSeconds = Number(age);
+        if (name === "dashboardApi" && response.status === 401) {
+          let payload;
+          try { payload = JSON.parse(await response.text()); } catch { payload = null; }
+          const code = payload?.error?.code;
+          if (typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)) attempt.apiErrorCode = code;
+        } else if (response.status === 530 && response.body) {
           const reader = response.body.getReader();
           try {
             const chunk = await reader.read();
@@ -189,7 +206,7 @@ const waitForProtectedOrigins = async (phase) => {
       observed[name].elapsedMs = attempt.elapsedMs;
       return attempt;
     }));
-    if (round.every((attempt) => attempt.status === 401 && attempt.error === null)) stableSince ??= Date.now();
+    if (round.every((attempt, index) => attempt.error === null && (hosts[index].html ? attempt.status === 200 && attempt.mimeType === "text/html" : attempt.status === 401 && (hosts[index].name !== "dashboardApi" || attempt.apiErrorCode === "authentication_required")))) stableSince ??= Date.now();
     else stableSince = null;
     observed.stableSince = stableSince === null ? null : new Date(stableSince).toISOString();
     observed.stableElapsedMs = stableSince === null ? 0 : Date.now() - stableSince;
@@ -214,6 +231,37 @@ const browserStep = async (url, expression) => {
   const page = await browser.navigate(url);
   await browser.wait(expression);
   return page;
+};
+const recordInitialBrowserEvent = (kind, event) => {
+  if (!initialBrowserPending) return;
+  const observed = state.observations.initialBrowser;
+  const list = kind === "response" ? observed.responses : observed.failures;
+  if (list.length >= 200) { observed[`${kind}sOmitted`]++; progress(); return; }
+  const requestId = typeof event.requestId === "string" && /^[A-Za-z0-9.:-]{1,100}$/.test(event.requestId) ? event.requestId : null;
+  const at = typeof event.at === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/.test(event.at) ? event.at : null;
+  if (kind === "response") list.push({ requestId, at, origin: Object.values(config.origins).includes(event.origin) ? event.origin : null, path: typeof event.path === "string" ? event.path.slice(0, 256) : null, status: Number.isInteger(event.status) && event.status >= 100 && event.status <= 599 ? event.status : null, mimeType: typeof event.mimeType === "string" && /^[A-Za-z0-9.+/-]{1,100}$/.test(event.mimeType) ? event.mimeType : null, type: typeof event.type === "string" && /^[A-Za-z]{1,40}$/.test(event.type) ? event.type : null });
+  else list.push({ requestId, at, code: typeof event.code === "string" && /^[A-Za-z0-9_.:-]{1,100}$/.test(event.code) ? event.code : null });
+  progress();
+};
+const awaitPublicationAction = async (action, uiExpression, deadlineMs) => {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const expression = typeof uiExpression === "function" ? uiExpression(action) : uiExpression;
+    const uiMatches = expression ? await browser.evaluate(expression).catch(() => false) : false;
+    action.uiMatches = uiMatches === true;
+    if (action.networkFailure) { action.result = "network-failure"; progress(); throw new Error(`${action.name} browser POST network failure`); }
+    if (action.status >= 400) { action.result = "http-rejected"; progress(); throw new Error(`${action.name} browser POST rejected with HTTP ${action.status}`); }
+    if (action.name === "publish" && action.returnedId) {
+      const job = await browser.evaluate(`(() => { const job = document.querySelector('[data-testid="publication-job"]'); return job?.querySelector('dl > div:first-child dd')?.textContent?.trim() === ${JSON.stringify(action.returnedId)} ? job.getAttribute('data-publication-state') : null; })()`).catch(() => null);
+      action.jobState = job;
+      if (job === "failed" || job === "superseded") { action.result = `job-${job}`; progress(); throw new Error(`publish job reached ${job} state`); }
+    }
+    if (action.status >= 200 && action.status < 300 && (action.name !== "publish" || Boolean(action.returnedId)) && uiMatches === true) { action.result = "confirmed"; action.endedAt = new Date().toISOString(); progress(); publicationAction = undefined; return; }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  action.result = !action.requestOccurred ? "no-request" : !action.status ? "response-timeout" : "ui-timeout-after-success";
+  progress();
+  throw new Error(`${action.name} ${action.result} within ${deadlineMs}ms`);
 };
 const editorState = async (intended) => browser.evaluate(`(() => {
   const field = document.querySelector('textarea[name="profile.introduction"]');
@@ -294,12 +342,16 @@ async function execute() {
     state.prerequisites[unit] = JSON.parse(service("ready", unit));
   }
   state.prerequisites.providerInventoryPhase = before.phase;
+  const currentSite = op("currentPublishedSite");
+  state.prerequisites.currentPublishedSite = currentSite;
+  state.observations.retainedIdentities.publicationId = currentSite.id;
+  progress();
   cutoverActive = true; // A failed command can already have changed one record.
   op("routeCutover");
   const stagedStatus = op("routeStatus");
   check("M35-PLACE-01-cutover", "all three HTTPS hosts reach the exact staged preview route", { staged: stagedStatus.phase, exactRecords: stagedStatus.exactRecordCounts }, stagedStatus.phase === "cutover" && Object.values(stagedStatus.exactRecordCounts ?? {}).length === 3 && Object.values(stagedStatus.exactRecordCounts).every((value) => value === 1));
   state.observations.placement = { before, staged: stagedStatus, propagation: {} };
-  await waitForProtectedOrigins("initial");
+  await waitForProtectedOrigins("initial", `/${currentSite.slug}/`);
 
   const hosts = Object.entries(config.origins);
   for (const [name, origin] of hosts) {
@@ -338,8 +390,11 @@ async function execute() {
   if (clockBefore) check("M35-DB-CLOCK-01-provision", "real generation-zero database scheduler accepts advancing time and exact provision receipt", clockBefore, clockBefore.clockGeneration === 0 && clockBefore.clockSchema === 1 && clockBefore.nondecreasing === true && clockBefore.exactProvision === true && clockBefore.ready === true && /^[a-f0-9]{64}$/.test(clockBefore.containerId));
 
   const requests = [];
-  browser = await openBrowser({ chromiumPath: args.chromium || "/snap/bin/chromium", username: edge.username, password: edge.password, origins: Object.values(config.origins), onRequest: (event) => { requests.push({ origin: event.origin, path: event.path, method: event.method }); if (event.path === "/v1/portfolio/preview-revisions" && event.method === "POST" && state.observations.browserSave) { const save = state.observations.browserSave; save.requestOccurred = true; save.requests.push({ at: event.at, method: event.method, path: event.path, expectedRevision: event.expectedRevision }); progress(); } }, onResponse: (event) => { if (event.path === "/v1/portfolio/preview-revisions" && state.observations.browserSave) { const save = state.observations.browserSave; const prior = save.responses.findIndex((item) => item.requestId === event.requestId); const entry = { requestId: event.requestId, at: event.at, status: event.status, safeBody: event.safeBody ?? null }; if (prior < 0) save.responses.push(entry); else save.responses[prior] = entry; progress(); } }, onFailure: (event) => { if (state.observations.browserSave) { state.observations.browserSave.failures.push(event); progress(); } } });
+  state.observations.initialBrowser = { responses: [], failures: [], responsesOmitted: 0, failuresOmitted: 0, snapshot: null };
+  initialBrowserPending = true;
+  browser = await openBrowser({ chromiumPath: args.chromium || "/snap/bin/chromium", username: edge.username, password: edge.password, origins: Object.values(config.origins), onRequest: (event) => { requests.push({ origin: event.origin, path: event.path, method: event.method }); if (event.path === "/v1/portfolio/preview-revisions" && event.method === "POST" && state.observations.browserSave) { const save = state.observations.browserSave; save.requestOccurred = true; save.requests.push({ requestId: event.requestId, at: event.at, method: event.method, path: event.path, expectedRevision: event.expectedRevision }); progress(); } if (publicationAction && event.method === "POST" && event.path === publicationAction.path) { publicationAction.requestOccurred = true; publicationAction.requestId = event.requestId; publicationAction.requestAt = event.at; progress(); } }, onResponse: (event) => { recordInitialBrowserEvent("response", event); if (event.path === "/v1/portfolio/preview-revisions" && state.observations.browserSave) { const save = state.observations.browserSave; const prior = save.responses.findIndex((item) => item.requestId === event.requestId); const entry = { requestId: event.requestId, at: event.at, status: event.status, safeBody: event.safeBody ?? null }; if (prior < 0) save.responses.push(entry); else save.responses[prior] = entry; progress(); } if (publicationAction && event.requestId === publicationAction.requestId && event.path === publicationAction.path) { publicationAction.responseAt = event.at; publicationAction.status = event.status; if (event.safeBody) { publicationAction.returnedId = event.safeBody.id; publicationAction.approvedRevisionId = event.safeBody.approvedRevisionId; publicationAction.responseSlug = event.safeBody.slug; publicationAction.errorCode = event.safeBody.code; if (publicationAction.name === "publish" && event.status >= 200 && event.status < 300 && event.safeBody.id) state.observations.retainedIdentities.publicationId = event.safeBody.id; } progress(); } }, onFailure: (event) => { recordInitialBrowserEvent("failure", event); if (state.observations.browserSave?.requests.some((item) => item.requestId === event.requestId)) { state.observations.browserSave.failures.push(event); progress(); } if (publicationAction && event.requestId === publicationAction.requestId) { publicationAction.networkFailure = event.code; progress(); } } });
   await browserStep(config.origins.dashboard, "Boolean(document.querySelector('[data-testid=auth-form]'))");
+  initialBrowserPending = false;
   await browser.fill('[data-testid="auth-form"] input[name="email"]', config.owner.email);
   await browser.fill('[data-testid="auth-form"] input[name="password"]', secret(config.owner.passwordFile));
   await browser.click('[data-testid="auth-form"] button[type="submit"]');
@@ -436,17 +491,27 @@ async function execute() {
   if (["full", "publication"].includes(phase)) {
   beginPhase("publication", 60000);
   await browser.click('[data-testid="publication-load-review"]');
-  await browser.wait("Boolean(document.querySelector('[data-testid=publication-review]'))");
+  await browser.wait(`document.querySelector('[data-testid="publication-review"] .publication-review__summary strong')?.textContent?.trim() === ${JSON.stringify(`Saved revision ${saved.payload.revision}`)}`, 30000);
+  check("M35-APPROVAL-01-review-exact", "browser review loaded the exact saved revision", { revision: saved.payload.revision }, true);
   await browser.click('[data-testid="publication-entire-confirm"]');
+  publicationAction = { name: "approve", method: "POST", path: "/v1/portfolio/approved-revisions", startedAt: new Date().toISOString(), deadlineMs: 30000, requestOccurred: false, status: null };
+  (state.observations.publicationActions ??= []).push(publicationAction);
+  progress();
   await browser.click('[data-testid="publication-approve"]');
-  await browser.wait("Boolean(document.querySelector('[data-testid=publication-approved-state]'))");
+  await awaitPublicationAction(publicationAction, `document.querySelector('[data-testid="publication-approved-state"] strong')?.textContent?.trim() === ${JSON.stringify(`Approved revision ${saved.payload.revision}`)}`, 30000);
   approval = await owner("/v1/portfolio/approved-revisions/latest");
   check("M35-APPROVAL-01-exact", "browser approves exact saved owner revision", { draftId: saved.payload.id, approvedDraftId: approval.payload?.source_draft_revision_id }, approval.status === 200 && approval.payload?.source_draft_revision_id === saved.payload.id);
-  await browser.fill('[data-testid="publication-slug"]', `m35-${hash(runId).slice(0, 32)}`);
+  const currentPublication = await owner("/v1/portfolio/publications/latest");
+  check("M35-APPROVAL-01-slug", "published site uses the owner's established slug when present", { status: currentPublication.status, slug: currentPublication.payload?.slug ?? null }, (currentPublication.status === 404 && !currentPublication.payload?.slug) || (currentPublication.status === 200 && /^[a-z0-9][a-z0-9-]{0,62}$/.test(currentPublication.payload?.slug ?? "")));
+  const requestedSlug = currentPublication.status === 200 ? currentPublication.payload.slug : `m35-${hash(runId).slice(0, 32)}`;
+  await browser.fill('[data-testid="publication-slug"]', requestedSlug);
+  publicationAction = { name: "publish", method: "POST", path: "/v1/portfolio/publications", startedAt: new Date().toISOString(), deadlineMs: 60000, requestOccurred: false, status: null, requestedSlug };
+  state.observations.publicationActions.push(publicationAction);
+  progress();
   await browser.click('[data-testid="publication-publish"]');
-  await browser.wait("Boolean(document.querySelector('[data-testid=publication-job][data-publication-state=published]'))", 60000);
+  await awaitPublicationAction(publicationAction, (action) => action.returnedId ? `(() => { const job = document.querySelector('[data-testid="publication-job"]'); return job?.getAttribute('data-publication-state') === 'published' && job?.querySelector('div:first-child span')?.textContent?.trim() === ${JSON.stringify(`Site: ${requestedSlug}`)} && job?.querySelector('dl > div:first-child dd')?.textContent?.trim() === ${JSON.stringify(action.returnedId)}; })()` : null, 60000);
   published = await owner("/v1/portfolio/publications/latest");
-  check("M35-APPROVAL-01-published", "approved revision becomes durable published pointer", { id: published.payload?.id, approvedRevisionId: published.payload?.approved_revision_id }, published.status === 200 && published.payload?.approved_revision_id === approval.payload.id && published.payload?.state === "published");
+  check("M35-APPROVAL-01-published", "approved revision becomes durable published pointer", { id: published.payload?.id, approvedRevisionId: published.payload?.approved_revision_id, slug: published.payload?.slug }, published.status === 200 && published.payload?.approved_revision_id === approval.payload.id && published.payload?.state === "published" && published.payload?.slug === requestedSlug);
   state.observations.retainedIdentities.publicationId = published.payload.id;
   progress();
   portfolioUrl = new URL(`/${published.payload.slug}/`, config.origins.portfolio).href;
@@ -497,7 +562,7 @@ async function execute() {
   const offlineResponses = [];
   await browser.close(); browser = await openBrowser({ chromiumPath: args.chromium || "/snap/bin/chromium", username: edge.username, password: edge.password, origins: Object.values(config.origins), onRequest: (event) => offlineRequests.push(event), onResponse: (event) => offlineResponses.push(event) });
   const staticHome = await browserStep(portfolioUrl, `document.body?.innerText?.includes(${JSON.stringify(intro)})`);
-  const detailLink = await browser.evaluate("document.querySelector('a[href*=" + JSON.stringify("/projects/") + "]')?.getAttribute('href')");
+  const detailLink = await browser.evaluate(`Array.from(document.querySelectorAll('a[href]')).map(a => a.href).find(href => href.startsWith(${JSON.stringify(portfolioUrl + "projects/")})) ?? null`);
   check("M35-STATIC-01-detail-link", "approved site links to a project detail", { path: detailLink }, typeof detailLink === "string" && new URL(detailLink, portfolioUrl).href.startsWith(portfolioUrl + "projects/"));
   const detail = await browserStep(new URL(detailLink, portfolioUrl).href, "Boolean(document.body?.innerText)");
   const dependent = offlineRequests.filter((event) => event.origin !== new URL(config.origins.portfolio).origin);
@@ -576,9 +641,10 @@ async function execute() {
   op("routeReverse"); cutoverActive = false;
   const reversed = op("routeStatus");
   check("M35-PLACE-01-reversal", "exact prior target is restored by provider readback", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget }, reversed.phase === "reversed" && reversed.exactPriorTarget === before.exactPriorTarget);
-  op("routeCutover"); cutoverActive = true;
+  cutoverActive = true; // Reapply can partially change provider records before it throws.
+  op("routeCutover");
   const reapplied = op("routeStatus");
-  await waitForProtectedOrigins("reapplied");
+  await waitForProtectedOrigins("reapplied", new URL(portfolioUrl).pathname);
   check("M35-PLACE-01-reapply", "preview target is reapplied after exact reversal", { phase: reapplied.phase }, reapplied.phase === "cutover");
   state.observations.placement.reversed = reversed; state.observations.placement.reapplied = reapplied;
   const after = await request(config.origins.portfolio, new URL(portfolioUrl).pathname);
@@ -597,6 +663,12 @@ try {
   await execute();
   state.status = interrupted ? "interrupted" : "passed";
 } catch (error) {
+  if (initialBrowserPending && state.observations.initialBrowser) {
+    try {
+      state.observations.initialBrowser.snapshot = await browser?.evaluate("(() => { const root = document.querySelector('#root'); return { origin: location.origin, path: location.pathname, readyState: document.readyState, authFormPresent: Boolean(document.querySelector('[data-testid=auth-form]')), appRootPresent: Boolean(root), appRootChildCount: root?.childElementCount ?? 0, cloudflare1033Present: Boolean(document.body?.innerText?.includes('1033')) }; })()") ?? { evaluationUnavailable: true };
+    } catch { state.observations.initialBrowser.snapshot = { evaluationUnavailable: true }; }
+    progress();
+  }
   ownerToken = undefined;
   state.status = interrupted ? "interrupted" : "failed";
   if (activePhase) { activePhase.status = "failed"; activePhase.endedAt = new Date().toISOString(); activePhase.failure = { kind: state.assertions.at(-1)?.passed === false ? "assertion" : "exception", message: publicValue(error.message) }; }

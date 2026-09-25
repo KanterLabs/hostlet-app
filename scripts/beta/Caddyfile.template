@@ -71,6 +71,7 @@ http://:@@EDGE_PORT@@ {
 				header_up -X-Hostlet-Authorization
 				header_up -Cookie
 				header_up -Proxy-Authorization
+				header_down Cache-Control "private, no-store, no-transform"
 			}
 		}
 	}

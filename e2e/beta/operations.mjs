@@ -4,6 +4,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, lstatSync, writeFileSync, rmSync } from "node:fs";
+import { get as httpGet } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensurePlatformDatabase, ensureProjectTarget, backupDatabase, restoreDatabase, removeTemporaryRestore } from "../../scripts/beta/database.mjs";
@@ -49,12 +50,19 @@ const sql = (source, database, query, { expectedStatus = 0 } = {}) => {
   return output.stdout.trim();
 };
 const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
-const row = (source, database, itemId) => JSON.parse(sql(source, database, `SELECT row_to_json(t) FROM (SELECT id,name FROM journal_items WHERE id=${Number(itemId)}) t;`) || "null");
+const row = (source, database, itemId) => JSON.parse(sql(source, database, `SELECT row_to_json(t) FROM (SELECT id,name FROM app.journal_items WHERE id=${Number(itemId)}) t;`) || "null");
 const backupDir = join(cfg.stateDir, "gate-backups", runId);
 const restoreTracking = join(backupDir, "restore-tracking.json");
 let substep = "start";
 
 async function execute() {
+  if (action === "currentPublishedSite") {
+    const token = await owner();
+    const latest = await api("/v1/portfolio/publications/latest", { token });
+    const id = latest.payload?.id, slug = latest.payload?.slug;
+    if (latest.status !== 200 || latest.payload?.state !== "published" || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(id ?? "") || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(slug ?? "")) throw new Error("current published site unavailable");
+    return { id, slug };
+  }
   if (action === "queryProjectRow") {
     const source = await projectSource(); const found = row(source, source.databaseName, params.itemId);
     if (!found) throw new Error("project database row missing");
@@ -150,6 +158,7 @@ async function execute() {
   }
   if (action === "staleApprovalProbe") {
     const token = await owner(), before = await api("/v1/portfolio/publications/latest", { token });
+    if (before.status !== 200 || before.payload?.state !== "published" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(before.payload?.slug ?? "")) throw new Error("last-good published slug unavailable before protection probe");
     const latest = await api("/v1/portfolio/draft-revisions/latest", { token });
     if (latest.status !== 200 || latest.payload?.id !== params.draftId) throw new Error("stale probe did not start from browser-approved draft");
     const newerDraft = structuredClone(latest.payload.draft);
@@ -159,7 +168,7 @@ async function execute() {
     const approved = await api("/v1/portfolio/approved-revisions/latest", { token });
     if (approved.status !== 200 || approved.payload?.id !== params.approvedId) throw new Error("approved pointer drift before stale probe");
     const invalidApproval = await api("/v1/portfolio/approved-revisions", { method: "POST", token, headers: { "Idempotency-Key": `m35-stale-${randomUUID()}` }, body: { draft_revision_id: params.draftId, review_digest: approved.payload.review_digest, approval: { type: "entire_revision", review_digest: approved.payload.review_digest }, refresh_authorizations: [] } });
-    const unpublished = await api("/v1/portfolio/publications", { method: "POST", token, headers: { "Idempotency-Key": `m35-unapproved-${randomUUID()}` }, body: { approved_revision_id: randomUUID(), slug: `m35-unapproved-${runId}`.toLowerCase() } });
+    const unpublished = await api("/v1/portfolio/publications", { method: "POST", token, headers: { "Idempotency-Key": `m35-unapproved-${randomUUID()}` }, body: { approved_revision_id: randomUUID(), slug: before.payload.slug } });
     if (!cfg.otherOwner?.email || !cfg.otherOwner?.passwordFile) throw new Error("second owned account fixture unavailable");
     const otherLogin = await api("/v1/sessions", { method: "POST", body: { email: cfg.otherOwner.email, password: secret(cfg.otherOwner.passwordFile) } });
     if (otherLogin.status !== 201 || !otherLogin.payload?.token) throw new Error("other-owner fixture cannot sign in");
@@ -167,7 +176,7 @@ async function execute() {
     const otherApproval = await api("/v1/portfolio/approved-revisions/latest", { token: otherLogin.payload.token });
     const otherRollback = await api(`/v1/projects/${manifest().identity.projectId}/releases/${params.releaseId}/rollback`, { token: otherLogin.payload.token, method: "POST", headers: { "Idempotency-Key": `m35-other-${randomUUID()}` }, body: {} });
     const after = await api("/v1/portfolio/publications/latest", { token });
-    return { staleRejected: invalidApproval.status === 409 || invalidApproval.status === 412, unapprovedRejected: unpublished.status >= 400, otherOwnerRejected: otherProject.status === 404 && otherApproval.status === 404 && otherRollback.status === 404, publicationId: before.payload?.id === after.payload?.id ? after.payload?.id : null, newerPrivateDraftId: saved.payload.id, staleStatus: invalidApproval.status, unapprovedStatus: unpublished.status, otherProjectStatus: otherProject.status, otherApprovalStatus: otherApproval.status, otherRollbackStatus: otherRollback.status };
+    return { staleRejected: invalidApproval.status === 409 && invalidApproval.payload?.error?.code === "stale_portfolio_draft", unapprovedRejected: unpublished.status === 404 && unpublished.payload?.error?.code === "not_found", otherOwnerRejected: otherProject.status === 404 && otherApproval.status === 404 && otherRollback.status === 404, publicationId: before.payload?.id === after.payload?.id ? after.payload?.id : null, newerPrivateDraftId: saved.payload.id, staleStatus: invalidApproval.status, staleCode: invalidApproval.payload?.error?.code, unapprovedStatus: unpublished.status, unapprovedCode: unpublished.payload?.error?.code, otherProjectStatus: otherProject.status, otherApprovalStatus: otherApproval.status, otherRollbackStatus: otherRollback.status };
   }
   if (action === "partialBootstrapAndRepair") {
     if (!cfg.otherOwner?.email || !cfg.operator?.email) throw new Error("partial seed needs separate owned account and operator fixtures");
@@ -266,8 +275,17 @@ async function execute() {
     try {
       const staticPort = cfg.services?.ports?.publisherStatic;
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(params.slug ?? "")) throw new Error("published slug unavailable for static outage probe");
-      const response = await fetch(`http://127.0.0.1:${staticPort}/${params.slug}/`, { headers: { Host: cfg.services.publisherExpectedHost }, signal: AbortSignal.timeout(5000) });
-      staticStatus = response.status;
+      let deadline;
+      staticStatus = await new Promise((resolveStatus, rejectStatus) => {
+        const request = httpGet({ hostname: "127.0.0.1", port: staticPort, path: `/${params.slug}/`, headers: { Host: cfg.services.publisherExpectedHost } }, (response) => {
+          response.resume();
+          response.once("end", () => resolveStatus(response.statusCode));
+          response.once("error", rejectStatus);
+          response.once("close", () => { if (!response.complete) rejectStatus(new Error("static outage probe response closed early")); });
+        });
+        deadline = setTimeout(() => request.destroy(new Error("static outage probe timed out")), 5000);
+        request.once("error", rejectStatus);
+      }).finally(() => clearTimeout(deadline));
     } finally { managed("start", "publisher-worker"); managed("ready", "publisher-worker"); }
     const after = await api("/v1/portfolio/publications/latest", { token: await owner() });
     const project = await projectSource(), item = row(project, project.databaseName, params.itemId);
@@ -301,7 +319,7 @@ async function execute() {
     }
     // The filter restricts the inventory to the label assigned by the owned
     // database adapter; names are checked without sweeping any namespace.
-    const names = run("docker", ["ps", "-a", "--filter", "label=io.hostlet.scope=m3-e2e", "--format", "{{.Names}}"]); 
+    const names = run("docker", ["ps", "-a", "--filter", "label=io.hostlet.scope=m3-e2e", "--format", "{{.Names}}"]);
     const temporary = names.split("\n").filter((name) => name.startsWith("hostlet-preview-restore-") || name.startsWith("hostlet-preview-project-restore-"));
     if (cleanupFailures.length) throw new Error(cleanupFailures.join("; "));
     const dbInventory = privateJson(join(databaseStateDir, "database-inventory.json"));

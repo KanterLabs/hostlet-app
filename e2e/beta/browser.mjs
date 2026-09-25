@@ -81,7 +81,7 @@ export async function openBrowser({ chromiumPath, username, password, origins, o
           const url = new URL(message.params.response.url);
           const event = { requestId: message.params.requestId, origin: url.origin, path: url.pathname, status: message.params.response.status, mimeType: message.params.response.mimeType, type: message.params.type, at: new Date().toISOString() };
           onResponse?.(event);
-          if (url.pathname === "/v1/portfolio/preview-revisions" && message.params.requestId) {
+          if (["/v1/portfolio/preview-revisions", "/v1/portfolio/approved-revisions", "/v1/portfolio/publications"].includes(url.pathname) && message.params.requestId) {
             saveResponses.set(message.params.requestId, event);
           }
         } catch { /* browser-internal URL */ }
@@ -95,11 +95,11 @@ export async function openBrowser({ chromiumPath, username, password, origins, o
               if (base64Encoded || body.length > 65536) return;
               let payload; try { payload = JSON.parse(body); } catch { return; }
               const issuePaths = Array.isArray(payload?.error?.details?.issues) ? payload.error.details.issues.map((issue) => issue?.path).filter((path) => typeof path === "string" && /^[a-zA-Z0-9_.\[\]-]{1,120}$/.test(path)).slice(0, 20) : [];
-              onResponse?.({ ...event, safeBody: { code: typeof payload?.error?.code === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(payload.error.code) ? payload.error.code : null, issuePaths, revision: Number.isSafeInteger(payload?.revision) ? payload.revision : null, id: typeof payload?.id === "string" && /^[a-f0-9-]{36}$/.test(payload.id) ? payload.id : null } });
+              onResponse?.({ ...event, safeBody: { code: typeof payload?.error?.code === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(payload.error.code) ? payload.error.code : null, issuePaths, revision: Number.isSafeInteger(payload?.revision) ? payload.revision : null, id: typeof payload?.id === "string" && /^[a-f0-9-]{36}$/.test(payload.id) ? payload.id : null, approvedRevisionId: typeof payload?.approved_revision_id === "string" && /^[a-f0-9-]{36}$/.test(payload.approved_revision_id) ? payload.approved_revision_id : null, slug: typeof payload?.slug === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(payload.slug) ? payload.slug : null } });
             }).catch(() => {});
         }
       }
-      if (message.method === "Network.loadingFailed" && saveRequests.has(message.params.requestId)) { saveRequests.delete(message.params.requestId); onFailure?.({ requestId: message.params.requestId, code: String(message.params.errorText ?? "network failure").slice(0, 100), at: new Date().toISOString() }); }
+      if (message.method === "Network.loadingFailed") { saveRequests.delete(message.params.requestId); const code = String(message.params.errorText ?? "network_failure"); onFailure?.({ requestId: message.params.requestId, code: /^[A-Za-z0-9_.:-]{1,100}$/.test(code) ? code : "network_failure", at: new Date().toISOString() }); }
     });
     await send("Page.enable");
     await send("Network.enable");

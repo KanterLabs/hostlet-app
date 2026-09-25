@@ -39,7 +39,7 @@ const grantRestoreRole = (restore, table) => {
   const password = randomBytes(32).toString('base64url');
   const role = 'restore_checker';
   const grants = table === 'journal_items'
-    ? `GRANT SELECT,INSERT ON TABLE public.journal_items TO ${role}; GRANT USAGE ON SEQUENCE public.journal_items_id_seq TO ${role};`
+    ? `GRANT USAGE ON SCHEMA app TO ${role}; GRANT SELECT,INSERT ON TABLE app.journal_items TO ${role}; GRANT USAGE ON SEQUENCE app.journal_items_id_seq TO ${role}; ALTER ROLE ${role} SET search_path=app,pg_catalog;`
     : `GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role}; GRANT INSERT ON TABLE public.sessions,public.audit_events TO ${role}; GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${role};`;
   const statement = `CREATE ROLE ${role} LOGIN PASSWORD '${password}'; GRANT CONNECT ON DATABASE postgres TO ${role}; GRANT USAGE ON SCHEMA public TO ${role}; ${grants}`;
   exact('docker', ['exec', '-i', '--env', 'PGPASSWORD', restore.containerId, 'psql', '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'postgres', '-q', '-f', '-'], { env: { ...cleanEnv(), PGPASSWORD: privateText(restore.passwordFile) }, input: statement });
@@ -70,10 +70,20 @@ const pinnedImage = config => {
   if (image.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(image[0].Id) || !image[0].RepoDigests?.includes(repositoryDigest)) throw new Error('local Node image does not match runtime repository digest');
   return { image: image[0].Id, repositoryDigest, baseManifestSha256: sha(readFileSync(config.runtimeNodeBases['24'].manifest)) };
 };
+const stagedRootfsUser = app => {
+  const rootfs = lstatSync(join(app.dir, 'rootfs'));
+  if (!rootfs.isDirectory() || rootfs.isSymbolicLink() ||
+      !Number.isSafeInteger(rootfs.uid) || rootfs.uid <= 0 || rootfs.uid > 4294967295 ||
+      !Number.isSafeInteger(rootfs.gid) || rootfs.gid <= 0 || rootfs.gid > 4294967295) {
+    throw new Error('staged application rootfs owner is not a non-root numeric user');
+  }
+  return `${rootfs.uid}:${rootfs.gid}`;
+};
 
 export async function probeRestoredProject({ config, manifest, restore, directory, runId, originalItemId, registerChecker = () => {}, injectFailure }) {
   dockerInspect(restore.containerId);
   const app = stagedApp(config, manifest), pinned = pinnedImage(config);
+  const checkerUser = stagedRootfsUser(app);
   const credential = grantRestoreRole(restore, 'journal_items');
   const envFile = join(directory, 'project-restore-app.env');
   if (existsSync(envFile)) throw new Error('restore app credential collision');
@@ -82,10 +92,10 @@ export async function probeRestoredProject({ config, manifest, restore, director
   let id, result, cleanup, primaryError;
   try {
   writeFileSync(envFile, `DATABASE_URL=postgresql://${credential.role}:${encodeURIComponent(credential.password)}@127.0.0.1:5432/postgres\nPORT=3000\n`, { flag: 'wx', mode: 0o600 });
-  id = exact('docker', ['run', '-d', '--name', name, '--label', 'io.hostlet.scope=m35-gate', '--label', `io.hostlet.run-id=${runId}`, '--restart', 'no', '--network', `container:${restore.containerId}`, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.25', '--user', '0:0', '--mount', `type=bind,source=${join(app.dir, 'rootfs')},target=/app,readonly`, '--workdir', '/app', '--env-file', envFile, '--tmpfs', '/tmp:rw,nosuid,nodev,size=16m', pinned.image, 'node', 'dist/server.mjs']);
+  id = exact('docker', ['run', '-d', '--name', name, '--label', 'io.hostlet.scope=m35-gate', '--label', `io.hostlet.run-id=${runId}`, '--restart', 'no', '--network', `container:${restore.containerId}`, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.25', '--user', checkerUser, '--mount', `type=bind,source=${join(app.dir, 'rootfs')},target=/app,readonly`, '--workdir', '/app', '--env-file', envFile, '--tmpfs', '/tmp:rw,nosuid,nodev,size=16m', pinned.image, 'node', 'dist/server.mjs']);
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('restore application container ID invalid');
   const inspected = JSON.parse(exact('docker', ['container', 'inspect', id]))[0];
-  if (inspected.Id !== id || inspected.Name !== `/${name}` || inspected.HostConfig.NetworkMode !== `container:${restore.containerId}` || inspected.Config.Image !== pinned.image || inspected.Config.Labels?.['io.hostlet.run-id'] !== runId || inspected.HostConfig.ReadonlyRootfs !== true || Object.keys(inspected.HostConfig.PortBindings ?? {}).length) throw new Error('restore application container identity mismatch');
+  if (inspected.Id !== id || inspected.Name !== `/${name}` || inspected.HostConfig.NetworkMode !== `container:${restore.containerId}` || inspected.Config.Image !== pinned.image || inspected.Config.User !== checkerUser || inspected.Config.Labels?.['io.hostlet.run-id'] !== runId || inspected.HostConfig.ReadonlyRootfs !== true || Object.keys(inspected.HostConfig.PortBindings ?? {}).length) throw new Error('restore application container identity mismatch');
   if (injectFailure === 'afterProjectCheckerStart') throw new Error('deliberate failure after owned restore checker start');
   const script = `const expected=Number(process.argv[1]), name=process.argv[2]; const base='http://127.0.0.1:3000'; const get=async()=>{const r=await fetch(base+'/api/items'); if(r.status!==200) throw Error('items read '+r.status); return r.json()}; const before=await get(); if(!before.items?.some(x=>Number(x.id)===expected)) throw Error('restored item missing'); const post=await fetch(base+'/api/items',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})}); if(post.status!==201) throw Error('items write '+post.status); const added=(await post.json()).item; const after=await get(); if(!after.items?.some(x=>x.id===added.id&&x.name===name)) throw Error('app readback missing'); console.log(JSON.stringify({originalItemId:expected,writtenItemId:added.id,originalPresent:true,writtenPresent:true,readStatus:200,writeStatus:201}))`;
   let observed;
@@ -95,7 +105,7 @@ export async function probeRestoredProject({ config, manifest, restore, director
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   if (!observed) throw new Error('restored application HTTP probe did not pass');
-  result = { observed, checkerContainerId: id, checkerContainerName: name, imageId: pinned.image, imageRepositoryDigest: pinned.repositoryDigest, imageManifestSha256: pinned.baseManifestSha256, artifactId: app.record.artifact_id, archiveDigest: app.record.archive_digest, artifactManifestSha256: sha(readFileSync(join(app.dir, 'manifest.json'))) };
+  result = { observed, checkerContainerId: id, checkerContainerName: name, checkerUser, imageId: pinned.image, imageRepositoryDigest: pinned.repositoryDigest, imageManifestSha256: pinned.baseManifestSha256, artifactId: app.record.artifact_id, archiveDigest: app.record.archive_digest, artifactManifestSha256: sha(readFileSync(join(app.dir, 'manifest.json'))) };
   } catch (error) {
     primaryError = error;
   } finally {

@@ -24,9 +24,8 @@ The focused invalid-save case still returns HTTP 400 `malformed_if_match`:
 outer `foundation::require_ready` overwrites the preview's `no-transform` header,
 allowing public compression to weaken its ETag. Read `docs/M3.5-HANDOFF.md`.
 The recovery plan's same-failure stop rule applied at checkpoint 2. HOST-248 is
-blocked; no full gate ran in this assignment. Exact original routing, the
-original draft/publication and existing stores are preserved. Do not fix or
-rerun without a new instruction. A later assignment follows
+resumed by Shane's subsequent "use sol and fix" instruction; no full gate ran in the prior assignment. Exact original routing, the
+original draft/publication and existing stores are preserved. The new instruction authorizes the scoped correction and recovery. This assignment follows
 `docs/M3.5-RECOVERY-PLAN.md`, first proving the final response header through
 all middleware/public encoding boundaries, then focused E2E and two clean full
 gates. Keep the existing stop-on-full-gate-failure rule.

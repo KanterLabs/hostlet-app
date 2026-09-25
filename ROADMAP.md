@@ -12,7 +12,7 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one blocked, 11 in Backlog),
+The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
@@ -23,8 +23,8 @@ graph makes the final gate depend transitively on all 33 other cards.
 Shane authorized a restricted owner preview at `beta.hostlet.cloud` on
 2026-09-24. HOST-246 defines placement, access and preservation; HOST-247 builds
 the durable seeded composition; HOST-248 deploys and verifies the preview twice.
-M4 depends on HOST-248. Snapshot revision 12169 records HOST-246 and
-HOST-247 complete and HOST-248 blocked at recovery checkpoint 2. The first
+M4 depends on HOST-248. Snapshot revision 12173 records HOST-246 and
+HOST-247 complete and HOST-248 resumed after the checkpoint 2 stop. The first
 save correction at `bba9d67` still fails because outer API middleware overwrites
 its `no-transform` header. The focused run recorded 25 passing checks and one
 failure; no new full gate ran. The exact original route, original draft and
@@ -35,7 +35,8 @@ The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) orders five checkpoints
 inside HOST-248: failure evidence → save diagnosis/fix → remaining focused
 E2E → two clean full gates → delivery. These do not create replacement cards
 or change milestone dependencies. The September 25 Sol medium execution stopped
-under the plan's same-failure rule. Another correction or rerun needs a new assignment.
+under the plan's same-failure rule. Shane then instructed "use sol and fix",
+resuming scoped correction and recovery with Sol medium workers.
 
 Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
 `0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and

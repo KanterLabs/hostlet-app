@@ -106,7 +106,7 @@ const request = async (origin, path, { method = "GET", body, token, authorized =
   const response = await fetch(new URL(path, origin), { method, headers: { ...(authorized ? { Authorization: basic() } : {}), ...(token ? { "X-Hostlet-Authorization": `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }), Accept: "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body), redirect: "manual", signal: AbortSignal.timeout(timeout) });
   const content = await response.text();
   let payload; try { payload = JSON.parse(content); } catch { payload = null; }
-  return { status: response.status, payload, text: content.slice(0, 12000), headers: Object.fromEntries(["content-type", "location", "etag"].map((key) => [key, response.headers.get(key)])) };
+  return { status: response.status, payload, text: content.slice(0, 12000), headers: Object.fromEntries(["content-type", "location", "etag", "cache-control", "content-encoding"].map((key) => [key, response.headers.get(key)])) };
 };
 const safe = ({ status, payload, text, headers }) => ({ status, payload: payload && typeof payload === "object" ? { ...payload, token: undefined } : undefined, textLength: text?.length ?? 0, headers });
 const stoppedUnits = new Set();
@@ -243,12 +243,12 @@ const saveBrowserEdit = async (value, { negative = false, stale = false } = {}) 
     timeline.editorAfter = current;
     const response = timeline.responses.find((entry) => entry.safeBody || entry.status >= 400);
     if ((current.conflictPresent || current.notice === "stale") && response?.status === 412 && response.safeBody) { timeline.result = "conflict"; break; }
-    if (response?.status >= 400 && response.safeBody) { timeline.result = "rejected"; break; }
+    if (response?.status >= 400 && response.safeBody && !(stale && response.status === 412)) { timeline.result = "rejected"; break; }
     if (response?.status >= 200 && response.status < 300 && current.notice === "saved") { timeline.result = "saved"; break; }
     if (timeline.failures.length) { timeline.result = "network-failure"; break; }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  if (timeline.result === "pending") timeline.result = !timeline.requestOccurred ? "no-request" : timeline.responses.some((entry) => entry.status >= 400 && !entry.safeBody) ? "response-body-timeout" : "response-or-ui-timeout";
+  if (timeline.result === "pending") timeline.result = !timeline.requestOccurred ? "no-request" : stale && timeline.responses.some((entry) => entry.status === 412 && entry.safeBody) ? "conflict-ui-timeout" : timeline.responses.some((entry) => entry.status >= 400 && !entry.safeBody) ? "response-body-timeout" : "response-or-ui-timeout";
   timeline.editorAfter = await editorState(value).catch(() => timeline.editorAfter);
   phaseAction("save-result", { result: timeline.result, status: timeline.responses.at(-1)?.status ?? null });
   progress();
@@ -322,6 +322,11 @@ async function execute() {
   const freshLogin = await request(config.origins.dashboard, "/v1/sessions", { method: "POST", body: { email: config.owner.email, password: secret(config.owner.passwordFile) } });
   check("M35-ACCESS-01-fresh-session", "owner can sign in again after session revocation", { status: freshLogin.status }, freshLogin.status === 201 && Boolean(freshLogin.payload?.token));
   ownerToken = freshLogin.payload.token;
+  for (const [label, acceptEncoding] of [["identity", "identity"], ["gzip", "gzip"], ["browser", "gzip, deflate, br, zstd"]]) {
+    const latest = await owner("/v1/portfolio/draft-revisions/latest", { headers: { "Accept-Encoding": acceptEncoding } });
+    const observed = { acceptEncoding, status: latest.status, revision: latest.payload?.revision ?? null, etag: latest.headers.etag, cacheControl: latest.headers["cache-control"], contentEncoding: latest.headers["content-encoding"] };
+    check(`M35-EDIT-01-response-policy-${label}`, "public latest-draft response preserves private no-transform policy and strong numeric revision ETag", observed, latest.status === 200 && Number.isSafeInteger(latest.payload?.revision) && latest.headers["cache-control"] === "private, no-store, no-transform" && latest.headers.etag === `"${latest.payload.revision}"`);
+  }
   const manifestBefore = identity();
   check("M35-COMPOSE-01-identities", "owned account, project and exact source are durable", { ownerId: manifestBefore.identity.ownerId, projectId: manifestBefore.identity.projectId, sourceRevisionId: manifestBefore.source.sourceRevisionId }, Boolean(manifestBefore.identity.ownerId && manifestBefore.identity.projectId && manifestBefore.source.sourceRevisionId));
   const released = await route();

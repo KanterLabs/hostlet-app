@@ -297,9 +297,13 @@ async fn require_ready(
         Ok(()) => next.run(request).await,
         Err(error) => error.into_response(),
     };
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("private, no-store"),
-    );
+    let private_no_transform =
+        axum::http::HeaderValue::from_static("private, no-store, no-transform");
+    if response.headers().get(axum::http::header::CACHE_CONTROL) != Some(&private_no_transform) {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("private, no-store"),
+        );
+    }
     response
 }

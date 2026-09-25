@@ -62,7 +62,8 @@ execution on 2026-09-25 using Sol medium workers. That recovery stopped at
 checkpoint 2: `bba9d67` still returns `malformed_if_match` because outer API
 middleware overwrites the preview's `no-transform` header. No new full gate ran.
 Exact original routing and the original draft/publication are retained;
-HOST-248 is blocked pending a new assignment. See the updated handoff. The
+Shane then instructed "use sol and fix", resuming HOST-248 for the outer
+middleware correction and staged recovery. See the updated handoff. The
 full-gate failure rule and M4 stop boundary remain in force.
 
 > Your projects, live and ready to show.

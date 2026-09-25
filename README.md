@@ -36,9 +36,9 @@ middleware, so the focused browser save still failed. The recovery plan's
 checkpoint stop rule applied; no new full gate ran. Exact original routing and
 the original draft/publication are preserved. The new preview has not been
 handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md) records
-the diagnosis and verified receipt. HOST-248 is blocked; M4 remains unclaimed.
+the diagnosis and verified receipt. HOST-248 resumed after Shane's next "use sol and fix" instruction; M4 remains unclaimed.
 The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) defines the next diagnostic,
-focused E2E and acceptance checkpoints; another execution needs a new assignment.
+focused E2E and acceptance checkpoints for this resumed Sol medium execution.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

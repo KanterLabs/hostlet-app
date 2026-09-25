@@ -34,9 +34,9 @@ The edit did not persist; the underlying cause is unconfirmed. The original
 route was restored and no repair/retry followed, so the new preview has not
 been handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
 records the complete outcome, evidence gaps and verified private receipt.
-HOST-248 is blocked; M4 and later milestones remain unclaimed.
+HOST-248 resumed on 2026-09-25; M4 and later milestones remain unclaimed.
 The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) defines the next diagnostic,
-focused E2E and acceptance checkpoints; execution has not resumed.
+focused E2E and acceptance checkpoints now authorized for Sol medium workers.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

@@ -71,20 +71,22 @@ const pinnedImage = config => {
   return { image: image[0].Id, repositoryDigest, baseManifestSha256: sha(readFileSync(config.runtimeNodeBases['24'].manifest)) };
 };
 
-export async function probeRestoredProject({ config, manifest, restore, directory, runId, originalItemId }) {
+export async function probeRestoredProject({ config, manifest, restore, directory, runId, originalItemId, registerChecker = () => {}, injectFailure }) {
   dockerInspect(restore.containerId);
   const app = stagedApp(config, manifest), pinned = pinnedImage(config);
   const credential = grantRestoreRole(restore, 'journal_items');
   const envFile = join(directory, 'project-restore-app.env');
   if (existsSync(envFile)) throw new Error('restore app credential collision');
-  writeFileSync(envFile, `DATABASE_URL=postgresql://${credential.role}:${encodeURIComponent(credential.password)}@127.0.0.1:5432/postgres\nPORT=3000\n`, { flag: 'wx', mode: 0o600 });
   const name = `hostlet-m35-restore-app-${runId.toLowerCase().replaceAll(/[^a-z0-9-]/g, '-').slice(0, 42)}`;
-  let id, result, cleanup;
+  registerChecker({ checkerContainerName: name, envFile });
+  let id, result, cleanup, primaryError;
   try {
+  writeFileSync(envFile, `DATABASE_URL=postgresql://${credential.role}:${encodeURIComponent(credential.password)}@127.0.0.1:5432/postgres\nPORT=3000\n`, { flag: 'wx', mode: 0o600 });
   id = exact('docker', ['run', '-d', '--name', name, '--label', 'io.hostlet.scope=m35-gate', '--label', `io.hostlet.run-id=${runId}`, '--restart', 'no', '--network', `container:${restore.containerId}`, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '0.25', '--user', '0:0', '--mount', `type=bind,source=${join(app.dir, 'rootfs')},target=/app,readonly`, '--workdir', '/app', '--env-file', envFile, '--tmpfs', '/tmp:rw,nosuid,nodev,size=16m', pinned.image, 'node', 'dist/server.mjs']);
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('restore application container ID invalid');
   const inspected = JSON.parse(exact('docker', ['container', 'inspect', id]))[0];
   if (inspected.Id !== id || inspected.Name !== `/${name}` || inspected.HostConfig.NetworkMode !== `container:${restore.containerId}` || inspected.Config.Image !== pinned.image || inspected.Config.Labels?.['io.hostlet.run-id'] !== runId || inspected.HostConfig.ReadonlyRootfs !== true || Object.keys(inspected.HostConfig.PortBindings ?? {}).length) throw new Error('restore application container identity mismatch');
+  if (injectFailure === 'afterProjectCheckerStart') throw new Error('deliberate failure after owned restore checker start');
   const script = `const expected=Number(process.argv[1]), name=process.argv[2]; const base='http://127.0.0.1:3000'; const get=async()=>{const r=await fetch(base+'/api/items'); if(r.status!==200) throw Error('items read '+r.status); return r.json()}; const before=await get(); if(!before.items?.some(x=>Number(x.id)===expected)) throw Error('restored item missing'); const post=await fetch(base+'/api/items',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name})}); if(post.status!==201) throw Error('items write '+post.status); const added=(await post.json()).item; const after=await get(); if(!after.items?.some(x=>x.id===added.id&&x.name===name)) throw Error('app readback missing'); console.log(JSON.stringify({originalItemId:expected,writtenItemId:added.id,originalPresent:true,writtenPresent:true,readStatus:200,writeStatus:201}))`;
   let observed;
   for (let attempt = 0; attempt < 25; attempt++) {
@@ -94,22 +96,30 @@ export async function probeRestoredProject({ config, manifest, restore, director
   }
   if (!observed) throw new Error('restored application HTTP probe did not pass');
   result = { observed, checkerContainerId: id, checkerContainerName: name, imageId: pinned.image, imageRepositoryDigest: pinned.repositoryDigest, imageManifestSha256: pinned.baseManifestSha256, artifactId: app.record.artifact_id, archiveDigest: app.record.archive_digest, artifactManifestSha256: sha(readFileSync(join(app.dir, 'manifest.json'))) };
+  } catch (error) {
+    primaryError = error;
   } finally {
-    if (id) cleanup = removeRestoredProjectChecker({ checkerContainerId: id, checkerContainerName: name, envFile, runId });
-    else if (existsSync(envFile)) rmSync(envFile);
+    try {
+      cleanup = removeRestoredProjectChecker({ checkerContainerId: id, checkerContainerName: name, envFile, runId });
+    } catch (cleanupError) {
+      if (primaryError) throw new AggregateError([primaryError, cleanupError], `restore application probe failed: ${primaryError.message}; cleanup failed: ${cleanupError.message}`);
+      throw cleanupError;
+    }
   }
+  if (primaryError) throw primaryError;
   return { ...result, checkerRemoved: cleanup?.removed === true };
 }
 
 export function removeRestoredProjectChecker({ checkerContainerId, checkerContainerName, envFile, runId }) {
-  if (!checkerContainerId) return;
-  const inspected = JSON.parse(exact('docker', ['container', 'inspect', checkerContainerId]))[0];
-  if (inspected.Id !== checkerContainerId || inspected.Name !== `/${checkerContainerName}` || inspected.Config.Labels?.['io.hostlet.scope'] !== 'm35-gate' || inspected.Config.Labels?.['io.hostlet.run-id'] !== runId) throw new Error('restore app cleanup identity mismatch');
-  exact('docker', ['rm', '-f', checkerContainerId]);
+  const inspect = spawnSync('docker', ['container', 'inspect', checkerContainerName], { env: cleanEnv(), encoding: 'utf8', timeout: 10000, maxBuffer: 16384 });
+  if (inspect.error || (inspect.status !== 0 && !/No such (object|container)/i.test(inspect.stderr ?? ''))) throw new Error('restore app cleanup inspection failed');
+  const inspected = inspect.status === 0 ? JSON.parse(inspect.stdout)[0] : null;
+  if (inspected && (inspected.Name !== `/${checkerContainerName}` || (checkerContainerId && inspected.Id !== checkerContainerId) || inspected.Config.Labels?.['io.hostlet.scope'] !== 'm35-gate' || inspected.Config.Labels?.['io.hostlet.run-id'] !== runId)) throw new Error('restore app cleanup identity mismatch');
+  if (inspected) exact('docker', ['rm', '-f', inspected.Id]);
   if (envFile && existsSync(envFile)) rmSync(envFile);
-  const after = spawnSync('docker', ['container', 'inspect', checkerContainerId], { env: cleanEnv(), encoding: 'utf8', timeout: 10000, maxBuffer: 16384 });
+  const after = spawnSync('docker', ['container', 'inspect', checkerContainerName], { env: cleanEnv(), encoding: 'utf8', timeout: 10000, maxBuffer: 16384 });
   if (after.status === 0 || !/No such (object|container)/i.test(after.stderr ?? '')) throw new Error('restore application container remains after exact cleanup');
-  return { removed: true, checkerContainerId };
+  return { removed: true, checkerContainerId: inspected?.Id ?? null };
 }
 
 const controlGroupMembers = pgid => exact('/usr/bin/ps', ['-eo', 'pgid=,args=']).split('\n').map(line => /^\s*(\d+)\s+(.*)$/.exec(line)).filter(match => match && Number(match[1]) === pgid).map(match => match[2]);
@@ -146,7 +156,7 @@ export async function probeRestoredPlatform({ config, restore, ownerId, projectI
   const stderr = [];
   child.stderr.on('data', chunk => { if (stderr.length < 10) stderr.push(chunk.length); });
   const script = `let input='';for await(const c of process.stdin) input+=c;const {email,password,ownerId,projectId,port}=JSON.parse(input);const base='http://127.0.0.1:'+port;const login=await fetch(base+'/v1/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,password})});if(login.status!==201)throw Error('restore login '+login.status);const session=await login.json();if(session.account_id!==ownerId)throw Error('restore owner mismatch');const list=await fetch(base+'/v1/projects',{headers:{authorization:'Bearer '+session.token}});if(list.status!==200)throw Error('restore projects '+list.status);const payload=await list.json();if(!(payload.projects??[]).some(p=>p.id===projectId))throw Error('restore project relationship missing');const detail=await fetch(base+'/v1/projects/'+projectId,{headers:{authorization:'Bearer '+session.token}});if(detail.status!==200)throw Error('restore project detail '+detail.status);console.log(JSON.stringify({loginStatus:201,projectListStatus:200,projectDetailStatus:200,ownerId,projectId,sessionWritten:true}))`;
-  let observed, result, cleanup;
+  let observed, result, cleanup, primaryError;
   try {
     for (let attempt = 0; attempt < 30; attempt++) {
       if (child.exitCode !== null) throw new Error('isolated control binary exited before readiness');
@@ -156,8 +166,15 @@ export async function probeRestoredPlatform({ config, restore, ownerId, projectI
     }
     if (!observed) throw new Error('isolated control HTTP login/project probe did not pass');
     result = { observed, controlBinarySha256: sha(readFileSync(binary)), networkNamespaceContainerId: restore.containerId, networkNamespacePid: inspected.State.Pid };
+  } catch (error) {
+    primaryError = error;
   } finally {
-    cleanup = await stopExactControlGroup(child, binary, inspected.State.Pid);
+    try { cleanup = await stopExactControlGroup(child, binary, inspected.State.Pid); }
+    catch (cleanupError) {
+      if (primaryError) throw new AggregateError([primaryError, cleanupError], `restore platform probe failed: ${primaryError.message}; cleanup failed: ${cleanupError.message}`);
+      throw cleanupError;
+    }
   }
+  if (primaryError) throw primaryError;
   return { ...result, checkerRemoved: cleanup.removed, checkerProcessGroup: cleanup.pgid };
 }

@@ -23,12 +23,11 @@ M3.5 receipt-query correction is deployed at `cc990bc5`; the full gate
 passes that correction and 23 checks, then stops at browser save confirmation.
 Read `docs/M3.5-HANDOFF.md`: the edit did not persist, the underlying save
 failure is unconfirmed, the exact original route was restored, and the
-repair/retry loop stopped. HOST-248 is blocked. Do not repair or rerun the
-full gate without a new instruction.
+repair/retry loop stopped. Shane authorized recovery execution on 2026-09-25 using Sol medium workers.
+HOST-248 is active within the recovery plan; stop on any new full-gate failure.
 For the next assignment, follow `docs/M3.5-RECOVERY-PLAN.md`: retain the save
 response and editor state, diagnose before fixing, verify remaining focused
-E2E phases, then require two clean full gates. Planning alone does not resume
-execution. Keep the existing stop-on-full-gate-failure rule.
+E2E phases, then require two clean full gates. Execution is now authorized. Keep the existing stop-on-full-gate-failure rule.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

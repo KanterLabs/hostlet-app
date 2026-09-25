@@ -57,8 +57,7 @@ incomplete and M4 remains outside the assignment.
 The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) now defines five agent
 checkpoints under HOST-248: preserve failure evidence, diagnose/fix saving,
 exercise each remaining dependency group through focused E2E, freeze a
-candidate for two complete runs, then publish and hand off. This is a planning
-update only; implementation and gate retries remain stopped. The existing
+candidate for two complete runs, then publish and hand off. Shane authorized execution on 2026-09-25 using Sol medium workers. The existing
 full-gate failure rule and M4 stop boundary remain in force.
 
 > Your projects, live and ready to show.

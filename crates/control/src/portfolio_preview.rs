@@ -252,7 +252,7 @@ pub(crate) fn routes() -> Router<FoundationState> {
 async fn private_no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("private, no-store"),
+        HeaderValue::from_static("private, no-store, no-transform"),
     );
     response
 }

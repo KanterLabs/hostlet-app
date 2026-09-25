@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensurePlatformDatabase, ensureProjectTarget, backupDatabase, restoreDatabase, removeTemporaryRestore } from "../../scripts/beta/database.mjs";
 import { openBrowser } from "./browser.mjs";
-import { probeRestoredProject, probeRestoredPlatform } from "./restore-app.mjs";
+import { probeRestoredProject, probeRestoredPlatform, removeRestoredProjectChecker } from "./restore-app.mjs";
 
 const input = process.argv.slice(2);
 const action = input.shift();
@@ -52,6 +52,7 @@ const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const row = (source, database, itemId) => JSON.parse(sql(source, database, `SELECT row_to_json(t) FROM (SELECT id,name FROM journal_items WHERE id=${Number(itemId)}) t;`) || "null");
 const backupDir = join(cfg.stateDir, "gate-backups", runId);
 const restoreTracking = join(backupDir, "restore-tracking.json");
+let substep = "start";
 
 async function execute() {
   if (action === "queryProjectRow") {
@@ -72,16 +73,31 @@ async function execute() {
   if (action === "restoreIsolated") {
     const directory = backupDir, platformId = randomUUID(), projectId = randomUUID();
     writeFileSync(restoreTracking, JSON.stringify({ platformId, projectId }), { flag: "wx", mode: 0o600 });
+    substep = "restore_platform";
     const platform = await restoreDatabase({ stateDir: databaseStateDir, archivePath: join(directory, "platform.dump"), sha256: params.platformSha256, restoreId: platformId });
     let project;
-    try { project = await restoreDatabase({ stateDir: databaseStateDir, archivePath: join(directory, "project.dump"), sha256: params.projectSha256, restoreId: projectId }); }
-    catch (error) { await removeTemporaryRestore({ stateDir: databaseStateDir, restoreId: platformId }); throw error; }
+    try {
+      if (params.injectFailure === "afterPlatformRestore") throw new Error("deliberate failure after owned platform restore");
+      substep = "restore_project";
+      project = await restoreDatabase({ stateDir: databaseStateDir, archivePath: join(directory, "project.dump"), sha256: params.projectSha256, restoreId: projectId });
+    } catch (error) {
+      try { await removeTemporaryRestore({ stateDir: databaseStateDir, restoreId: platformId }); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], `restore failed: ${error.message}; cleanup failed: ${cleanupError.message}`); }
+      throw error;
+    }
     const ids = manifest().identity;
     const ownerCount = sql(platform, "postgres", `SELECT count(*) FROM accounts WHERE id=${quote(ids.ownerId)}::uuid;`);
     const projectCount = sql(platform, "postgres", `SELECT count(*) FROM projects WHERE id=${quote(ids.projectId)}::uuid;`);
     const item = row(project, "postgres", params.itemId);
     if (ownerCount !== "1" || projectCount !== "1" || !item || !platform.isolated || !project.isolated) throw new Error("restored populated relationships or isolation missing");
-    const projectApp = await probeRestoredProject({ config: cfg, manifest: manifest(), restore: project, directory, runId, originalItemId: params.itemId });
+    substep = "probe_project_application";
+    const projectApp = await probeRestoredProject({ config: cfg, manifest: manifest(), restore: project, directory, runId, originalItemId: params.itemId,
+      injectFailure: params.injectFailure === "afterProjectCheckerStart" ? params.injectFailure : undefined,
+      registerChecker: (checker) => {
+        const tracked = privateJson(restoreTracking);
+        writeFileSync(restoreTracking, JSON.stringify({ ...tracked, projectChecker: checker }), { mode: 0o600 });
+      } });
+    substep = "probe_platform_application";
     const platformApp = await probeRestoredPlatform({ config: cfg, restore: platform, ownerId: ids.ownerId, projectId: ids.projectId, directory });
     const appRow = row(project, "postgres", projectApp.observed.writtenItemId);
     return { restoreId: `${platformId},${projectId}`, ownerId: ids.ownerId, projectId: ids.projectId, itemId: item.id, platformAppReadWrite: platformApp.observed.sessionWritten === true && platformApp.observed.projectDetailStatus === 200, projectAppReadWrite: projectApp.observed.originalPresent === true && projectApp.observed.writtenPresent === true && appRow?.name === `restored-app-${runId}`.slice(0, 80), isolated: true, platformRestoreId: platformId, projectRestoreId: projectId, platformApp, projectApp };
@@ -197,6 +213,7 @@ async function execute() {
     return { verified: true, receiptCount: receipts.length, releaseAssertionsPresent: assertionCount === 6, acceptedSource: "docs/M3-HANDOFF.md" };
   }
   if (action === "boundedStartupFailure") {
+    substep = "startup_preconditions";
     const platform = await platformSource();
     const token = await owner();
     const before = await api("/v1/portfolio/publications/latest", { token });
@@ -204,8 +221,12 @@ async function execute() {
     const policyBefore = servicePolicy("control");
     const start = Date.now();
     let deadlineFailure = null, readyStatus = null, ownerVisibleReason = null;
-    run("docker", ["stop", "--time", "5", platform.containerId], { timeout: 15000 });
+    let primaryError, primarySubstep;
     try {
+      substep = "stop_owned_platform_database";
+      run("docker", ["stop", "--time", "5", platform.containerId], { timeout: 15000 });
+      if (params.injectFailure === "afterPlatformStop") throw new Error("deliberate failure after owned platform stop");
+      substep = "observe_bounded_readiness";
       const check = spawnSync("node", ["scripts/beta/managed-services.mjs", "ready", servicesPath, "control", "3000"], { encoding: "utf8", cwd: root, timeout: 8000, maxBuffer: 32768, env: childEnvironment() });
       deadlineFailure = { status: check.status, elapsedMs: Date.now() - start, reason: (check.stderr || "").trim().slice(0, 300) };
       try { readyStatus = (await api("/readyz")).status; } catch { readyStatus = 0; }
@@ -216,11 +237,23 @@ async function execute() {
         await browser.wait("document.body?.innerText?.includes('database_unavailable')", 15000);
         ownerVisibleReason = await browser.evaluate("document.body?.innerText?.includes('database_unavailable')");
       } finally { await browser.close(); }
+    } catch (error) {
+      primaryError = error;
+      primarySubstep = substep;
     } finally {
-      run("docker", ["start", platform.containerId], { timeout: 15000 });
-      await platformSource();
-      managed("ready", "control");
+      try {
+        substep = "recover_owned_platform_database";
+        const running = run("docker", ["inspect", "--format", "{{.State.Running}}", platform.containerId], { timeout: 15000 });
+        if (running !== "true") run("docker", ["start", platform.containerId], { timeout: 15000 });
+        await platformSource();
+        managed("ready", "control");
+      } catch (cleanupError) {
+        if (primaryError) throw new AggregateError([primaryError, cleanupError], `startup probe failed: ${primaryError.message}; database recovery failed: ${cleanupError.message}`);
+        throw cleanupError;
+      }
     }
+    if (primaryError) { substep = primarySubstep; throw primaryError; }
+    substep = "managed_restart_probes";
     const restartTimestamps = [];
     for (let attempt = 0; attempt < 2; attempt++) {
       managed("restart", "control");
@@ -241,13 +274,25 @@ async function execute() {
     return { observedReadinessAttempts: deadlineFailure.status !== null ? 1 : 0, readinessExitStatus: deadlineFailure.status, readinessElapsedMs: deadlineFailure.elapsedMs, readinessDeadlineMs: 8000, observedManagedRestarts: restartTimestamps.length, restartTimestamps, restartPolicy: { before: policyBefore.Restart, after: policyAfter.Restart, intervalUsec: policyAfter.RestartUSec, startLimitBurst: Number(policyAfter.StartLimitBurst), startLimitIntervalUsec: policyAfter.StartLimitIntervalUSec, nRestartsBefore: Number(policyBefore.NRestarts), nRestartsAfter: Number(policyAfter.NRestarts) }, ownerVisibleReason, managementReason: deadlineFailure.reason, unhealthyAdvertised: deadlineFailure.status === 0 || readyStatus === 200, publicationId: after.payload?.id === before.payload?.id ? after.payload?.id : null, itemId: item?.id, readyStatusWhileDown: readyStatus, staticStatusWhilePublisherDown: staticStatus };
   }
   if (action === "temporaryCleanup") {
+    substep = "cleanup_owned_resources";
     const j = journal();
+    const cleanupFailures = [];
     if (existsSync(restoreTracking)) {
       const tracked = privateJson(restoreTracking);
-      await removeTemporaryRestore({ stateDir: databaseStateDir, restoreId: tracked.platformId });
-      await removeTemporaryRestore({ stateDir: databaseStateDir, restoreId: tracked.projectId });
-      rmSync(restoreTracking);
+      if (tracked.projectChecker) {
+        const expectedName = `hostlet-m35-restore-app-${runId.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-").slice(0, 42)}`;
+        if (tracked.projectChecker.checkerContainerName !== expectedName || tracked.projectChecker.envFile !== join(backupDir, "project-restore-app.env")) throw new Error("restore checker cleanup identity mismatch");
+        try { removeRestoredProjectChecker({ ...tracked.projectChecker, runId }); }
+        catch (error) { cleanupFailures.push(`restore checker: ${error.message}`); }
+      }
+      for (const restoreId of [tracked.platformId, tracked.projectId]) {
+        try { await removeTemporaryRestore({ stateDir: databaseStateDir, restoreId }); }
+        catch (error) { cleanupFailures.push(`restore ${restoreId}: ${error.message}`); }
+      }
+      if (!cleanupFailures.length) rmSync(restoreTracking);
     }
+    const checkerNames = run("docker", ["ps", "-a", "--filter", "label=io.hostlet.scope=m35-gate", "--filter", `label=io.hostlet.run-id=${runId}`, "--format", "{{.Names}}"]).split("\n").filter(Boolean);
+    if (checkerNames.length) cleanupFailures.push(`run-owned restore checker containers remain: ${checkerNames.join(",")}`);
     const drillDir = join(cfg.stateDir, "gate-partial-seed", runId);
     if (existsSync(drillDir)) {
       const drillConfig = privateJson(join(drillDir, "config.json"));
@@ -258,9 +303,10 @@ async function execute() {
     // database adapter; names are checked without sweeping any namespace.
     const names = run("docker", ["ps", "-a", "--filter", "label=io.hostlet.scope=m3-e2e", "--format", "{{.Names}}"]); 
     const temporary = names.split("\n").filter((name) => name.startsWith("hostlet-preview-restore-") || name.startsWith("hostlet-preview-project-restore-"));
+    if (cleanupFailures.length) throw new Error(cleanupFailures.join("; "));
     const dbInventory = privateJson(join(databaseStateDir, "database-inventory.json"));
     const owned = j.schema === "hostlet.beta.cloudflare/v1" && j.accountId === cf.accountId && dbInventory.schema_version === 1 && dbInventory.targets?.length >= 1;
-    return { exactOwnedOnly: owned, temporaryRemaining: temporary.length, retainedPreview: [
+    return { exactOwnedOnly: owned, temporaryRemaining: temporary.length + checkerNames.length, retainedPreview: [
       { kind: "owned platform PostgreSQL", volume: "hostlet-preview-platform-pgdata" },
       { kind: "owned project PostgreSQL", containerId: dbInventory.targets[0].container_id, tenantDatabaseId: dbInventory.targets[0].tenant_database_id },
       { kind: "dedicated preview tunnel", tunnelName: j.tunnelName },
@@ -273,4 +319,40 @@ async function execute() {
   }
   throw new Error(`unknown concrete gate operation: ${action}`);
 }
-try { console.log(JSON.stringify(await execute())); } catch (error) { console.error(error.message); process.exitCode = 1; }
+try { console.log(JSON.stringify(await execute())); } catch (error) {
+  const known = new Map([
+    ["deliberate failure after owned platform restore", "injected_after_platform_restore"],
+    ["deliberate failure after owned restore checker start", "injected_after_project_checker_start"],
+    ["deliberate failure after owned platform stop", "injected_after_platform_stop"],
+    ["restored populated relationships or isolation missing", "restore_relationships_missing"],
+    ["built application artifact identity missing", "restore_artifact_identity_missing"],
+    ["built artifact staging missing", "restore_artifact_staging_missing"],
+    ["built artifact provenance mismatch", "restore_artifact_provenance_mismatch"],
+    ["pinned application output unavailable", "restore_application_output_missing"],
+    ["pinned Node runtime base missing", "restore_runtime_pin_missing"],
+    ["local Node image does not match runtime repository digest", "restore_runtime_image_mismatch"],
+    ["restore app credential collision", "restore_checker_credential_collision"],
+    ["restore application container identity mismatch", "restore_checker_identity_mismatch"],
+    ["restored application HTTP probe did not pass", "restore_application_probe_failed"],
+    ["restore app cleanup identity mismatch", "restore_checker_cleanup_identity_mismatch"],
+    ["restore app cleanup inspection failed", "restore_checker_cleanup_inspection_failed"],
+    ["restore application container remains after exact cleanup", "restore_checker_remains"],
+    ["isolated control HTTP login/project probe did not pass", "restore_platform_application_probe_failed"],
+    ["isolated control binary exited before readiness", "restore_platform_application_exited"],
+    ["isolated control process group remains after exact cleanup", "restore_platform_checker_remains"],
+    ["pinned control binary unavailable for restore probe", "restore_control_binary_missing"],
+    ["last-good publication pointer differs before startup injection", "startup_publication_pointer_drift"],
+  ]);
+  const classify = (failure) => {
+    const message = String(failure?.message ?? "");
+    const child = /^(?:node|docker|git|sha256sum|\/usr\/bin\/systemctl) [A-Za-z0-9._/-]+ failed \((\d+|[A-Z_]+)\)$/.exec(message);
+    return known.has(message) ? { code: known.get(message), message }
+      : child ? { code: "child_operation_failed", exitStatus: child[1] }
+        : { code: "owned_operation_failed", message: "The owned operation failed; inspect the private service and cleanup receipts." };
+  };
+  const diagnostic = error instanceof AggregateError && error.errors.length >= 2
+    ? { code: "operation_and_cleanup_failed", primary: classify(error.errors[0]), cleanup: classify(error.errors[1]) }
+    : classify(error);
+  console.error(JSON.stringify({ operation: action, substep, ...diagnostic }));
+  process.exitCode = 1;
+}

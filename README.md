@@ -30,13 +30,15 @@ owner preview deployment through HOST-248. Its
 [scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
 the receipt-query correction is deployed and passes. The latest full gate
 recorded 23 passing checks before a browser portfolio-save confirmation timeout.
-The edit did not persist; the underlying cause is unconfirmed. The original
-route was restored and no repair/retry followed, so the new preview has not
-been handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
-records the complete outcome, evidence gaps and verified private receipt.
-HOST-248 resumed on 2026-09-25; M4 and later milestones remain unclaimed.
+The September 25 recovery traced the error to public compression weakening the
+revision ETag. Its first correction at `bba9d67` was overwritten by outer API
+middleware, so the focused browser save still failed. The recovery plan's
+checkpoint stop rule applied; no new full gate ran. Exact original routing and
+the original draft/publication are preserved. The new preview has not been
+handed off at the public URL. [The M3.5 handoff](docs/M3.5-HANDOFF.md) records
+the diagnosis and verified receipt. HOST-248 is blocked; M4 remains unclaimed.
 The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) defines the next diagnostic,
-focused E2E and acceptance checkpoints now authorized for Sol medium workers.
+focused E2E and acceptance checkpoints; another execution needs a new assignment.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

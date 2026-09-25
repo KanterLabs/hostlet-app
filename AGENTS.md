@@ -19,15 +19,17 @@ and `docs/M3.5-PREVIEW-CONTRACT.md` before implementation. Preserve the legacy
 beta route/data, use isolated owned preview resources, and verify the deployed
 browser journey and persistence twice. This authorizes the scoped preview
 cutover; it does not authorize purchases, customer admission or live payments.
-M3.5 receipt-query correction is deployed at `cc990bc5`; the full gate
-passes that correction and 23 checks, then stops at browser save confirmation.
-Read `docs/M3.5-HANDOFF.md`: the edit did not persist, the underlying save
-failure is unconfirmed, the exact original route was restored, and the
-repair/retry loop stopped. Shane authorized recovery execution on 2026-09-25 using Sol medium workers.
-HOST-248 is active within the recovery plan; stop on any new full-gate failure.
-For the next assignment, follow `docs/M3.5-RECOVERY-PLAN.md`: retain the save
-response and editor state, diagnose before fixing, verify remaining focused
-E2E phases, then require two clean full gates. Execution is now authorized. Keep the existing stop-on-full-gate-failure rule.
+M3.5 recovery on 2026-09-25 used Sol medium workers and installed `bba9d67`.
+The focused invalid-save case still returns HTTP 400 `malformed_if_match`:
+outer `foundation::require_ready` overwrites the preview's `no-transform` header,
+allowing public compression to weaken its ETag. Read `docs/M3.5-HANDOFF.md`.
+The recovery plan's same-failure stop rule applied at checkpoint 2. HOST-248 is
+blocked; no full gate ran in this assignment. Exact original routing, the
+original draft/publication and existing stores are preserved. Do not fix or
+rerun without a new instruction. A later assignment follows
+`docs/M3.5-RECOVERY-PLAN.md`, first proving the final response header through
+all middleware/public encoding boundaries, then focused E2E and two clean full
+gates. Keep the existing stop-on-full-gate-failure rule.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

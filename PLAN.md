@@ -57,7 +57,12 @@ incomplete and M4 remains outside the assignment.
 The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) now defines five agent
 checkpoints under HOST-248: preserve failure evidence, diagnose/fix saving,
 exercise each remaining dependency group through focused E2E, freeze a
-candidate for two complete runs, then publish and hand off. Shane authorized execution on 2026-09-25 using Sol medium workers. The existing
+candidate for two complete runs, then publish and hand off. Shane authorized
+execution on 2026-09-25 using Sol medium workers. That recovery stopped at
+checkpoint 2: `bba9d67` still returns `malformed_if_match` because outer API
+middleware overwrites the preview's `no-transform` header. No new full gate ran.
+Exact original routing and the original draft/publication are retained;
+HOST-248 is blocked pending a new assignment. See the updated handoff. The
 full-gate failure rule and M4 stop boundary remain in force.
 
 > Your projects, live and ready to show.

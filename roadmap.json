@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "owned",
-      "status": "active"
+      "dependency_state": "manually_blocked",
+      "status": "blocked"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Final M3.5 recovery authorized on 2026-09-25. Baseline and backups preserved; scoped startup-budget, live-entry cleanup and sign-in corrections under focused verification. Two full gates and publication remain pending. M4 remains unclaimed."
+    "current_status": "Final M3.5 recovery stopped at3/5: clean d681a41 full1 passed62/62; full2 passed61 assertions but failed final provider-status readback during route cleanup. Exact live preview, original owner content, eight rows and all eleven ready services restored separately. No repair/retry/publication/CI followed. HOST-248 blocked; M4/M5 unclaimed."
   },
   "milestones": [
     {
@@ -811,25 +811,23 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12241,
-    "read_at": "2026-09-25T16:38:15.602910887Z",
+    "project_revision": 12256,
+    "read_at": "2026-09-25T17:17:05.685550208Z",
     "completed": 22,
-    "active": 1,
+    "active": 0,
     "backlog": 11,
-    "blocked": 0,
-    "active_task": "HOST-248",
+    "blocked": 1,
+    "active_task": null,
     "assigned_stop": "HOST-248",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-248"
-    ]
+    "stopped_at": "HOST-248",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "Final M3.5 recovery authorized on 2026-09-25. Baseline and backups preserved; scoped startup-budget, live-entry cleanup and sign-in corrections under focused verification. Two full gates and publication remain pending. M4 remains unclaimed.",
+    "tracking": "Final M3.5 recovery stopped at3/5: clean d681a41 full1 passed62/62; full2 passed61 assertions but failed final provider-status readback during route cleanup. Exact live preview, original owner content, eight rows and all eleven ready services restored separately. No repair/retry/publication/CI followed. HOST-248 blocked; M4/M5 unclaimed.",
     "data_preservation": "Preserve now-live restricted preview and exact legacy rollback route, immutable owner history, approved public content and private draft; verify backups before install and use only guarded API compensation after synthetic gate writes.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
     "recovery_plan": "docs/M3.5-FINAL-PLAN.md",
@@ -875,7 +873,22 @@
       "checks_passed": 21,
       "receipt_sha256": "68e70d79916855da2290ffc2720d01c3393f31aec3c686fa323471bb67bc4869",
       "installed_commit": "a1ffa60d5e0fc767042247980fda9175328f3ea6",
-      "milestone_acceptance_complete": false
-    }
+      "milestone_acceptance_complete": false,
+      "current_installed_commit": "d681a41f9ace6119ade0ac0baf12737c24dc65da",
+      "current_evidence": "docs/M3.5-FINAL-RESULT.md"
+    },
+    "result": "docs/M3.5-FINAL-RESULT.md",
+    "acceptance_runs": [
+      {
+        "run_id": "final-d681a41-full-1",
+        "status": "passed",
+        "passed_assertions": 62
+      },
+      {
+        "run_id": "final-d681a41-full-2",
+        "status": "failed",
+        "passed_assertions": 61
+      }
+    ]
   }
 }

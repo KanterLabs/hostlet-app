@@ -1,10 +1,12 @@
 # Hostlet development
 
-Shane's 2026-09-25 “OK MAKE FINAL 3.5 PLAN AND FIX” resumes HOST-248 under
-`docs/M3.5-FINAL-PLAN.md`. Follow its five stopping points and preserve the
-now-live preview as the entry route state. Historical no-resume instructions
-below are superseded only for this assignment; stop on any full-gate failure
-and before M4. Use GPT-6 Sol medium workers with bounded file ownership.
+M3.5 final recovery stopped under the full-gate failure rule on 2026-09-25.
+Installed `d681a41` passed full run 1 (62/62). Run 2 passed 61 assertions but
+failed a provider-status read during final route cleanup. Separate exact
+cleanup restored the live preview and owner content; all eight demo rows and
+all eleven ready services are retained. Read `docs/M3.5-FINAL-RESULT.md`.
+HOST-248 is blocked at 3/5. Do not repair or rerun a gate without a new
+assignment. Preserve the live preview and stop before M4.
 
 This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
 `README.md` and the adopted planning baseline in `RECOMMENDATIONS.md` before
@@ -19,38 +21,11 @@ workers at medium reasoning, with the primary owning integration and verificatio
 Read `docs/M3-HANDOFF.md` for the two clean 55-assertion runs, retained-M2 rebuild,
 repeatable private artifacts and owned-fixture-only limits. Customer admission
 remains disabled; Next.js 16 and the throughput target remain deferred.
-Shane assigned M3.5 on 2026-09-24: deploy the restricted private beta preview
-through HOST-248 using GPT-6 Sol Medium workers. Read `docs/M3.5-SCENARIOS.md`
-and `docs/M3.5-PREVIEW-CONTRACT.md` before implementation. Preserve the legacy
-beta route/data, use isolated owned preview resources, and verify the deployed
-browser journey and persistence twice. This authorizes the scoped preview
-cutover; it does not authorize purchases, customer admission or live payments.
-M3.5 recovery on 2026-09-25 used Sol medium workers and installed `bba9d67`.
-At that historical stop, the focused invalid-save case returned HTTP 400
-`malformed_if_match`: outer `foundation::require_ready` overwrote the preview's
-`no-transform` header, allowing public compression to weaken its ETag. Read `docs/M3.5-HANDOFF.md`.
-That was the historical checkpoint-2 stop. Shane's later "use sol and fix"
-instruction resumed the scoped recovery. Saving and all selected focused
-phases passed, but the first full gate on clean installed
-`a1ffa60d5e0fc767042247980fda9175328f3ea6` failed at bounded startup
-recovery after 54 passing assertions; the full route round trip was not
-reached. Manager journals and source indicate the fourth control start hit
-the unchanged three-per-minute limit; the gate artifact itself retained only
-a generic child failure code. The exact prior route was restored, and a
-separate cleanup readback verified all eleven services ready and populated
-data preserved. HOST-248 is blocked at checkpoint 3/5 under the
-stop-on-full-gate-failure rule. No second gate, final cutover, source
-publication/CI or access handoff occurred. Read `docs/M3.5-HANDOFF.md` and
-`docs/M3.5-RECOVERY-PLAN.md`; a new instruction is required before repair or
-another gate.
-Shane subsequently authorized a separate normal-use demo handoff with "Go".
-The three restricted preview routes are now intentionally live; the walkthrough
-passed 21 checks from `1098441`, against unchanged installed product `a1ffa60`.
-Read `docs/M3.5-DEMO-ACCESS.md` for access and verified evidence. This scoped
-route-retention authorization overrides the prior two-full-gates prerequisite
-only for showing the demo. M3.5 acceptance remains incomplete; do not resume
-recovery drills or a full gate without a new assignment. Preserve the live
-preview and owner edits. No services were restarted during this handoff.
+M3.5 uses isolated owned preview resources and the access boundary in
+`docs/M3.5-PREVIEW-CONTRACT.md`. Historical attempts are retained in
+`docs/M3.5-HANDOFF.md`; the current result is `docs/M3.5-FINAL-RESULT.md`.
+`docs/M3.5-DEMO-ACCESS.md` explains the separate browser gate and application
+credentials. Customer admission, purchases and live payments remain disabled.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

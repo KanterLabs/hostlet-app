@@ -12,44 +12,29 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
+The snapshot contains **34 cards (22 complete, one blocked, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
 
-**Current assignment, 2026-09-25:** HOST-248 is active under the
-[final M3.5 plan](docs/M3.5-FINAL-PLAN.md). Snapshot revision 12241 records
-22 completed tasks, one owned active task and 11 dependency-blocked future
-tasks. The current preview and populated backups are preserved. Focused
-verification precedes two full gates; any full-gate failure stops the loop.
-The older stopped-run records below are historical. M4 remains unclaimed.
+**Current stop, 2026-09-25:** HOST-248 is blocked at checkpoint 3/5 under the
+[final M3.5 plan](docs/M3.5-FINAL-PLAN.md). Snapshot revision 12256 records
+22 completed tasks, one blocked task, eleven dependency-blocked future tasks
+and no active claims. Sol medium workers' corrections are installed at `d681a41`.
+The first clean full gate passed 62/62; the second passed 61 assertions but
+failed a provider-status read during final route cleanup. Exact cleanup restored
+the live preview and original owner content, with all eight demo rows and all
+eleven services ready. [Full report and receipts](docs/M3.5-FINAL-RESULT.md).
+No repair, third gate, source publication or CI followed. M4/M5 remain unclaimed;
+another repair or gate requires a new assignment.
 
-**Private demo access is available.** Shane separately authorized a normal-use
-handoff; its 21 browser checks passed and the protected routes are retained.
-[Open/access instructions and evidence](docs/M3.5-DEMO-ACCESS.md) distinguish
-this completed handoff from the still-incomplete M3.5 full gate. M4 stays blocked.
-
-**M3 is complete at HOST-233. M3.5 is assigned through HOST-248; stop before M4.**
-Shane authorized a restricted owner preview at `beta.hostlet.cloud` on
-2026-09-24. HOST-246 defines placement, access and preservation; HOST-247 builds
-the durable seeded composition; HOST-248 deploys and verifies the preview twice.
-M4 depends on HOST-248. Snapshot revision 12222 records HOST-246 and
-HOST-247 complete and HOST-248 blocked at checkpoint 3/5. Sol medium workers
-fixed saving and completed all focused phases. The first full gate on
-`a1ffa60` passed 54 checks, then stopped at the bounded startup drill. The
-control service hit its three-starts-per-minute limit after earlier phases
-used two starts. The exact original route was restored and temporary resources
-removed; see the [M3.5 handoff](docs/M3.5-HANDOFF.md) for cleanup and evidence.
-No second gate, repair, source publication or final cutover followed.
-Later cards remain unclaimed; a new instruction is required to resume.
-
-The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) orders five checkpoints
-inside HOST-248: failure evidence → save diagnosis/fix → remaining focused
-E2E → two clean full gates → delivery. These do not create replacement cards
-or change milestone dependencies. The full-gate stop rule applies to this
-September 25 execution. M3.5 remains incomplete.
+**Private demo access remains available.**
+[Access instructions](docs/M3.5-DEMO-ACCESS.md) explain the two credential layers.
+The preview's availability does not establish M3.5 acceptance. The
+[M3.5 handoff](docs/M3.5-HANDOFF.md) retains the historical attempts. Task IDs and
+all 41 prerequisite links remain unchanged.
 
 Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
 `0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and

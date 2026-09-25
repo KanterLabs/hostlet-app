@@ -6,11 +6,12 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-The restricted demo is now live under Shane's separate 2026-09-25 "Go"
-authorization. The normal-use browser walkthrough passed 21 checks; see
-[demo access and evidence](docs/M3.5-DEMO-ACCESS.md). The existing product
-installation is unchanged. M3.5 full acceptance remains incomplete and M4 is
-blocked. Preserve the live preview and saved owner edits during future work.
+The restricted demo is live on installed `d681a41`. The first full M3.5 gate
+passed 62/62 checks; the second failed final route cleanup after 61 passing
+checks. Exact cleanup restored the preview and original owner content. M3.5
+remains incomplete; HOST-248 is blocked and M4 unclaimed. See the
+[current failure report](docs/M3.5-FINAL-RESULT.md) and
+[demo access instructions](docs/M3.5-DEMO-ACCESS.md).
 
 **Status: M2 and M3 accepted for owned local fixtures.** M2
 supports accounts, selected GitHub repositories and branches, bounded
@@ -30,24 +31,11 @@ implementation commit through HOST-233, with one rebuilding the retained M2
 binary. The [M3 handoff](docs/M3-HANDOFF.md) records private receipts, exact
 repeat commands, browser evidence, cleanup and limits. Customer admission,
 production workload execution, payment collection, provider purchases, and
-production portfolio publication remain disabled. M3.5 now adds a restricted
-owner preview deployment through HOST-248. Its
-[preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
-[scenarios](docs/M3.5-SCENARIOS.md) define the scoped deployment and evidence;
-the receipt-query correction and subsequent save correction were deployed.
-The September 25 recovery passed rejected, stale and repeated browser saves
-and all selected later focused phases. Its first full gate on clean installed
-`a1ffa60d5e0fc767042247980fda9175328f3ea6` recorded 54 passing assertions
-but stopped at bounded startup recovery before the full route round trip. The
-manager journal and source indicate the fourth control start hit the unchanged
-three-per-minute limit; the artifact retained only a generic child failure
-code. The exact original route was restored, and separate cleanup readback
-found all eleven services ready with populated data preserved. HOST-248 is
-blocked at checkpoint 3/5; there was no second full gate,
-final cutover or preview handoff. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
-records the verified receipt and earlier failure history. The
-[recovery plan](docs/M3.5-RECOVERY-PLAN.md) requires a new instruction before
-repair or another gate. M4 remains unclaimed.
+production portfolio publication remain disabled. M3.5 adds the restricted
+owner preview described in the [preview contract](docs/M3.5-PREVIEW-CONTRACT.md).
+Its [handoff](docs/M3.5-HANDOFF.md) retains failed and successful evidence;
+two-pass acceptance and canonical publication/CI remain incomplete. Future
+work must preserve the live preview and requires a new assignment.
 The [M3 runtime decision](docs/M3-RUNTIME-DECISION.md) records the measured
 throughput target shortfall and the explicit limit to owned local fixtures.
 

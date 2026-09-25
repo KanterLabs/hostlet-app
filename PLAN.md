@@ -1,10 +1,12 @@
 # Hostlet — portfolio and live demos
 
-**Current M3.5 assignment (2026-09-25):** Shane authorized the
-[final recovery plan](docs/M3.5-FINAL-PLAN.md) and its execution. Resolve the
-observed cumulative start-budget failure, preserve the now-live preview and
-owner data, verify focused changes and two clean full gates, then publish and
-hand off through HOST-248. Stop on any full-gate failure and before M4.
+**Current M3.5 stop (2026-09-25):** Installed `d681a41` passed the first full
+gate (62/62); the second recorded 61 passing assertions but failed a provider
+status read during final route cleanup. Exact cleanup restored the live preview
+and owner content. HOST-248 is blocked at 3/5 under the stop-on-full-failure rule.
+[The full result](docs/M3.5-FINAL-RESULT.md) records the evidence and remaining
+acceptance/publication work. Another repair or gate requires a new assignment.
+Stop before M4.
 
 Authoritative product direction for `hostlet-app`, based on the brief supplied
 by Shane on 2026-09-21. This supersedes the provisional September generic-hosting
@@ -36,61 +38,17 @@ owned-fixture journey, with customer admission disabled: Next.js 16 remains
 unsupported and the runtime throughput target remains unmet. Provider, spend,
 domain-purchase and production-migration decisions require separate authorization.
 
-On 2026-09-24 Shane authorized M3.5: deploy a restricted owner preview at
-`beta.hostlet.cloud` with a seeded account, working owned Node/PostgreSQL demo
-and approved independent portfolio. Use isolated state on existing resources,
-preserve the prior route and data, verify persistence and rollback, and retain
-two clean browser/system E2E receipts. This authorizes the scoped preview
-cutover, not provider purchases, customer admission, live payments or M4 work.
-See [M3.5 scenarios](docs/M3.5-SCENARIOS.md) and
-[preview contract](docs/M3.5-PREVIEW-CONTRACT.md). HOST-246 and HOST-247 are
-complete; HOST-248 stopped after its first deployed gate failed at public demo
-readiness. The original route was restored. [The M3.5 handoff](docs/M3.5-HANDOFF.md)
-records the incomplete acceptance. Shane subsequently authorized Sol workers
-to deploy focused fixes: retain public-origin diagnostics, correct path redaction,
-and verify observed Cloudflare route propagation before feature assertions.
-Those focused fixes are deployed at `0ca0ec2`. The next full gate passed public
-access and demo checks, then stopped at incorrect JSON paths in its provisioning
-receipt query. The original route was restored; no repair/retry followed.
-Shane then authorized correcting the two receipt JSON paths. That correction
-is deployed at `cc990bc5` and passes in the full gate. The run recorded 23
-passing checks before a Chromium portfolio-save confirmation timeout. The
-edit did not persist; the exact cause is unconfirmed. Original routing was
-restored and the loop stopped. HOST-248 is blocked pending a new instruction;
-two clean complete runs and final cutover/handoff remain required. M3.5 is
-incomplete and M4 remains outside the assignment.
-
-The [M3.5 recovery plan](docs/M3.5-RECOVERY-PLAN.md) now defines five agent
-checkpoints under HOST-248: preserve failure evidence, diagnose/fix saving,
-exercise each remaining dependency group through focused E2E, freeze a
-candidate for two complete runs, then publish and hand off. Shane authorized
-execution on 2026-09-25 using Sol medium workers. That recovery stopped at
-checkpoint 2: `bba9d67` still returns `malformed_if_match` because outer API
-middleware overwrites the preview's `no-transform` header. No new full gate ran.
-Exact original routing and the original draft/publication are retained;
-Shane then instructed "use sol and fix", resuming HOST-248 for the outer
-middleware correction and staged recovery. Saving and all selected focused
-phases passed. The first full run on clean installed `a1ffa60d5e0fc767042247980fda9175328f3ea6`
-recorded 54 passing assertions but failed at bounded startup recovery before
-the full route round trip. Manager journals and source indicate the fourth
-control start hit the unchanged three-per-minute limit; the artifact itself
-retains only a generic child failure code. The exact original route was
-restored, and a separate cleanup readback found all eleven services ready and
-populated data preserved. HOST-248 is blocked at checkpoint 3/5 under
-the first-full-failure stop rule. No second gate, final publication/cutover or
-access handoff occurred. A new instruction is required to resume; M4 remains
-unclaimed. See the [updated handoff](docs/M3.5-HANDOFF.md).
-
-On 2026-09-25 Shane separately authorized a scoped demo handoff with "Go":
-retain the existing restricted preview at its three configured HTTPS hosts after
-verifying normal browser login, save/reload, demo interaction and approved
-portfolio viewing. This permits preview access before two clean full gates;
-it does not accept M3.5 or authorize M4. Preserve the exact original route for
-rollback and all existing data. Do not run service outage/restart, restore or
-full-gate drills in this assignment. The remaining milestone acceptance stays
-incomplete. The scoped walkthrough subsequently passed all 21 checks, with
-independent durable-data readback and the protected routes retained. See
-[demo access and evidence](docs/M3.5-DEMO-ACCESS.md).
+M3.5 provides the restricted owner preview at `beta.hostlet.cloud` using existing
+isolated resources, a seeded account, owned Node/PostgreSQL demo and approved
+independent portfolio. Preserve the live preview, legacy route and owner data.
+The [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
+[scenarios](docs/M3.5-SCENARIOS.md) define its scope. HOST-246 and HOST-247 are
+complete; HOST-248 remains incomplete after the final recovery's second full
+gate failed. [The handoff](docs/M3.5-HANDOFF.md) retains earlier attempts and
+[the final report](docs/M3.5-FINAL-RESULT.md) is the current authority. No source
+publication/CI or M4 work followed the failure. The protected demo remains
+available; [access instructions](docs/M3.5-DEMO-ACCESS.md) distinguish browser
+gate credentials from application credentials.
 
 > Your projects, live and ready to show.
 

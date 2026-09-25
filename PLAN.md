@@ -1,5 +1,11 @@
 # Hostlet — portfolio and live demos
 
+**Current M3.5 assignment (2026-09-25):** Shane authorized the
+[final recovery plan](docs/M3.5-FINAL-PLAN.md) and its execution. Resolve the
+observed cumulative start-budget failure, preserve the now-live preview and
+owner data, verify focused changes and two clean full gates, then publish and
+hand off through HOST-248. Stop on any full-gate failure and before M4.
+
 Authoritative product direction for `hostlet-app`, based on the brief supplied
 by Shane on 2026-09-21. This supersedes the provisional September generic-hosting
 baseline recorded in the initial scaffold commit. Older Hostlet documents and

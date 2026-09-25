@@ -1,5 +1,11 @@
 # Hostlet development
 
+Shane's 2026-09-25 “OK MAKE FINAL 3.5 PLAN AND FIX” resumes HOST-248 under
+`docs/M3.5-FINAL-PLAN.md`. Follow its five stopping points and preserve the
+now-live preview as the entry route state. Historical no-resume instructions
+below are superseded only for this assignment; stop on any full-gate failure
+and before M4. Use GPT-6 Sol medium workers with bounded file ownership.
+
 This is the fresh `KanterLabs/hostlet-app` repository. Read `PLAN.md`,
 `README.md` and the adopted planning baseline in `RECOMMENDATIONS.md` before
 implementation. `PLAN.md` is the canonical current plan; `RECOMMENDATIONS.md`

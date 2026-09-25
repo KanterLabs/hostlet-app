@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Sol medium recovery fixed saving and passed all focused phases. First full gate on a1ffa60 stopped at bounded startup after 54 passing checks; exact route reversed and temporary resources removed. HOST-248 blocked at 3/5; no second gate or further repair. New instruction required; M4 remains unclaimed."
+    "current_status": "Private demo access delivered with 21 passing scoped browser checks, verified durable data and protected routes retained. M3.5 full acceptance remains incomplete after the prior startup failure; no recovery/full gate rerun. HOST-248 blocked; M4 remains unclaimed."
   },
   "milestones": [
     {
@@ -811,8 +811,8 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12210,
-    "read_at": "2026-09-25T13:29:45.431133413Z",
+    "project_revision": 12222,
+    "read_at": "2026-09-25T14:24:21.204233037Z",
     "completed": 22,
     "active": 0,
     "backlog": 11,
@@ -827,7 +827,7 @@
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "Sol medium recovery fixed saving and passed all focused phases. First full gate on a1ffa60 stopped at bounded startup after 54 passing checks; exact route reversed and temporary resources removed. HOST-248 blocked at 3/5; no second gate or further repair. New instruction required; M4 remains unclaimed.",
+    "tracking": "Private demo access delivered with 21 passing scoped browser checks, verified durable data and protected routes retained. M3.5 full acceptance remains incomplete after the prior startup failure; no recovery/full gate rerun. HOST-248 blocked; M4 remains unclaimed.",
     "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
     "recovery_plan": "docs/M3.5-RECOVERY-PLAN.md",
@@ -865,6 +865,15 @@
         ],
         "exit": "Canonical source, mirror/CI, final protected route and private access handoff verified; stop before M4."
       }
-    ]
+    ],
+    "demo_handoff": {
+      "status": "available",
+      "evidence": "docs/M3.5-DEMO-ACCESS.md",
+      "artifact": "artifacts/e2e/M3.5/demo-handoff-owner-preview-20260925/",
+      "checks_passed": 21,
+      "receipt_sha256": "68e70d79916855da2290ffc2720d01c3393f31aec3c686fa323471bb67bc4869",
+      "installed_commit": "a1ffa60d5e0fc767042247980fda9175328f3ea6",
+      "milestone_acceptance_complete": false
+    }
   }
 }

@@ -82,7 +82,9 @@ portfolio viewing. This permits preview access before two clean full gates;
 it does not accept M3.5 or authorize M4. Preserve the exact original route for
 rollback and all existing data. Do not run service outage/restart, restore or
 full-gate drills in this assignment. The remaining milestone acceptance stays
-incomplete. The scoped browser scenarios and artifact are recorded separately.
+incomplete. The scoped walkthrough subsequently passed all 21 checks, with
+independent durable-data readback and the protected routes retained. See
+[demo access and evidence](docs/M3.5-DEMO-ACCESS.md).
 
 > Your projects, live and ready to show.
 

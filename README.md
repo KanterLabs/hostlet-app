@@ -6,6 +6,12 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
+The restricted demo is now live under Shane's separate 2026-09-25 "Go"
+authorization. The normal-use browser walkthrough passed 21 checks; see
+[demo access and evidence](docs/M3.5-DEMO-ACCESS.md). The existing product
+installation is unchanged. M3.5 full acceptance remains incomplete and M4 is
+blocked. Preserve the live preview and saved owner edits during future work.
+
 **Status: M2 and M3 accepted for owned local fixtures.** M2
 supports accounts, selected GitHub repositories and branches, bounded
 compatibility checks, and an editable private portfolio preview before paid

@@ -19,11 +19,16 @@ graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
 
+**Private demo access is available.** Shane separately authorized a normal-use
+handoff; its 21 browser checks passed and the protected routes are retained.
+[Open/access instructions and evidence](docs/M3.5-DEMO-ACCESS.md) distinguish
+this completed handoff from the still-incomplete M3.5 full gate. M4 stays blocked.
+
 **M3 is complete at HOST-233. M3.5 is assigned through HOST-248; stop before M4.**
 Shane authorized a restricted owner preview at `beta.hostlet.cloud` on
 2026-09-24. HOST-246 defines placement, access and preservation; HOST-247 builds
 the durable seeded composition; HOST-248 deploys and verifies the preview twice.
-M4 depends on HOST-248. Snapshot revision 12210 records HOST-246 and
+M4 depends on HOST-248. Snapshot revision 12222 records HOST-246 and
 HOST-247 complete and HOST-248 blocked at checkpoint 3/5. Sol medium workers
 fixed saving and completed all focused phases. The first full gate on
 `a1ffa60` passed 54 checks, then stopped at the bounded startup drill. The

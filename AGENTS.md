@@ -37,6 +37,14 @@ stop-on-full-gate-failure rule. No second gate, final cutover, source
 publication/CI or access handoff occurred. Read `docs/M3.5-HANDOFF.md` and
 `docs/M3.5-RECOVERY-PLAN.md`; a new instruction is required before repair or
 another gate.
+Shane subsequently authorized a separate normal-use demo handoff with "Go".
+The three restricted preview routes are now intentionally live; the walkthrough
+passed 21 checks from `1098441`, against unchanged installed product `a1ffa60`.
+Read `docs/M3.5-DEMO-ACCESS.md` for access and verified evidence. This scoped
+route-retention authorization overrides the prior two-full-gates prerequisite
+only for showing the demo. M3.5 acceptance remains incomplete; do not resume
+recovery drills or a full gate without a new assignment. Preserve the live
+preview and owner edits. No services were restarted during this handoff.
 **Stop before M4.** Later work requires a new assignment.
 Read [TESTING.md](TESTING.md) before adding or validating behavior. It defines
 the E2E acceptance policy, the narrow test-first isolation exception, milestone

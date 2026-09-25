@@ -29,18 +29,76 @@ const run = (program, argv, { env = childEnvironment(), timeout = 180000, cwd = 
 const managed = (verb, unit) => run("node", ["scripts/beta/managed-services.mjs", verb, ...(verb === "ready" ? [servicesPath, unit, "5000"] : [unit])], { timeout: 15000 });
 const servicePolicy = (unit) => {
   const inspected = JSON.parse(managed("inspect", unit));
-  const lines = run("/usr/bin/systemctl", ["show", inspected.name, "--property=Restart,RestartUSec,StartLimitBurst,StartLimitIntervalUSec,NRestarts,ActiveEnterTimestampMonotonic", "--no-pager"]);
+  const lines = run("/usr/bin/systemctl", ["show", inspected.name, "--property=Restart,RestartUSec,StartLimitBurst,StartLimitIntervalUSec,NRestarts,ActiveEnterTimestampMonotonic,ExecMainStartTimestampMonotonic,StateChangeTimestampMonotonic", "--no-pager"]);
   return Object.fromEntries(lines.split("\n").map((line) => line.split(/=(.*)/s).slice(0, 2)));
+};
+const policyIntervalMs = (value) => {
+  if (value === "0") return 0;
+  const factors = { us: 0.001, ms: 1, s: 1000, min: 60000, h: 3600000 };
+  const parts = String(value).trim().split(/\s+/);
+  let total = 0;
+  for (const part of parts) {
+    const match = /^(\d+)(us|ms|s|min|h)$/.exec(part);
+    if (!match) throw new Error("unsupported manager start-limit interval");
+    total += Number(match[1]) * factors[match[2]];
+  }
+  if (!Number.isSafeInteger(total) || total < 0 || total > 90000) throw new Error("manager start-limit interval exceeds bounded probe budget");
+  return total;
+};
+const startupUnits = ["control", "builder", "database-worker", "runtime", "publisher-worker", "demo-gateway", "provider"];
+const startupDeadlineMs = 165000;
+const startupFailure = (error, { step = substep, unit = operationContext.unit, policy = operationContext.policy, waitedMs = operationContext.waitedMs } = {}) => {
+  error.operationSubstep = step;
+  error.operationUnit = unit;
+  error.operationPolicy = policy;
+  error.operationWaitedMs = waitedMs;
+  return error;
+};
+const startupSnapshot = () => Object.fromEntries(startupUnits.map((unit) => {
+  const state = servicePolicy(unit);
+  return [unit, [state.NRestarts, state.ActiveEnterTimestampMonotonic, state.ExecMainStartTimestampMonotonic, state.StateChangeTimestampMonotonic].join(":")];
+}));
+const stableStartupBudget = async (policy, deadline) => {
+  substep = "wait_for_start_budget";
+  const began = Date.now();
+  let quietSince = began, previous = startupSnapshot();
+  while (Date.now() - quietSince < policy.startLimitIntervalMs + 1000) {
+    if (Date.now() + 2000 > deadline) throw startupFailure(new Error("bounded manager start-budget wait expired"));
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+    const current = startupSnapshot();
+    if (startupUnits.some((unit) => current[unit] !== previous[unit])) quietSince = Date.now();
+    previous = current;
+    operationContext.waitedMs = Date.now() - began;
+  }
+  return { ...policy, waitedMs: Date.now() - began, quietWindowObserved: true };
+};
+const recoverStartupUnits = (deadline) => {
+  substep = "recover_affected_services";
+  const recovered = [], errors = [];
+  for (const unit of startupUnits) {
+    operationContext.unit = unit;
+    if (Date.now() > deadline) { errors.push(startupFailure(new Error("bounded service recovery deadline expired"), { unit })); break; }
+    try {
+      const state = JSON.parse(managed("inspect", unit));
+      const action = state.ActiveState === "active" ? "already-active" : "started";
+      if (action === "started") managed("start", unit);
+      managed("ready", unit);
+      recovered.push({ unit, action, ready: true });
+    } catch (error) { errors.push(startupFailure(error, { unit })); }
+  }
+  operationContext.unit = null;
+  if (errors.length) throw errors[0];
+  return recovered;
 };
 const journal = () => privateJson(join(cf.workDir, "cloudflare-journal.json"));
 const manifest = () => privateJson(join(cfg.stateDir, "identity-manifest.json"));
 const databaseStateDir = cfg.postgres.stateDir ?? join(cfg.stateDir, "databases");
-const api = async (path, { method = "GET", body, token, headers = {} } = {}) => {
-  const response = await fetch(new URL(path, cfg.apiUrl), { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
+const api = async (path, { method = "GET", body, token, headers = {}, connectionClose = false } = {}) => {
+  const response = await fetch(new URL(path, cfg.apiUrl), { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers, ...(body ? { "Content-Type": "application/json" } : {}), ...(connectionClose ? { Connection: "close" } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) });
   let payload; try { payload = await response.json(); } catch { payload = null; }
   return { status: response.status, payload };
 };
-const owner = async () => { const result = await api("/v1/sessions", { method: "POST", body: { email: cfg.owner.email, password: secret(cfg.owner.passwordFile) } }); if (result.status !== 201 || !result.payload?.token) throw new Error("owner session unavailable"); return result.payload.token; };
+const owner = async ({ connectionClose = false } = {}) => { const result = await api("/v1/sessions", { method: "POST", body: { email: cfg.owner.email, password: secret(cfg.owner.passwordFile) }, connectionClose }); if (result.status !== 201 || !result.payload?.token) throw new Error("owner session unavailable"); return result.payload.token; };
 const projectSource = async () => ensureProjectTarget({ stateDir: databaseStateDir, tenantDatabaseId: manifest().database.id, databaseGeneration: manifest().database.generation, endpointIpv4: cfg.postgres.project.endpointIpv4, endpointIpv6: cfg.postgres.project.endpointIpv6 });
 const platformSource = async () => ensurePlatformDatabase({ stateDir: databaseStateDir, port: cfg.postgres.platform.port, connectionUrlFile: cfg.postgres.platform.connectionUrlFile });
 const sql = (source, database, query, { expectedStatus = 0 } = {}) => {
@@ -54,6 +112,7 @@ const row = (source, database, itemId) => JSON.parse(sql(source, database, `SELE
 const backupDir = join(cfg.stateDir, "gate-backups", runId);
 const restoreTracking = join(backupDir, "restore-tracking.json");
 let substep = "start";
+let operationContext = { unit: null, policy: null, waitedMs: 0 };
 
 async function execute() {
   if (action === "currentPublishedSite") {
@@ -161,6 +220,8 @@ async function execute() {
     if (before.status !== 200 || before.payload?.state !== "published" || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(before.payload?.slug ?? "")) throw new Error("last-good published slug unavailable before protection probe");
     const latest = await api("/v1/portfolio/draft-revisions/latest", { token });
     if (latest.status !== 200 || latest.payload?.id !== params.draftId) throw new Error("stale probe did not start from browser-approved draft");
+    const approvedBeforeWrite = await api("/v1/portfolio/approved-revisions/latest", { token });
+    if (approvedBeforeWrite.status !== 200 || approvedBeforeWrite.payload?.id !== params.approvedId) throw new Error("approved pointer drift before private draft write");
     const newerDraft = structuredClone(latest.payload.draft);
     newerDraft.profile.headline = `Post approval private change ${runId}`;
     const saved = await api("/v1/portfolio/preview-revisions", { method: "POST", token, headers: { "If-Match": `"${latest.payload.revision}"`, "Idempotency-Key": `m35-new-draft-${randomUUID()}` }, body: { draft: newerDraft, preview: latest.payload.preview } });
@@ -224,20 +285,24 @@ async function execute() {
   if (action === "boundedStartupFailure") {
     substep = "startup_preconditions";
     const platform = await platformSource();
-    const token = await owner();
-    const before = await api("/v1/portfolio/publications/latest", { token });
+    const token = await owner({ connectionClose: true });
+    const before = await api("/v1/portfolio/publications/latest", { token, connectionClose: true });
     if (before.status !== 200 || before.payload?.id !== params.publicationId) throw new Error("last-good publication pointer differs before startup injection");
     const policyBefore = servicePolicy("control");
     const start = Date.now();
+    const deadline = start + startupDeadlineMs;
+    const startPolicy = { startLimitBurst: Number(policyBefore.StartLimitBurst), startLimitIntervalMs: policyIntervalMs(policyBefore.StartLimitIntervalUSec) };
+    operationContext.policy = startPolicy;
+    if (startPolicy.startLimitBurst < 3 || startPolicy.startLimitIntervalMs < 1000) throw startupFailure(new Error("manager start policy cannot support bounded restart probe"));
     let deadlineFailure = null, readyStatus = null, ownerVisibleReason = null;
-    let primaryError, primarySubstep;
+    let primaryError, startBudget, recoveredUnits;
     try {
       substep = "stop_owned_platform_database";
       run("docker", ["stop", "--time", "5", platform.containerId], { timeout: 15000 });
       if (params.injectFailure === "afterPlatformStop") throw new Error("deliberate failure after owned platform stop");
       substep = "observe_bounded_readiness";
       const check = spawnSync("node", ["scripts/beta/managed-services.mjs", "ready", servicesPath, "control", "3000"], { encoding: "utf8", cwd: root, timeout: 8000, maxBuffer: 32768, env: childEnvironment() });
-      deadlineFailure = { status: check.status, elapsedMs: Date.now() - start, reason: (check.stderr || "").trim().slice(0, 300) };
+      deadlineFailure = { status: check.status, elapsedMs: Date.now() - start, reason: check.error ? "readiness_process_error" : check.status === 0 ? "unexpected_ready" : "not_ready" };
       try { readyStatus = (await api("/readyz")).status; } catch { readyStatus = 0; }
       const edge = privateJson(edgePath);
       const browser = await openBrowser({ chromiumPath: "/snap/bin/chromium", username: edge.username, password: secret(edge.passwordFile), origins: Object.values(cfg.origins) });
@@ -247,29 +312,38 @@ async function execute() {
         ownerVisibleReason = await browser.evaluate("document.body?.innerText?.includes('database_unavailable')");
       } finally { await browser.close(); }
     } catch (error) {
-      primaryError = error;
-      primarySubstep = substep;
+      primaryError = startupFailure(error);
     } finally {
+      let cleanupError;
       try {
         substep = "recover_owned_platform_database";
         const running = run("docker", ["inspect", "--format", "{{.State.Running}}", platform.containerId], { timeout: 15000 });
         if (running !== "true") run("docker", ["start", platform.containerId], { timeout: 15000 });
         await platformSource();
-        managed("ready", "control");
-      } catch (cleanupError) {
-        if (primaryError) throw new AggregateError([primaryError, cleanupError], `startup probe failed: ${primaryError.message}; database recovery failed: ${cleanupError.message}`);
-        throw cleanupError;
+        startBudget = await stableStartupBudget(startPolicy, deadline);
+        recoveredUnits = recoverStartupUnits(deadline);
+      } catch (error) {
+        cleanupError = startupFailure(error);
       }
+      if (primaryError && cleanupError) throw new AggregateError([primaryError, cleanupError], "startup probe and owned recovery failed");
+      if (cleanupError) throw cleanupError;
     }
-    if (primaryError) { substep = primarySubstep; throw primaryError; }
+    if (primaryError) throw primaryError;
     substep = "managed_restart_probes";
     const restartTimestamps = [];
     for (let attempt = 0; attempt < 2; attempt++) {
-      managed("restart", "control");
-      managed("ready", "control");
-      restartTimestamps.push(servicePolicy("control").ActiveEnterTimestampMonotonic);
+      operationContext.unit = "control";
+      substep = `managed_restart_probe_${attempt + 1}`;
+      try {
+        if (Date.now() + 15000 > deadline) throw new Error("bounded manager restart deadline expired");
+        managed("restart", "control");
+        managed("ready", "control");
+        restartTimestamps.push(servicePolicy("control").ActiveEnterTimestampMonotonic);
+      } catch (error) { throw startupFailure(error); }
     }
+    operationContext.unit = null;
     const policyAfter = servicePolicy("control");
+    substep = "static_serving_during_publisher_worker_outage";
     managed("stop", "publisher-worker");
     let staticStatus;
     try {
@@ -287,9 +361,9 @@ async function execute() {
         request.once("error", rejectStatus);
       }).finally(() => clearTimeout(deadline));
     } finally { managed("start", "publisher-worker"); managed("ready", "publisher-worker"); }
-    const after = await api("/v1/portfolio/publications/latest", { token: await owner() });
+    const after = await api("/v1/portfolio/publications/latest", { token: await owner({ connectionClose: true }), connectionClose: true });
     const project = await projectSource(), item = row(project, project.databaseName, params.itemId);
-    return { observedReadinessAttempts: deadlineFailure.status !== null ? 1 : 0, readinessExitStatus: deadlineFailure.status, readinessElapsedMs: deadlineFailure.elapsedMs, readinessDeadlineMs: 8000, observedManagedRestarts: restartTimestamps.length, restartTimestamps, restartPolicy: { before: policyBefore.Restart, after: policyAfter.Restart, intervalUsec: policyAfter.RestartUSec, startLimitBurst: Number(policyAfter.StartLimitBurst), startLimitIntervalUsec: policyAfter.StartLimitIntervalUSec, nRestartsBefore: Number(policyBefore.NRestarts), nRestartsAfter: Number(policyAfter.NRestarts) }, ownerVisibleReason, managementReason: deadlineFailure.reason, unhealthyAdvertised: deadlineFailure.status === 0 || readyStatus === 200, publicationId: after.payload?.id === before.payload?.id ? after.payload?.id : null, itemId: item?.id, readyStatusWhileDown: readyStatus, staticStatusWhilePublisherDown: staticStatus };
+    return { observedReadinessAttempts: deadlineFailure.status !== null ? 1 : 0, readinessExitStatus: deadlineFailure.status, readinessElapsedMs: deadlineFailure.elapsedMs, readinessDeadlineMs: 8000, observedManagedRestarts: restartTimestamps.length, restartTimestamps, restartPolicy: { before: policyBefore.Restart, after: policyAfter.Restart, intervalUsec: policyAfter.RestartUSec, startLimitBurst: Number(policyAfter.StartLimitBurst), startLimitIntervalUsec: policyAfter.StartLimitIntervalUSec, nRestartsBefore: Number(policyBefore.NRestarts), nRestartsAfter: Number(policyAfter.NRestarts) }, startBudget, recoveredUnits, ownerVisibleReason, managementReason: deadlineFailure.reason, unhealthyAdvertised: deadlineFailure.status === 0 || readyStatus === 200, publicationId: after.payload?.id === before.payload?.id ? after.payload?.id : null, itemId: item?.id, readyStatusWhileDown: readyStatus, staticStatusWhilePublisherDown: staticStatus };
   }
   if (action === "temporaryCleanup") {
     substep = "cleanup_owned_resources";
@@ -369,8 +443,9 @@ try { console.log(JSON.stringify(await execute())); } catch (error) {
         : { code: "owned_operation_failed", message: "The owned operation failed; inspect the private service and cleanup receipts." };
   };
   const diagnostic = error instanceof AggregateError && error.errors.length >= 2
-    ? { code: "operation_and_cleanup_failed", primary: classify(error.errors[0]), cleanup: classify(error.errors[1]) }
+    ? { code: "operation_and_cleanup_failed", primary: classify(error.errors[0]), cleanup: classify(error.errors[1]), primarySubstep: error.errors[0]?.operationSubstep ?? null, cleanupSubstep: error.errors[1]?.operationSubstep ?? null }
     : classify(error);
-  console.error(JSON.stringify({ operation: action, substep, ...diagnostic }));
+  const contextError = error instanceof AggregateError ? error.errors[1] : error;
+  console.error(JSON.stringify({ operation: action, substep: contextError?.operationSubstep ?? substep, unit: contextError?.operationUnit ?? operationContext.unit, policy: contextError?.operationPolicy ?? operationContext.policy, waitedMs: contextError?.operationWaitedMs ?? operationContext.waitedMs, ...diagnostic }));
   process.exitCode = 1;
 }

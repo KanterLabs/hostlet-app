@@ -227,6 +227,7 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
     const password = String(form.get("password") ?? "");
     setBusy("auth");
     setNotice(null);
+    let creatingSession = false;
     try {
       if (authView === "signup" && !restrictedPreview) {
         await api.createAccount({
@@ -235,12 +236,17 @@ export function Onboarding({ enabled }: { enabled: boolean }) {
           display_name: String(form.get("displayName") ?? "").trim(),
         });
       }
+      creatingSession = true;
       const session = await api.createSession({ email, password });
       saveSessionToken(session.token);
       setToken(session.token);
       setNotice(authView === "signup" ? "Account created. Welcome to Hostlet." : "Welcome back.");
     } catch (error) {
-      handleError(error);
+      if (creatingSession && error instanceof ApiError && error.status === 401) {
+        setNotice("Email or password is incorrect. Please try again.");
+      } else {
+        handleError(error);
+      }
     } finally {
       setBusy(null);
     }

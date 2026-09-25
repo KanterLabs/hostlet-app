@@ -12,12 +12,19 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one blocked, 11 in Backlog),
+The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
+
+**Current assignment, 2026-09-25:** HOST-248 is active under the
+[final M3.5 plan](docs/M3.5-FINAL-PLAN.md). Snapshot revision 12241 records
+22 completed tasks, one owned active task and 11 dependency-blocked future
+tasks. The current preview and populated backups are preserved. Focused
+verification precedes two full gates; any full-gate failure stops the loop.
+The older stopped-run records below are historical. M4 remains unclaimed.
 
 **Private demo access is available.** Shane separately authorized a normal-use
 handoff; its 21 browser checks passed and the protected routes are retained.

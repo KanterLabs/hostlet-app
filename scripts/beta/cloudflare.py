@@ -474,8 +474,23 @@ def reverse(cfg, j):
 
 def status(cfg, j):
     now = assert_guards(cfg, j)
+    old = j["beforeDns"][HOSTS[0]][0]
+    current_beta = dict(now[HOSTS[0]][0]) if len(now[HOSTS[0]]) == 1 else None
+    if current_beta and old.get("comment") is None and current_beta.get("comment") == "":
+        current_beta["comment"] = None
+    exact_original = (current_beta == old
+                      and all(not now[name] for name in HOSTS[1:]))
+    exact_preview = False
+    if j.get("tunnelId") and all(len(now[name]) == 1 for name in HOSTS):
+        assert_tunnel_owned(cfg, j)
+        exact_preview = (ingress_matches(tunnel_config(cfg, j["tunnelId"]), expected_ingress(cfg))
+                         and now[HOSTS[0]][0]["id"] == old["id"]
+                         and all(same_route(now[name][0], cname(j, name)) for name in HOSTS)
+                         and all(now[name][0]["id"] == j["createdRecords"].get(name)
+                                 for name in HOSTS[1:]))
     print(json.dumps({"phase": j["phase"], "pending": j["pending"],
                       "tunnelRecorded": bool(j["tunnelId"]), "actions": len(j["actions"]),
+                      "exactOriginalRoute": exact_original, "exactPreviewRoute": exact_preview,
                       "exactRecordCounts": {name: len(now[name]) for name in HOSTS}}, sort_keys=True))
 
 

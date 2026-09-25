@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "manually_blocked",
-      "status": "blocked"
+      "dependency_state": "owned",
+      "status": "active"
     },
     {
       "key": "HOST-228",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "Private demo access delivered with 21 passing scoped browser checks, verified durable data and protected routes retained. M3.5 full acceptance remains incomplete after the prior startup failure; no recovery/full gate rerun. HOST-248 blocked; M4 remains unclaimed."
+    "current_status": "Final M3.5 recovery authorized on 2026-09-25. Baseline and backups preserved; scoped startup-budget, live-entry cleanup and sign-in corrections under focused verification. Two full gates and publication remain pending. M4 remains unclaimed."
   },
   "milestones": [
     {
@@ -811,59 +811,61 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12222,
-    "read_at": "2026-09-25T14:24:21.204233037Z",
+    "project_revision": 12241,
+    "read_at": "2026-09-25T16:38:15.602910887Z",
     "completed": 22,
-    "active": 0,
+    "active": 1,
     "backlog": 11,
-    "blocked": 1,
-    "active_task": null,
+    "blocked": 0,
+    "active_task": "HOST-248",
     "assigned_stop": "HOST-248",
-    "stopped_at": "HOST-248",
-    "active_tasks": []
+    "stopped_at": null,
+    "active_tasks": [
+      "HOST-248"
+    ]
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-24",
-    "tracking": "Private demo access delivered with 21 passing scoped browser checks, verified durable data and protected routes retained. M3.5 full acceptance remains incomplete after the prior startup failure; no recovery/full gate rerun. HOST-248 blocked; M4 remains unclaimed.",
-    "data_preservation": "Preserve legacy route and data; use fresh isolated preview state, capture verified backups before populated changes and retain an exact origin/route rollback path.",
+    "tracking": "Final M3.5 recovery authorized on 2026-09-25. Baseline and backups preserved; scoped startup-budget, live-entry cleanup and sign-in corrections under focused verification. Two full gates and publication remain pending. M4 remains unclaimed.",
+    "data_preservation": "Preserve now-live restricted preview and exact legacy rollback route, immutable owner history, approved public content and private draft; verify backups before install and use only guarded API compensation after synthetic gate writes.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
-    "recovery_plan": "docs/M3.5-RECOVERY-PLAN.md",
+    "recovery_plan": "docs/M3.5-FINAL-PLAN.md",
     "recovery_checkpoints": [
       {
-        "id": "evidence",
+        "id": "preservation",
         "depends_on": [],
-        "exit": "A real rejected-save E2E retains safe failure details, original data and verified artifact."
+        "exit": "Verified current entry state and populated backups."
       },
       {
-        "id": "save",
+        "id": "focused",
         "depends_on": [
-          "evidence"
+          "preservation"
         ],
-        "exit": "Captured cause corrected; browser save, fresh-load second edit and durable API/SQL readback agree."
+        "exit": "Observed fixes pass focused real-boundary checks and preservation cleanup."
       },
       {
-        "id": "remaining_phases",
+        "id": "freeze",
         "depends_on": [
-          "save"
+          "focused"
         ],
-        "exit": "All remaining focused scenario groups pass with explicit prerequisite identities and cleanup receipts."
+        "exit": "Reviewed clean candidate, required checks and immutable installation match."
       },
       {
         "id": "acceptance",
         "depends_on": [
-          "remaining_phases"
+          "freeze"
         ],
-        "exit": "Reviewed clean candidate and installed source pass two complete gates; any full-gate failure stops the loop."
+        "exit": "Two clean full passes; stop on any full failure."
       },
       {
         "id": "delivery",
         "depends_on": [
           "acceptance"
         ],
-        "exit": "Canonical source, mirror/CI, final protected route and private access handoff verified; stop before M4."
+        "exit": "Canonical source, mirror CI and protected owner handoff verified; stop before M4."
       }
     ],
     "demo_handoff": {

@@ -10,7 +10,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SCENARIOS = ["M35-PLACE-01", "M35-ACCESS-01", "M35-COMPOSE-01", "M35-DB-CLOCK-01", "M35-EDIT-01", "M35-APPROVAL-01", "M35-STATIC-01", "M35-SEED-01", "M35-RECOVER-01", "M35-START-01", "M35-CLEAN-01"];
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, item, index, all) => { if (item.startsWith("--")) pairs.push([item.slice(2), all[index + 1]?.startsWith("--") ? true : all[index + 1] ?? true]); return pairs; }, []));
 const phase = args.phase ?? "full";
-const PHASES = new Set(["full", "save-negative", "save-stale", "save", "demo-persistence", "publication", "protection", "static-independence", "seed-repair", "restore", "startup", "route-roundtrip"]);
+const PHASES = new Set(["full", "login", "route-only", "save-negative", "save-stale", "save", "demo-persistence", "publication", "protection", "static-independence", "seed-repair", "restore", "startup", "route-roundtrip"]);
 const REQUIRED = { publication: ["save"], protection: ["publication"], "static-independence": ["publication", "protection"], "seed-repair": ["protection"], restore: ["demo-persistence"], startup: ["publication", "demo-persistence", "restore"], "route-roundtrip": ["publication", "startup"] };
 const requestedRunId = args["run-id"] || new Date().toISOString().replace(/[:.]/g, "-");
 const invalidRunId = !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(requestedRunId);
@@ -63,7 +63,8 @@ const run = (program, argv, { timeout = 60000, env } = {}) => {
     try {
       const parsed = JSON.parse(result.stderr.trim().split("\n").at(-1));
       const field = (value) => typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,100}$/.test(value) ? value : null;
-      childFailure = { operation: field(parsed.operation), code: field(parsed.code), primaryCode: field(parsed.primary?.code), cleanupCode: field(parsed.cleanup?.code) };
+      const policy = parsed.policy && typeof parsed.policy === "object" ? { startLimitBurst: Number.isSafeInteger(parsed.policy.startLimitBurst) ? parsed.policy.startLimitBurst : null, startLimitIntervalMs: Number.isSafeInteger(parsed.policy.startLimitIntervalMs) ? parsed.policy.startLimitIntervalMs : null } : null;
+      childFailure = { operation: field(parsed.operation), code: field(parsed.code), substep: field(parsed.substep), unit: field(parsed.unit), policy, waitedMs: Number.isSafeInteger(parsed.waitedMs) ? parsed.waitedMs : null, primaryCode: field(parsed.primary?.code), primarySubstep: field(parsed.primarySubstep), cleanupCode: field(parsed.cleanup?.code), cleanupSubstep: field(parsed.cleanupSubstep) };
     } catch { /* never persist raw child stderr */ }
   }
   const diagnostic = { program: basename(program), operation: argv[0] === "e2e/beta/operations.mjs" ? argv[1] : argv[0], exitStatus: result.status, elapsedMs: Date.now() - started, errorCode: result.error?.code ?? null, childFailure };
@@ -92,7 +93,9 @@ let initialBrowserPending = false;
 let config;
 let edge;
 let ownerToken;
-let cutoverActive = false;
+let entryRoutePhase = null;
+let routeMayBeMutated = false;
+let routeOnlyToken;
 let temporaryRestore;
 let interrupted = false;
 let activePhase;
@@ -105,10 +108,19 @@ process.on("SIGTERM", () => { interrupted = true; });
 const assertLive = () => { if (interrupted) throw new Error("gate interrupted by signal"); };
 const basic = () => `Basic ${Buffer.from(`${edge.username}:${edge.password}`).toString("base64")}`;
 const request = async (origin, path, { method = "GET", body, token, authorized = true, timeout = 20000, headers = {} } = {}) => {
-  const response = await fetch(new URL(path, origin), { method, headers: { ...(authorized ? { Authorization: basic() } : {}), ...(token ? { "X-Hostlet-Authorization": `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }), Accept: "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body), redirect: "manual", signal: AbortSignal.timeout(timeout) });
-  const content = await response.text();
-  let payload; try { payload = JSON.parse(content); } catch { payload = null; }
-  return { status: response.status, payload, text: content.slice(0, 12000), headers: Object.fromEntries(["content-type", "location", "etag", "cache-control", "content-encoding"].map((key) => [key, response.headers.get(key)])) };
+  try {
+    const response = await fetch(new URL(path, origin), { method, headers: { ...(authorized ? { Authorization: basic() } : {}), ...(token ? { "X-Hostlet-Authorization": `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }), Accept: "application/json", ...headers, Connection: "close" }, body: body === undefined ? undefined : JSON.stringify(body), redirect: "manual", signal: AbortSignal.timeout(timeout) });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const content = bytes.toString("utf8");
+    let payload; try { payload = JSON.parse(content); } catch { payload = null; }
+    return { status: response.status, payload, text: content.slice(0, 12000), bodySha256: hash(bytes), bodyBytes: bytes.length, headers: Object.fromEntries(["content-type", "location", "etag", "cache-control", "content-encoding"].map((key) => [key, response.headers.get(key)])) };
+  } catch (error) {
+    const code = (value) => typeof value === "string" && /^[A-Za-z0-9_.:-]{1,80}$/.test(value) ? value : null;
+    const failures = state.observations.httpFailures ??= [];
+    if (failures.length < 20) failures.push({ host: new URL(origin).hostname, path: /^\/[a-zA-Z0-9_./-]{0,120}$/.test(path) ? path : null, method, name: code(error?.name), code: code(error?.code), causeCode: code(error?.cause?.code) });
+    progress();
+    throw error;
+  }
 };
 const safe = ({ status, payload, text, headers }) => ({ status, payload: payload && typeof payload === "object" ? { ...payload, token: undefined } : undefined, textLength: text?.length ?? 0, headers });
 const stoppedUnits = new Set();
@@ -135,11 +147,13 @@ const routeOperation = (name) => {
   if (name === "routeInventoryBefore") {
     if (!existsSync(journalPath)) provider("inventory", ["--before", args["cloudflare-before"]]);
     const before = journal();
-    const observed = status();
-    if (before.phase === "inventoried") provider("prepare");
     if (before.beforeSnapshotSha256 !== shaFile(args["cloudflare-before"])) throw new Error("provider before-state digest drift");
-    if (!["prepared", "reversed", "inventoried"].includes(observed.phase)) throw new Error("preview route already cut over before gate");
-    return { owned: true, exactPriorTarget: observed.exactPriorTarget, siblingRecords: (observed.exactRecordCounts?.["beta-demo.hostlet.cloud"] ?? -1) + (observed.exactRecordCounts?.["beta-portfolio.hostlet.cloud"] ?? -1), phase: observed.phase };
+    if (before.phase === "inventoried") provider("prepare");
+    const observed = status();
+    if (!["prepared", "reversed", "cutover"].includes(observed.phase) || observed.pending !== null) throw new Error("preview route entry phase is not settled");
+    const entryExact = observed.phase === "cutover" ? observed.exactPreviewRoute === true : observed.exactOriginalRoute === true;
+    if (!entryExact) throw new Error("preview route entry does not match exact owned provider state");
+    return { owned: true, exactPriorTarget: observed.exactPriorTarget, siblingRecords: (observed.exactRecordCounts?.["beta-demo.hostlet.cloud"] ?? -1) + (observed.exactRecordCounts?.["beta-portfolio.hostlet.cloud"] ?? -1), phase: observed.phase, exactOriginalRoute: observed.exactOriginalRoute, exactPreviewRoute: observed.exactPreviewRoute };
   }
   if (name === "routeCutover") { privateJson(args["ready-proof"]); provider("cutover", ["--ready-proof", args["ready-proof"]]); return status(); }
   if (name === "routeReverse") { provider("reverse"); return status(); }
@@ -157,11 +171,11 @@ const transportError = (error, depth = 0) => {
   if (!error || typeof error !== "object" || depth >= 3) return null;
   return { name: String(error.name ?? "Error"), code: error.code == null ? null : String(error.code), cause: transportError(error.cause, depth + 1) };
 };
-const waitForProtectedOrigins = async (phase, portfolioPath) => {
+const waitForProtectedOrigins = async (phase, portfolioPath, deadlineMs = 300000) => {
   if (!/^\/[a-z0-9][a-z0-9-]{0,62}\/$/.test(portfolioPath)) throw new Error("published portfolio readiness path is invalid");
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 20000 || deadlineMs > 300000) throw new Error("protected origin readiness has insufficient bounded time");
   const observed = state.observations.placement.propagation[phase] = {};
   const started = Date.now();
-  const deadlineMs = 300000;
   const stableRequiredMs = 20000;
   let stableSince = null;
   observed.deadlineMs = deadlineMs;
@@ -177,7 +191,7 @@ const waitForProtectedOrigins = async (phase, portfolioPath) => {
     const round = await Promise.all(hosts.map(async ({ name, url, host, headers }) => {
       const attempt = { host, path: url.pathname, attemptedAt: new Date().toISOString(), elapsedMs: 0, status: null, mimeType: null, apiErrorCode: null, error: null, cfRay: null, cfCacheStatus: null, ageSeconds: null, cloudflareErrorCode: null };
       try {
-        const response = await fetch(url, { headers, redirect: "manual", signal: AbortSignal.timeout(timeout) });
+        const response = await fetch(url, { headers: { ...headers, Connection: "close", "Cache-Control": "no-cache" }, redirect: "manual", signal: AbortSignal.timeout(timeout) });
         attempt.status = response.status;
         const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
         if (mimeType && /^[a-z0-9.+-]+\/[a-z0-9.+-]{1,80}$/.test(mimeType)) attempt.mimeType = mimeType;
@@ -337,7 +351,8 @@ async function execute() {
   check("source-installed", phase === "full" ? "installed release and exact product binaries belong to the clean gate commit" : "focused harness records separately installed product source", { releaseCommit: config.releaseCommit, harnessCommit: state.source.commit, binaries: state.source.installedBinaryDigests }, Object.keys(state.source.installedBinaryDigests).sort().join(",") === "builder,control,database,publisher,runtime" && Object.values(config.binaries).every((path) => path.includes(`/releases/${config.releaseCommit}/target/debug/`)) && (phase !== "full" || config.releaseCommit === state.source.commit));
   state.source.chromiumVersion = run(args.chromium || "/snap/bin/chromium", ["--version"]);
   const before = op("routeInventoryBefore");
-  check("M35-PLACE-01-before", "exact original route and ownership are inventoried before mutation", { owned: before.owned, exactPriorTargetRecorded: Boolean(before.exactPriorTarget), siblingRecords: before.siblingRecords }, before.owned === true && Boolean(before.exactPriorTarget) && before.siblingRecords === 0);
+  check("M35-PLACE-01-before", "exact original route and owned entry route are verified before mutation", { owned: before.owned, phase: before.phase, exactPriorTargetRecorded: Boolean(before.exactPriorTarget), siblingRecords: before.siblingRecords, exactOriginalRoute: before.exactOriginalRoute, exactPreviewRoute: before.exactPreviewRoute }, before.owned === true && Boolean(before.exactPriorTarget) && ((before.phase === "cutover" && before.siblingRecords === 2 && before.exactPreviewRoute === true) || (["prepared", "reversed"].includes(before.phase) && before.siblingRecords === 0 && before.exactOriginalRoute === true)));
+  entryRoutePhase = before.phase;
   for (const unit of ["dashboard", "control", "gateway", "publisher-static", "tunnel", "demo-gateway", "provider"]) {
     state.prerequisites[unit] = JSON.parse(service("ready", unit));
   }
@@ -346,12 +361,59 @@ async function execute() {
   state.prerequisites.currentPublishedSite = currentSite;
   state.observations.retainedIdentities.publicationId = currentSite.id;
   progress();
-  cutoverActive = true; // A failed command can already have changed one record.
+  state.observations.placement = { before, propagation: {} };
+  routeMayBeMutated = true; // A failed command can already have changed one record.
   op("routeCutover");
   const stagedStatus = op("routeStatus");
-  check("M35-PLACE-01-cutover", "all three HTTPS hosts reach the exact staged preview route", { staged: stagedStatus.phase, exactRecords: stagedStatus.exactRecordCounts }, stagedStatus.phase === "cutover" && Object.values(stagedStatus.exactRecordCounts ?? {}).length === 3 && Object.values(stagedStatus.exactRecordCounts).every((value) => value === 1));
-  state.observations.placement = { before, staged: stagedStatus, propagation: {} };
+  check("M35-PLACE-01-cutover", "all three HTTPS hosts reach the exact staged preview route", { staged: stagedStatus.phase, exactRecords: stagedStatus.exactRecordCounts, exactPreviewRoute: stagedStatus.exactPreviewRoute }, stagedStatus.phase === "cutover" && stagedStatus.exactPreviewRoute === true && Object.values(stagedStatus.exactRecordCounts ?? {}).length === 3 && Object.values(stagedStatus.exactRecordCounts).every((value) => value === 1));
+  state.observations.placement.staged = stagedStatus;
   await waitForProtectedOrigins("initial", `/${currentSite.slug}/`);
+
+  if (phase === "route-only") {
+    beginPhase("route-only", 300000);
+    const routeDeadline = Date.now() + 300000;
+    const login = await request(config.origins.dashboard, "/v1/sessions", { method: "POST", body: { email: config.owner.email, password: secret(config.owner.passwordFile) } });
+    check("M35-PLACE-01-route-owner", "focused route probe has an authenticated owner session", { status: login.status, hasToken: Boolean(login.payload?.token) }, login.status === 201 && Boolean(login.payload?.token));
+    routeOnlyToken = login.payload.token;
+    const fresh = { headers: { "Cache-Control": "no-cache", Pragma: "no-cache" }, token: routeOnlyToken };
+    const htmlOptions = { headers: { ...fresh.headers, Accept: "text/html" } };
+    const portfolioPath = `/${currentSite.slug}/`;
+    const [publication, approved, draft, site, demo] = await Promise.all([
+      request(config.origins.dashboard, "/v1/portfolio/publications/latest", fresh),
+      request(config.origins.dashboard, "/v1/portfolio/approved-revisions/latest", fresh),
+      request(config.origins.dashboard, "/v1/portfolio/draft-revisions/latest", fresh),
+      request(config.origins.portfolio, portfolioPath, htmlOptions),
+      request(config.origins.demo, "/api/items", { headers: fresh.headers }),
+    ]);
+    const demoItemsSha256 = hash(JSON.stringify(demo.payload?.items ?? null));
+    check("M35-PLACE-01-route-baseline", "focused route baseline has exact publication and approval identities, draft, protected HTML and demo items", { publicationId: publication.payload?.id, publishedApprovedId: publication.payload?.approved_revision_id, latestApprovedId: approved.payload?.id, draftId: draft.payload?.id, slug: publication.payload?.slug, htmlStatus: site.status, htmlBytes: site.bodyBytes, htmlSha256: site.bodySha256, demoStatus: demo.status, demoItems: demo.payload?.items?.length ?? null, demoItemsSha256 }, publication.status === 200 && publication.payload?.state === "published" && publication.payload?.id === currentSite.id && publication.payload?.slug === currentSite.slug && /^[a-f0-9-]{36}$/.test(publication.payload?.approved_revision_id ?? "") && approved.status === 200 && Boolean(approved.payload?.id) && draft.status === 200 && Boolean(draft.payload?.id) && site.status === 200 && site.bodyBytes > 0 && site.headers["content-type"]?.startsWith("text/html") && demo.status === 200 && Array.isArray(demo.payload?.items));
+    op("routeReverse");
+    const reversed = op("routeStatus");
+    check("M35-PLACE-01-route-reversal", "focused route probe restores exact retained original DNS target", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget, exactOriginalRoute: reversed.exactOriginalRoute }, reversed.phase === "reversed" && reversed.exactOriginalRoute === true && reversed.exactPriorTarget === before.exactPriorTarget);
+    op("routeCutover");
+    const reapplied = op("routeStatus");
+    check("M35-PLACE-01-route-reapply", "focused route probe reapplies exact owned preview target", { phase: reapplied.phase, exactPreviewRoute: reapplied.exactPreviewRoute }, reapplied.phase === "cutover" && reapplied.exactPreviewRoute === true);
+    await waitForProtectedOrigins("route-reapplied", portfolioPath, routeDeadline - Date.now());
+    const [publicationAfter, approvedAfter, draftAfter, siteAfter, demoAfter] = await Promise.all([
+      request(config.origins.dashboard, "/v1/portfolio/publications/latest", fresh),
+      request(config.origins.dashboard, "/v1/portfolio/approved-revisions/latest", fresh),
+      request(config.origins.dashboard, "/v1/portfolio/draft-revisions/latest", fresh),
+      request(config.origins.portfolio, portfolioPath, htmlOptions),
+      request(config.origins.demo, "/api/items", { headers: fresh.headers }),
+    ]);
+    const demoItemsAfterSha256 = hash(JSON.stringify(demoAfter.payload?.items ?? null));
+    check("M35-PLACE-01-route-content", "reapplied route serves the same approved publication, full HTML bytes, private draft and exact demo items", { publicationId: publicationAfter.payload?.id, approvedId: approvedAfter.payload?.id, draftId: draftAfter.payload?.id, htmlStatus: siteAfter.status, htmlBytes: siteAfter.bodyBytes, htmlSha256: siteAfter.bodySha256, demoStatus: demoAfter.status, demoItems: demoAfter.payload?.items?.length ?? null, demoItemsSha256: demoItemsAfterSha256 }, publicationAfter.status === 200 && publicationAfter.payload?.id === publication.payload.id && publicationAfter.payload?.approved_revision_id === publication.payload.approved_revision_id && approvedAfter.status === 200 && approvedAfter.payload?.id === approved.payload.id && draftAfter.status === 200 && draftAfter.payload?.id === draft.payload.id && siteAfter.status === 200 && siteAfter.bodyBytes === site.bodyBytes && siteAfter.bodySha256 === site.bodySha256 && demoAfter.status === 200 && Array.isArray(demoAfter.payload?.items) && demoItemsAfterSha256 === demoItemsSha256);
+    const revoke = await request(config.origins.dashboard, "/v1/sessions/current", { method: "DELETE", token: routeOnlyToken });
+    check("M35-PLACE-01-route-session-cleanup", "focused route owner session is revoked before the second reversal", { status: revoke.status }, revoke.status === 204);
+    routeOnlyToken = undefined;
+    if (Date.now() >= routeDeadline) throw new Error("focused route round trip exceeded its bounded deadline");
+    op("routeReverse");
+    const finalReversal = op("routeStatus");
+    check("M35-PLACE-01-route-final-reversal", "focused route probe proves second exact original route", { phase: finalReversal.phase, exactPriorTarget: finalReversal.exactPriorTarget, exactOriginalRoute: finalReversal.exactOriginalRoute }, finalReversal.phase === "reversed" && finalReversal.exactOriginalRoute === true && finalReversal.exactPriorTarget === before.exactPriorTarget);
+    state.outputs = { publicationId: publication.payload.id, approvedId: approved.payload.id, draftId: draft.payload.id, slug: currentSite.slug, htmlSha256: site.bodySha256, demoItemsSha256 };
+    endPhase();
+    return;
+  }
 
   const hosts = Object.entries(config.origins);
   for (const [name, origin] of hosts) {
@@ -390,19 +452,33 @@ async function execute() {
   if (clockBefore) check("M35-DB-CLOCK-01-provision", "real generation-zero database scheduler accepts advancing time and exact provision receipt", clockBefore, clockBefore.clockGeneration === 0 && clockBefore.clockSchema === 1 && clockBefore.nondecreasing === true && clockBefore.exactProvision === true && clockBefore.ready === true && /^[a-f0-9]{64}$/.test(clockBefore.containerId));
 
   const requests = [];
+  const loginAttempt = { active: false, requests: new Set(), responses: [] };
   state.observations.initialBrowser = { responses: [], failures: [], responsesOmitted: 0, failuresOmitted: 0, snapshot: null };
   initialBrowserPending = true;
-  browser = await openBrowser({ chromiumPath: args.chromium || "/snap/bin/chromium", username: edge.username, password: edge.password, origins: Object.values(config.origins), onRequest: (event) => { requests.push({ origin: event.origin, path: event.path, method: event.method }); if (event.path === "/v1/portfolio/preview-revisions" && event.method === "POST" && state.observations.browserSave) { const save = state.observations.browserSave; save.requestOccurred = true; save.requests.push({ requestId: event.requestId, at: event.at, method: event.method, path: event.path, expectedRevision: event.expectedRevision }); progress(); } if (publicationAction && event.method === "POST" && event.path === publicationAction.path) { publicationAction.requestOccurred = true; publicationAction.requestId = event.requestId; publicationAction.requestAt = event.at; progress(); } }, onResponse: (event) => { recordInitialBrowserEvent("response", event); if (event.path === "/v1/portfolio/preview-revisions" && state.observations.browserSave) { const save = state.observations.browserSave; const prior = save.responses.findIndex((item) => item.requestId === event.requestId); const entry = { requestId: event.requestId, at: event.at, status: event.status, safeBody: event.safeBody ?? null }; if (prior < 0) save.responses.push(entry); else save.responses[prior] = entry; progress(); } if (publicationAction && event.requestId === publicationAction.requestId && event.path === publicationAction.path) { publicationAction.responseAt = event.at; publicationAction.status = event.status; if (event.safeBody) { publicationAction.returnedId = event.safeBody.id; publicationAction.approvedRevisionId = event.safeBody.approvedRevisionId; publicationAction.responseSlug = event.safeBody.slug; publicationAction.errorCode = event.safeBody.code; if (publicationAction.name === "publish" && event.status >= 200 && event.status < 300 && event.safeBody.id) state.observations.retainedIdentities.publicationId = event.safeBody.id; } progress(); } }, onFailure: (event) => { recordInitialBrowserEvent("failure", event); if (state.observations.browserSave?.requests.some((item) => item.requestId === event.requestId)) { state.observations.browserSave.failures.push(event); progress(); } if (publicationAction && event.requestId === publicationAction.requestId) { publicationAction.networkFailure = event.code; progress(); } } });
+  browser = await openBrowser({ chromiumPath: args.chromium || "/snap/bin/chromium", username: edge.username, password: edge.password, origins: Object.values(config.origins), onRequest: (event) => { requests.push({ origin: event.origin, path: event.path, method: event.method }); if (loginAttempt.active && event.origin === new URL(config.origins.dashboard).origin && event.path === "/v1/sessions" && event.method === "POST") { loginAttempt.requests.add(event.requestId); progress(); } if (event.path === "/v1/portfolio/preview-revisions" && event.method === "POST" && state.observations.browserSave) { const save = state.observations.browserSave; save.requestOccurred = true; save.requests.push({ requestId: event.requestId, at: event.at, method: event.method, path: event.path, expectedRevision: event.expectedRevision }); progress(); } if (publicationAction && event.method === "POST" && event.path === publicationAction.path) { publicationAction.requestOccurred = true; publicationAction.requestId = event.requestId; publicationAction.requestAt = event.at; progress(); } }, onResponse: (event) => { recordInitialBrowserEvent("response", event); if (loginAttempt.requests.has(event.requestId) && event.path === "/v1/sessions") { loginAttempt.responses.push({ requestId: event.requestId, status: event.status, at: event.at }); progress(); } if (event.path === "/v1/portfolio/preview-revisions" && state.observations.browserSave) { const save = state.observations.browserSave; const prior = save.responses.findIndex((item) => item.requestId === event.requestId); const entry = { requestId: event.requestId, at: event.at, status: event.status, safeBody: event.safeBody ?? null }; if (prior < 0) save.responses.push(entry); else save.responses[prior] = entry; progress(); } if (publicationAction && event.requestId === publicationAction.requestId && event.path === publicationAction.path) { publicationAction.responseAt = event.at; publicationAction.status = event.status; if (event.safeBody) { publicationAction.returnedId = event.safeBody.id; publicationAction.approvedRevisionId = event.safeBody.approvedRevisionId; publicationAction.responseSlug = event.safeBody.slug; publicationAction.errorCode = event.safeBody.code; if (publicationAction.name === "publish" && event.status >= 200 && event.status < 300 && event.safeBody.id) state.observations.retainedIdentities.publicationId = event.safeBody.id; } progress(); } }, onFailure: (event) => { recordInitialBrowserEvent("failure", event); if (state.observations.browserSave?.requests.some((item) => item.requestId === event.requestId)) { state.observations.browserSave.failures.push(event); progress(); } if (publicationAction && event.requestId === publicationAction.requestId) { publicationAction.networkFailure = event.code; progress(); } } });
   await browserStep(config.origins.dashboard, "Boolean(document.querySelector('[data-testid=auth-form]'))");
-  initialBrowserPending = false;
+  if (["full", "login"].includes(phase)) beginPhase("login", 30000);
+  const wrongPassword = "m35-synthetic-incorrect-password-only";
+  if (wrongPassword === secret(config.owner.passwordFile)) throw new Error("synthetic wrong password matches configured password");
   await browser.fill('[data-testid="auth-form"] input[name="email"]', config.owner.email);
+  loginAttempt.active = true;
+  await browser.fill('[data-testid="auth-form"] input[name="password"]', wrongPassword);
+  await browser.click('[data-testid="auth-form"] button[type="submit"]');
+  await browser.wait("document.querySelector('[data-testid=onboarding-notice]')?.textContent?.trim() === 'Email or password is incorrect. Please try again.'", 30000);
+  const rejectedLogin = await browser.evaluate("({ notice: document.querySelector('[data-testid=onboarding-notice]')?.textContent?.trim() ?? null, formPresent: Boolean(document.querySelector('[data-testid=auth-form]')), signedInPresent: Boolean(document.querySelector('[data-testid=signed-in-user]')) })");
+  const negativeResponses = loginAttempt.responses.filter((event) => event.status === 401);
+  check("M35-ACCESS-01-browser-bad-password", "fresh Chromium receives application session HTTP 401, explains incorrect credentials, and stays signed out", { sessionPostCount: loginAttempt.requests.size, responses: loginAttempt.responses, ...rejectedLogin }, loginAttempt.requests.size === 1 && loginAttempt.responses.length === 1 && negativeResponses.length === 1 && rejectedLogin.notice === "Email or password is incorrect. Please try again." && rejectedLogin.formPresent === true && rejectedLogin.signedInPresent === false);
+  loginAttempt.active = false;
   await browser.fill('[data-testid="auth-form"] input[name="password"]', secret(config.owner.passwordFile));
   await browser.click('[data-testid="auth-form"] button[type="submit"]');
   await browser.wait("Boolean(document.querySelector('[data-testid=signed-in-user]'))", 30000);
   await browser.wait("Boolean(document.querySelector('[data-testid=preview-editor]'))", 30000);
+  initialBrowserPending = false;
   check("M35-ACCESS-01-browser", "fresh Chromium owner session reaches persisted editor", { url: config.origins.dashboard, signedIn: true }, true);
   await browser.wait(`Boolean(document.querySelector('[data-testid="preview-project-editor"][data-project-id=${JSON.stringify(manifestBefore.identity.projectId)}]'))`, 30000);
   check("M35-COMPOSE-01-browser-project", "Chromium editor shows the seeded durable project", { projectId: manifestBefore.identity.projectId }, true);
+  if (["full", "login"].includes(phase)) endPhase();
+  if (phase === "login") return;
   if (phase === "save-negative") {
     const latestBefore = await owner("/v1/portfolio/draft-revisions/latest");
     check("M35-EDIT-01-negative-baseline", "latest draft is readable before rejected browser save", { status: latestBefore.status, id: latestBefore.payload?.id, revision: latestBefore.payload?.revision }, latestBefore.status === 200 && Boolean(latestBefore.payload?.id));
@@ -627,6 +703,9 @@ async function execute() {
   }
   const failure = op("boundedStartupFailure", { publicationId: published.payload.id, itemId: item.id, slug: published.payload.slug, ...(injection ? { injectFailure: injection } : {}) });
   check("M35-START-01-bounded", "observed readiness failure, systemd restart budget and two restarts preserve owner-visible state and last good data", failure, failure.observedReadinessAttempts === 1 && failure.readinessExitStatus !== 0 && failure.readinessElapsedMs <= failure.readinessDeadlineMs && failure.observedManagedRestarts === 2 && Number(failure.restartTimestamps?.[1]) > Number(failure.restartTimestamps?.[0]) && failure.restartPolicy?.before === "on-failure" && failure.restartPolicy?.after === "on-failure" && failure.restartPolicy?.startLimitBurst === 3 && failure.ownerVisibleReason === true && failure.unhealthyAdvertised === false && failure.staticStatusWhilePublisherDown === 200 && failure.publicationId === published.payload.id && String(failure.itemId) === String(item.id));
+  const recovered = failure.recoveredUnits;
+  const expectedRecovered = ["control", "builder", "database-worker", "runtime", "publisher-worker", "demo-gateway", "provider"];
+  check("M35-START-01-budget-recovery", "real manager start budget is observed and every affected unit is ready", { startBudget: failure.startBudget, recoveredUnits: recovered }, failure.startBudget?.startLimitBurst === 3 && failure.startBudget?.startLimitIntervalMs === 60000 && Number.isSafeInteger(failure.startBudget?.waitedMs) && failure.startBudget.waitedMs >= 0 && failure.startBudget.quietWindowObserved === true && Array.isArray(recovered) && recovered.length === expectedRecovered.length && expectedRecovered.every((unit) => recovered.some((entry) => entry.unit === unit && ["already-active", "started"].includes(entry.action) && entry.ready === true)));
   const clockAfter = op("realClockProvision");
   check("M35-DB-CLOCK-01-restart", "real scheduler and ready provision retain exact database identity after managed restarts", clockAfter, clockAfter.nondecreasing === true && clockAfter.exactProvision === true && clockAfter.ready === true && clockAfter.databaseId === clockBefore.databaseId && clockAfter.databaseGeneration === clockBefore.databaseGeneration && clockAfter.containerId === clockBefore.containerId);
   service("ready", "control"); service("ready", "runtime"); service("ready", "publisher-static");
@@ -638,20 +717,19 @@ async function execute() {
 
   if (["full", "route-roundtrip"].includes(phase)) {
   beginPhase("route-roundtrip", 300000);
-  op("routeReverse"); cutoverActive = false;
+  op("routeReverse");
   const reversed = op("routeStatus");
-  check("M35-PLACE-01-reversal", "exact prior target is restored by provider readback", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget }, reversed.phase === "reversed" && reversed.exactPriorTarget === before.exactPriorTarget);
-  cutoverActive = true; // Reapply can partially change provider records before it throws.
+  check("M35-PLACE-01-reversal", "exact prior target is restored by provider readback", { phase: reversed.phase, exactPriorTarget: reversed.exactPriorTarget, exactOriginalRoute: reversed.exactOriginalRoute }, reversed.phase === "reversed" && reversed.exactOriginalRoute === true && reversed.exactPriorTarget === before.exactPriorTarget);
   op("routeCutover");
   const reapplied = op("routeStatus");
   await waitForProtectedOrigins("reapplied", new URL(portfolioUrl).pathname);
-  check("M35-PLACE-01-reapply", "preview target is reapplied after exact reversal", { phase: reapplied.phase }, reapplied.phase === "cutover");
+  check("M35-PLACE-01-reapply", "preview target is reapplied after exact reversal", { phase: reapplied.phase, exactPreviewRoute: reapplied.exactPreviewRoute }, reapplied.phase === "cutover" && reapplied.exactPreviewRoute === true);
   state.observations.placement.reversed = reversed; state.observations.placement.reapplied = reapplied;
   const after = await request(config.origins.portfolio, new URL(portfolioUrl).pathname);
   check("M35-PLACE-01-final", "HTTPS portfolio still resolves through staged preview", { status: after.status, approvedTextPresent: after.text.includes(intro) }, after.status === 200 && after.text.includes(intro));
-  op("routeReverse"); cutoverActive = false;
+  op("routeReverse");
   const finalReversal = op("routeStatus");
-  check("M35-PLACE-01-final-reversal", "clean gate restores exact legacy route until both runs pass", { phase: finalReversal.phase, exactPriorTarget: finalReversal.exactPriorTarget }, finalReversal.phase === "reversed" && finalReversal.exactPriorTarget === before.exactPriorTarget);
+  check("M35-PLACE-01-final-reversal", "gate proves a second exact legacy restoration before returning to entry state", { phase: finalReversal.phase, exactPriorTarget: finalReversal.exactPriorTarget, exactOriginalRoute: finalReversal.exactOriginalRoute }, finalReversal.phase === "reversed" && finalReversal.exactOriginalRoute === true && finalReversal.exactPriorTarget === before.exactPriorTarget);
   state.observations.placement.finalReversal = finalReversal;
   state.observations.browser = { requestedOrigins: [...new Set(requests.map((event) => event.origin))], pageCount: 4 };
   endPhase();
@@ -684,9 +762,29 @@ try {
   if (temporaryRestore) {
     try { const result = op("removeIsolatedRestore", { restoreId: temporaryRestore }); check("M35-CLEAN-01-restore", "exact isolated restore removed after ownership check", result, result.removed === true && result.restoreId === temporaryRestore); state.cleanup.push({ resource: `isolated restore ${temporaryRestore}`, result: "removed" }); } catch (error) { state.cleanup.push({ resource: `isolated restore ${temporaryRestore}`, result: `failed: ${publicValue(error.message)}` }); state.status = "failed"; }
   }
-  if (cutoverActive && (state.status !== "passed" || phase !== "full")) {
-    try { op("routeReverse"); const result = op("routeStatus"); check("M35-PLACE-01-failed-run-reversal", "failed gate restores exact prior route", { phase: result.phase }, result.phase === "reversed"); state.cleanup.push({ resource: "temporary Cloudflare route", result: "exact prior target restored" }); } catch (error) { state.cleanup.push({ resource: "temporary Cloudflare route", result: `restore failed: ${publicValue(error.message)}` }); state.status = "failed"; }
-  } else if (cutoverActive) state.cleanup.push({ resource: "preview Cloudflare route", result: "retained only pending two clean gate runs and parent final route decision" });
+  if (entryRoutePhase && routeMayBeMutated) {
+    try {
+      let result = op("routeStatus");
+      if (entryRoutePhase === "cutover" && !(result.phase === "cutover" && result.exactPreviewRoute === true && result.pending === null)) {
+        op("routeReverse");
+        op("routeCutover"); result = op("routeStatus");
+      } else if (entryRoutePhase !== "cutover" && !(result.exactOriginalRoute === true && result.pending === null)) {
+        op("routeReverse"); result = op("routeStatus");
+      }
+      const liveEntry = entryRoutePhase === "cutover";
+      check("M35-PLACE-01-entry-restored", "provider readback restores exact verified entry route after gate or failure", { entryPhase: entryRoutePhase, finalPhase: result.phase, exactOriginalRoute: result.exactOriginalRoute, exactPreviewRoute: result.exactPreviewRoute, pending: result.pending }, result.pending === null && (liveEntry ? result.phase === "cutover" && result.exactPreviewRoute === true : result.exactOriginalRoute === true));
+      if (liveEntry) await waitForProtectedOrigins("entry-restored", `/${state.outputs.slug ?? state.prerequisites.currentPublishedSite.slug}/`);
+      state.cleanup.push({ resource: "owned Cloudflare route", result: `exact entry ${liveEntry ? "preview" : "original"} route restored and verified` });
+    } catch (error) { state.cleanup.push({ resource: "owned Cloudflare route", result: `restore failed: ${publicValue(error.message)}` }); state.status = "failed"; }
+  }
+  if (routeOnlyToken) {
+    try {
+      const revoked = await request(config.origins.dashboard, "/v1/sessions/current", { method: "DELETE", token: routeOnlyToken });
+      check("M35-PLACE-01-route-session-cleanup", "focused route owner session is revoked after failure cleanup", { status: revoked.status }, revoked.status === 204);
+      routeOnlyToken = undefined;
+      state.cleanup.push({ resource: "focused route owner session", result: "revoked" });
+    } catch (error) { state.cleanup.push({ resource: "focused route owner session", result: `revocation failed: ${publicValue(error.message)}` }); state.status = "failed"; }
+  }
   try { const result = op("temporaryCleanup", state.observations.retainedIdentities ?? {}); check("M35-CLEAN-01-exact", "all run-owned temporary resources are removed after exact identity checks", result, result.exactOwnedOnly === true && result.temporaryRemaining === 0 && Array.isArray(result.retainedPreview)); state.cleanup.push({ resource: "temporary run resources", result: "exact cleanup complete" }); state.retained = result.retainedPreview; } catch (error) { state.cleanup.push({ resource: "temporary run resources", result: `failed: ${publicValue(error.message)}` }); state.status = "failed"; }
   const missing = phase === "full" ? SCENARIOS.filter((id) => !state.assertions.some((entry) => entry.id.startsWith(id) && entry.passed)) : [];
   if (missing.length) { state.errors.push({ kind: "coverage", message: `missing passing scenario evidence: ${missing.join(", ")}` }); state.status = "failed"; }

@@ -6,15 +6,17 @@ API, demo and PostgreSQL stores, managed services, and exact Cloudflare records.
 It creates `artifacts/e2e/M3.5/<run-id>/` before setup and writes a failed
 artifact when prerequisites or assertions fail. Stop after a failed full run;
 diagnose its retained receipt before retrying.
-Public-origin readiness uses one 300-second deadline for all three anonymous
-HTTPS hosts, probes them concurrently, and requires all three to return 401
-continuously for 20 seconds before feature checks start. Any other status or
-transport error resets that stability window. Each attempt is recorded under
+Public-origin readiness uses one 300-second deadline for seven concurrent
+HTTPS probes: three anonymous roots must return 401, the malformed dashboard
+session API must return 401, and the protected dashboard, demo and current
+portfolio HTML must return 200. All seven must remain stable for 20 seconds
+before feature checks start. Any other status or transport error resets that
+stability window. Each attempt is recorded under
 `observations.placement.propagation` in `manifest.json` with host, attempt time,
 elapsed time, HTTP status or transport error name/code/cause; a safe Cloudflare
 Ray ID and 1033 code are included when observed. Response bodies are not
 retained. The runner flushes these observations before a readiness failure
-triggers exact route reversal.
+triggers restoration of the exact entry route.
 The retained inventory captures pre-existing preview owner, project, release
 and publication IDs before the browser journey. Passwords and provider tokens
 are scrubbed from artifacts; the non-secret Basic username is allowed in paths
@@ -38,10 +40,23 @@ separate `otherOwner` fixture. Cloudflare config and readiness proof follow
 `scripts/beta/CLOUDFLARE.md`; scoped provider tokens remain in the child
 environment. No credential belongs in the command line, repository or artifact.
 
-The runner performs temporary cutover, exact reversal, reapplication, and a
-second exact reversal within each gate. The final preview route is an operator
-action after two clean gates on the same commit. A failed gate reverses the
-temporary route in its cleanup path. The source tree must remain clean from
+The runner verifies the exact owned provider route at entry, including when
+the separately authorized preview is already live. It performs cutover, exact
+reversal to the retained legacy route, reapplication, and a second exact
+reversal within each full gate. Cleanup restores and verifies the entry route
+on both success and failure; a live preview at entry remains live. The focused
+`--phase login` checks a real browser's rejected application password, accurate
+notice, signed-out form and subsequent correct sign-in without editing content.
+The focused `--phase route-only` needs no prior synthetic phase receipts. It
+checks the current approved publication, private draft, protected HTML bytes
+and exact demo items, then proves original route, preview reapplication,
+second original route and cleanup back to the verified entry route. Its three
+preview readings use the same seven-path HTTPS readiness window; it does not
+publish, edit the portfolio, or write demo items. API requests close their
+connection so a managed service restart cannot leave the runner using a stale
+pooled socket; transport failures retain only safe cause codes and are not
+retried.
+The full gate requires a clean source tree from
 start to finish, and `SHA256SUMS` is external to the manifest. Run `sha256sum
 -c SHA256SUMS` from the artifact directory and record the SHA256SUMS file hash
 in the handoff.

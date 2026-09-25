@@ -1,10 +1,9 @@
 # Hostlet — portfolio and live demos
 
-**Current M3.5 assignment (2026-09-25):** Shane resumed completion after the
-prior route-cleanup failure. [The completion plan](docs/M3.5-COMPLETION-PLAN.md)
-tracks four dependent checkpoints through focused verification, two clean full
-passes and publication. [The prior result](docs/M3.5-FINAL-RESULT.md) remains
-historical evidence. Preserve the live preview and owner data; stop before M4.
+**M3.5 complete (2026-09-25):** Two consecutive clean full passes at installed
+`513340a` each passed 62/62, with owner state preserved and source/CI verified.
+[The accepted result](docs/M3.5-COMPLETION-RESULT.md) records receipts and limits.
+HOST-248 is complete. The restricted preview remains live. Stop before M4.
 
 Authoritative product direction for `hostlet-app`, based on the brief supplied
 by Shane on 2026-09-21. This supersedes the provisional September generic-hosting
@@ -25,7 +24,7 @@ clean full runs at `0649f74f4a93ffc691b9c472c1759d1ff56f439d` each passed all 55
 assertions and 11 phases; the second rebuilt the retained M2 binary from its
 pinned source. The [M3 handoff](docs/M3-HANDOFF.md) records repeat commands,
 verified private receipts, populated recovery, cleanup and compatibility limits.
-**M3.5 — Private beta preview is now assigned through HOST-248; stop before M4.** The upfront acceptance inventory
+**M3.5 — Private beta preview is complete through HOST-248; stop before M4.** The upfront acceptance inventory
 is [M3 scenarios](docs/M3-SCENARIOS.md), and the completed
 [Sol agent execution plan](docs/M3-COMPLETION-PLAN.md) retains the fix rationale.
 
@@ -41,7 +40,8 @@ isolated resources, a seeded account, owned Node/PostgreSQL demo and approved
 independent portfolio. Preserve the live preview, legacy route and owner data.
 The [preview contract](docs/M3.5-PREVIEW-CONTRACT.md) and
 [scenarios](docs/M3.5-SCENARIOS.md) define its scope. HOST-246 and HOST-247 are
-complete; HOST-248 is active under the explicit completion assignment.
+complete; HOST-248 is accepted after two clean full passes.
+[The completion result](docs/M3.5-COMPLETION-RESULT.md) is the current authority.
 [The handoff](docs/M3.5-HANDOFF.md) and
 [prior report](docs/M3.5-FINAL-RESULT.md) retain earlier attempts.
 The protected demo remains

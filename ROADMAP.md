@@ -12,26 +12,23 @@ ends at reviewed readiness. Customer contact, live charging, infrastructure
 purchases and production cutover remain separate authorized actions. Prices
 are hypotheses and resource allowances remain benchmark targets.
 
-The snapshot contains **34 cards (22 complete, one active, 11 in Backlog),
+The snapshot contains **34 cards (23 complete, 11 in Backlog),
 41 prerequisite links and six milestone stop gates** in one planned release. Every later milestone
 depends on the preceding gate through real Helm dependencies. The acyclic
 graph makes the final gate depend transitively on all 33 other cards.
 
 ## Start here
 
-**Current assignment, 2026-09-25:** HOST-248 is active under the explicit
-[completion plan](docs/M3.5-COMPLETION-PLAN.md). Snapshot revision 12260
-records 22 completed tasks, one owned task and eleven dependency-blocked future
-tasks. Correct the provider-read/cleanup boundary, verify focused evidence,
-install clean source, complete two full passes and publish with CI. Preserve the
-live preview and owner state. [The prior failed result](docs/M3.5-FINAL-RESULT.md)
-remains historical evidence. M4/M5 remain unclaimed.
+**M3.5 complete, 2026-09-25:** HOST-248 is complete. Snapshot revision 12277
+records 23 completed tasks, eleven future Backlog tasks and no active claims.
+Installed `513340a` passed two consecutive clean full 62/62 gates, including
+final route cleanup. Original owner content, ten demo rows and all eleven ready
+services are retained. Canonical source and mirror CI passed verification.
+[Accepted result and receipts](docs/M3.5-COMPLETION-RESULT.md).
 
 **Private demo access remains available.**
 [Access instructions](docs/M3.5-DEMO-ACCESS.md) explain the two credential layers.
-The preview's availability does not establish M3.5 acceptance. The
-[M3.5 handoff](docs/M3.5-HANDOFF.md) retains the historical attempts. Task IDs and
-all 41 prerequisite links remain unchanged.
+All 41 prerequisite links are retained. M4/M5 remain unclaimed; stop before M4.
 
 Two clean full M3 runs each passed **55/55 assertions and all 11 phases** on
 `0649f74f4a93ffc691b9c472c1759d1ff56f439d`, with unchanged source, harness and
@@ -49,7 +46,7 @@ Their historical evidence remains in the [M1 handoff](docs/M1-HANDOFF.md) and
 and completed [execution plan](docs/M3-COMPLETION-PLAN.md) retain scope and
 validation decisions.
 
-The current milestone is **M3.5 — Private beta preview**: a real dashboard,
+The completed milestone is **M3.5 — Private beta preview**: a real dashboard,
 seeded owner/project, working owned Node/PostgreSQL demo and approved independent
 portfolio. Preserve the occupied legacy route/data, stage the new isolated
 origin and verify the authorized exact-host cutover with rollback evidence.

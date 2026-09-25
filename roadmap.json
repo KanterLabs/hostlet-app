@@ -470,8 +470,8 @@
       ],
       "milestone": "M3.5",
       "is_gate": true,
-      "dependency_state": "owned",
-      "status": "in_progress"
+      "dependency_state": "completed",
+      "status": "completed"
     },
     {
       "key": "HOST-228",
@@ -491,7 +491,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-230",
@@ -511,7 +511,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-231",
@@ -531,7 +531,7 @@
       "milestone": "M4",
       "is_gate": false,
       "status": "backlog",
-      "dependency_state": "dependency_blocked"
+      "dependency_state": "claimable"
     },
     {
       "key": "HOST-232",
@@ -706,7 +706,7 @@
     "isolation_exception": "Only when isolation is necessary: first record all identified ways the system could fail and expected observable outcomes, then write failing isolated cases, and only then implement the code. Link the pre-code evidence and justification. Do not retrofit unit tests to existing code.",
     "evidence_contract": "TESTING.md; artifacts/e2e/<milestone>/<run-id>/ with a readable report, machine results, exact source/environment/fixture identities and rerun command, relevant sanitized outputs, checksums and cleanup outcome. Failed runs also produce evidence.",
     "stop_rule": "Default execution scope is one milestone. Complete its gate only after verifiable E2E evidence and a clean repeat run, publish a handoff, and STOP without claiming the next milestone. Resume only on a later instruction or an explicit larger scope from Shane.",
-    "current_status": "M3.5 explicitly resumed: provider-read reliability and exact cleanup correction, focused boundary evidence, two clean full passes, canonical publication and CI; preserve live preview and data; stop before M4."
+    "current_status": "M3.5 complete at HOST-248: clean installed 513340a passed two full 62/62 gates; original owner/public/private content and ten demo rows retained; all eleven services ready; canonical source and mirror CI verified. Stop before M4; future cards unclaimed."
   },
   "milestones": [
     {
@@ -811,25 +811,23 @@
     }
   ],
   "execution_snapshot": {
-    "project_revision": 12260,
-    "read_at": "2026-09-25T17:59:50.947016416Z",
-    "completed": 22,
-    "active": 1,
+    "project_revision": 12277,
+    "read_at": "2026-09-25T18:27:04.119106829Z",
+    "completed": 23,
+    "active": 0,
     "backlog": 11,
     "blocked": 0,
-    "active_task": "HOST-248",
+    "active_task": null,
     "assigned_stop": "HOST-248",
-    "stopped_at": null,
-    "active_tasks": [
-      "HOST-248"
-    ]
+    "stopped_at": "HOST-248",
+    "active_tasks": []
   },
   "assignment": {
     "milestone": "M3.5",
     "stop_gate": "HOST-248",
     "workers": "GPT-6 Sol workers at medium reasoning; primary owns integration and verification",
     "authorized_at": "2026-09-25",
-    "tracking": "M3.5 explicitly resumed: provider-read reliability and exact cleanup correction, focused boundary evidence, two clean full passes, canonical publication and CI; preserve live preview and data; stop before M4.",
+    "tracking": "M3.5 complete at HOST-248: clean installed 513340a passed two full 62/62 gates; original owner/public/private content and ten demo rows retained; all eleven services ready; canonical source and mirror CI verified. Stop before M4; future cards unclaimed.",
     "data_preservation": "Preserve now-live restricted preview and exact legacy rollback route, immutable owner history, approved public content and private draft; verify backups before install and use only guarded API compensation after synthetic gate writes.",
     "runtime_decision": "M3 owned-fixture limits remain in force. Customer admission, live payments, provider purchases and M4 features remain outside this preview.",
     "recovery_plan": "docs/M3.5-COMPLETION-PLAN.md",
@@ -868,12 +866,26 @@
       "checks_passed": 21,
       "receipt_sha256": "68e70d79916855da2290ffc2720d01c3393f31aec3c686fa323471bb67bc4869",
       "installed_commit": "a1ffa60d5e0fc767042247980fda9175328f3ea6",
-      "milestone_acceptance_complete": false,
-      "current_installed_commit": "d681a41f9ace6119ade0ac0baf12737c24dc65da",
-      "current_evidence": "docs/M3.5-FINAL-RESULT.md"
+      "milestone_acceptance_complete": true,
+      "current_installed_commit": "513340ad736667583c037b493f5a5254c0942047",
+      "current_evidence": "docs/M3.5-COMPLETION-RESULT.md"
     },
-    "result": "docs/M3.5-FINAL-RESULT.md",
+    "result": "docs/M3.5-COMPLETION-RESULT.md",
     "acceptance_runs": [
+      {
+        "run_id": "complete-513340a-full-1",
+        "status": "passed",
+        "passed_assertions": 62,
+        "receipt_sha256": "9b62d9874273bda3684d4e83904abf536f70815fc0ccfe7d1cdb6d1bc5c366d2"
+      },
+      {
+        "run_id": "complete-513340a-full-2",
+        "status": "passed",
+        "passed_assertions": 62,
+        "receipt_sha256": "007f43d66cebe2325d0624dbf9dcd6306de9d54498ffb8dae1e90b9a2c9b591a"
+      }
+    ],
+    "historical_acceptance_runs": [
       {
         "run_id": "final-d681a41-full-1",
         "status": "passed",

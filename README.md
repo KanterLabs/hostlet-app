@@ -6,12 +6,11 @@ portfolio around working demos.
 
 **Your projects, live and ready to show.**
 
-The restricted demo is live on installed `d681a41`. M3.5 completion is active
-under Shane's explicit reassignment. See the
-[completion plan](docs/M3.5-COMPLETION-PLAN.md),
-[historical failed result](docs/M3.5-FINAL-RESULT.md) and
-[private access instructions](docs/M3.5-DEMO-ACCESS.md). Two clean full passes,
-canonical publication and mirror CI are required before acceptance. Stop before M4.
+The restricted demo is live on installed `513340a`. **M3.5 is complete:** two
+consecutive clean full runs each passed 62/62, owner content/data are preserved,
+and canonical source plus mirror CI are verified. See the
+[completion result](docs/M3.5-COMPLETION-RESULT.md) and
+[private access instructions](docs/M3.5-DEMO-ACCESS.md). Stop before M4.
 
 **Status: M2 and M3 accepted for owned local fixtures.** M2
 supports accounts, selected GitHub repositories and branches, bounded
